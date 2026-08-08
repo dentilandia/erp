@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+@theme {
+  --color-morado: #2e253a;
+  --color-morado-claro: #7b5aa6;
+  --color-teal: #009f98;
+  --color-gris: #bbbcbe;
+  --color-tinta: #2a2438;
+
+  --font-sans: "Inter", system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background: #f5f4f7;
+  color: var(--color-tinta);
+  font-family: var(--font-sans);
+}
+
+#root {
+  min-height: 100vh;
+}
