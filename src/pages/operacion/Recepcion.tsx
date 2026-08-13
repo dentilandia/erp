@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { Plus, X, Split } from "lucide-react";
+import { Plus, X, Split, Trash2 } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
 import {
@@ -104,6 +104,12 @@ export function Recepcion() {
     cargarVisitas();
   }
 
+  async function eliminarVisita(id: string) {
+    if (!window.confirm("¿Eliminar esta visita? Esto no se puede deshacer.")) return;
+    await supabase.from("visitas").delete().eq("id", id);
+    cargarVisitas();
+  }
+
   const enEspera = visitas.filter((v) => v.estado === "espera");
   const listaCobro = visitas.filter((v) => v.estado === "consulta");
   const cobradas = visitas.filter((v) => v.estado === "cobrado");
@@ -166,7 +172,7 @@ export function Recepcion() {
         <h3 className="text-sm font-semibold text-gray-500 mb-2">En espera ({enEspera.length})</h3>
         <div className="space-y-2">
           {enEspera.map((v) => (
-            <VisitaCard key={v.id} v={v} />
+            <VisitaCard key={v.id} v={v} onDelete={() => eliminarVisita(v.id)} />
           ))}
           {enEspera.length === 0 && !cargando && <p className="text-sm text-gray-400">Sin pacientes en espera.</p>}
         </div>
@@ -176,7 +182,7 @@ export function Recepcion() {
         <h3 className="text-sm font-semibold text-gray-500 mb-2">Por cobrar ({listaCobro.length})</h3>
         <div className="space-y-2">
           {listaCobro.map((v) => (
-            <VisitaCard key={v.id} v={v} onClick={() => setCobrandoId(v.id)} resaltar />
+            <VisitaCard key={v.id} v={v} onClick={() => setCobrandoId(v.id)} resaltar onDelete={() => eliminarVisita(v.id)} />
           ))}
           {listaCobro.length === 0 && !cargando && <p className="text-sm text-gray-400">Nadie pendiente de cobro.</p>}
         </div>
@@ -211,28 +217,46 @@ function VisitaCard({
   onClick,
   resaltar,
   cobrado,
+  onDelete,
 }: {
   v: VisitaRow;
   onClick?: () => void;
   resaltar?: boolean;
   cobrado?: boolean;
+  onDelete?: () => void;
 }) {
   return (
-    <button
-      onClick={onClick}
-      disabled={!onClick}
-      className={`w-full flex items-center justify-between rounded-lg border px-4 py-2.5 text-left ${
+    <div
+      className={`w-full flex items-center gap-2 rounded-lg border px-4 py-2.5 ${
         resaltar ? "border-[var(--acento)] bg-[var(--acento)]/5" : "border-gray-200 bg-white"
-      } ${cobrado ? "opacity-70" : ""} ${onClick ? "hover:shadow-sm" : ""}`}
+      } ${cobrado ? "opacity-70" : ""}`}
     >
-      <span className="font-medium text-tinta">{v.pacientes?.nombre}</span>
-      <span
-        className="text-xs font-medium px-2 py-0.5 rounded-full"
-        style={{ background: v.doctoras?.color_pastel + "40" }}
+      <button
+        onClick={onClick}
+        disabled={!onClick}
+        className={`flex-1 flex items-center justify-between text-left ${onClick ? "hover:opacity-80" : ""}`}
       >
-        {v.doctoras?.nombre}
-      </span>
-    </button>
+        <span className="font-medium text-tinta">{v.pacientes?.nombre}</span>
+        <span
+          className="text-xs font-medium px-2 py-0.5 rounded-full"
+          style={{ background: v.doctoras?.color_pastel + "40" }}
+        >
+          {v.doctoras?.nombre}
+        </span>
+      </button>
+      {onDelete && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          title="Eliminar visita"
+          className="text-gray-300 hover:text-red-500 shrink-0"
+        >
+          <Trash2 size={16} />
+        </button>
+      )}
+    </div>
   );
 }
 
