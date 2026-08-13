@@ -131,7 +131,7 @@ export function Recepcion() {
         <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3">
           <div>
             {nuevoPaciente ? (
-              <div className="flex items-center justify-between rounded-lg border border-teal bg-teal/5 px-3 py-2 text-sm">
+              <div className="flex items-center justify-between rounded-lg border border-[var(--acento)] bg-[var(--acento)]/5 px-3 py-2 text-sm">
                 <span>{nuevoPaciente.nombre}</span>
                 <button onClick={() => setNuevoPaciente(null)}>
                   <X size={14} />
@@ -155,7 +155,7 @@ export function Recepcion() {
           <button
             onClick={crearVisita}
             disabled={!nuevoPaciente || creandoVisita}
-            className="flex items-center justify-center gap-2 rounded-lg bg-teal text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+            className="flex items-center justify-center gap-2 rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
           >
             <Plus size={16} /> Registrar llegada
           </button>
@@ -222,7 +222,7 @@ function VisitaCard({
       onClick={onClick}
       disabled={!onClick}
       className={`w-full flex items-center justify-between rounded-lg border px-4 py-2.5 text-left ${
-        resaltar ? "border-teal bg-teal/5" : "border-gray-200 bg-white"
+        resaltar ? "border-[var(--acento)] bg-[var(--acento)]/5" : "border-gray-200 bg-white"
       } ${cobrado ? "opacity-70" : ""} ${onClick ? "hover:shadow-sm" : ""}`}
     >
       <span className="font-medium text-tinta">{v.pacientes?.nombre}</span>
@@ -445,7 +445,7 @@ function ModalCobro({
         ) : (
           <>
             {saldoDisponible > 0 && (
-              <p className="text-sm text-teal bg-teal/10 rounded-lg px-3 py-2 mb-3">
+              <p className="text-sm text-[var(--acento)] bg-[var(--acento)]/10 rounded-lg px-3 py-2 mb-3">
                 Saldo a favor disponible: {fmtCOP(saldoDisponible)}
               </p>
             )}
@@ -565,7 +565,7 @@ function ModalCobro({
             <button
               onClick={confirmar}
               disabled={guardando || cargos.length === 0}
-              className="w-full rounded-lg bg-teal text-white py-2.5 text-sm font-medium disabled:opacity-40"
+              className="w-full rounded-lg bg-[var(--acento)] text-white py-2.5 text-sm font-medium disabled:opacity-40"
             >
               {guardando ? "Guardando…" : "Confirmar cobro"}
             </button>

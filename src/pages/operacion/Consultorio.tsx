@@ -124,7 +124,7 @@ export function Consultorio() {
               </span>
               <button
                 onClick={() => marcarInstalado(p.id)}
-                className="flex items-center gap-1 text-teal font-medium text-xs"
+                className="flex items-center gap-1 text-[var(--acento)] font-medium text-xs"
               >
                 <CheckCircle2 size={14} /> Instalar
               </button>
@@ -346,7 +346,7 @@ function ModalAtencion({
         <button
           onClick={guardar}
           disabled={guardando}
-          className="w-full rounded-lg bg-teal text-white py-2.5 text-sm font-medium disabled:opacity-40"
+          className="w-full rounded-lg bg-[var(--acento)] text-white py-2.5 text-sm font-medium disabled:opacity-40"
         >
           {guardando ? "Guardando…" : "Guardar y pasar a cobro"}
         </button>

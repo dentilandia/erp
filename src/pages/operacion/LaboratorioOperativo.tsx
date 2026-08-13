@@ -102,7 +102,7 @@ export function LaboratorioOperativo() {
                     <span className="flex items-center gap-3">
                       {o.valor_factura && <span className="text-gray-500">{fmtCOP(o.valor_factura)}</span>}
                       {e.value === "enviado" && (
-                        <button onClick={() => marcarRecibido(o.id)} className="text-teal font-medium text-xs">
+                        <button onClick={() => marcarRecibido(o.id)} className="text-[var(--acento)] font-medium text-xs">
                           Marcar recibido
                         </button>
                       )}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { ClipboardList, Stethoscope, Wallet, FlaskConical, History, LogOut } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
@@ -121,7 +121,10 @@ export function Layout() {
         ))}
       </nav>
 
-      <main className="flex-1 p-4">
+      <main
+        className="flex-1 p-4"
+        style={sedeActiva ? ({ "--acento": sedeActiva.color_acento } as CSSProperties) : undefined}
+      >
         {sedeActiva ? (
           <Outlet context={{ sedeActiva }} />
         ) : (

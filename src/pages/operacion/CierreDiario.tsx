@@ -142,7 +142,7 @@ export function CierreDiario() {
     <div className="max-w-4xl mx-auto space-y-4">
       <div className="flex items-center justify-between">
         <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-        <button onClick={exportarCSV} className="flex items-center gap-2 text-sm font-medium text-teal">
+        <button onClick={exportarCSV} className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]">
           <Download size={16} /> Exportar
         </button>
       </div>
@@ -230,7 +230,7 @@ export function CierreDiario() {
           <input type="checkbox" checked={cierre?.consignado ?? false} onChange={(e) => marcarConsignado(e.target.checked)} />
           Día consignado
         </label>
-        <label className="flex items-center gap-2 text-sm text-teal font-medium cursor-pointer">
+        <label className="flex items-center gap-2 text-sm text-[var(--acento)] font-medium cursor-pointer">
           <Paperclip size={14} />
           {subiendo ? "Subiendo…" : cierre?.comprobante_url ? "Comprobante adjunto" : "Adjuntar comprobante"}
           <input

@@ -57,7 +57,7 @@ export function PacienteAutocomplete({ onSelect, placeholder }: Props) {
         }}
         onFocus={() => setAbierto(true)}
         placeholder={placeholder ?? "Buscar paciente por nombre…"}
-        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal"
+        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--acento)]"
       />
       {abierto && query.trim().length >= 2 && (
         <div className="absolute z-10 mt-1 w-full bg-white rounded-lg border border-gray-200 shadow-lg max-h-56 overflow-y-auto">
@@ -79,7 +79,7 @@ export function PacienteAutocomplete({ onSelect, placeholder }: Props) {
             type="button"
             disabled={creando}
             onClick={crearPaciente}
-            className="w-full text-left px-3 py-2 text-sm text-teal font-medium hover:bg-gray-50 border-t border-gray-100"
+            className="w-full text-left px-3 py-2 text-sm text-[var(--acento)] font-medium hover:bg-gray-50 border-t border-gray-100"
           >
             {creando ? "Creando…" : `+ Crear paciente "${query.trim()}"`}
           </button>
