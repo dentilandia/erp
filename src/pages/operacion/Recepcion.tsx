@@ -46,7 +46,7 @@ interface CargoEdit {
 
 export function Recepcion() {
   const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
-  const fecha = today();
+  const [fecha, setFecha] = useState(today());
 
   const [visitas, setVisitas] = useState<VisitaRow[]>([]);
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
@@ -111,7 +111,23 @@ export function Recepcion() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <section className="bg-white rounded-xl border border-gray-200 p-4">
-        <h2 className="font-semibold text-tinta mb-3">Llegada de paciente</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-tinta">Llegada de paciente</h2>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-gray-500">Fecha de la visita</label>
+            <input
+              type="date"
+              value={fecha}
+              onChange={(e) => setFecha(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2 py-1 text-sm"
+            />
+          </div>
+        </div>
+        {fecha !== today() && (
+          <p className="text-xs text-amber-600 mb-3">
+            Estás registrando en una fecha distinta a hoy — las listas de abajo también son de ese día.
+          </p>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3">
           <div>
             {nuevoPaciente ? (

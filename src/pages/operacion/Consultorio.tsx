@@ -22,6 +22,7 @@ interface LabPendienteInstalar {
 
 export function Consultorio() {
   const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
+  const [fecha, setFecha] = useState(today());
   const [enEspera, setEnEspera] = useState<VisitaRow[]>([]);
   const [atendiendoId, setAtendiendoId] = useState<string | null>(null);
   const [buscarInstalar, setBuscarInstalar] = useState("");
@@ -32,7 +33,7 @@ export function Consultorio() {
       .from("visitas")
       .select("id, doctora_id, pacientes(nombre), doctoras(nombre, color_pastel)")
       .eq("sede_id", sedeActiva.id)
-      .eq("fecha", today())
+      .eq("fecha", fecha)
       .eq("estado", "espera")
       .order("created_at");
     setEnEspera((data as unknown as VisitaRow[]) ?? []);
@@ -48,7 +49,7 @@ export function Consultorio() {
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sedeActiva.id]);
+  }, [sedeActiva.id, fecha]);
 
   useEffect(() => {
     if (buscarInstalar.trim().length < 2) {
@@ -75,7 +76,18 @@ export function Consultorio() {
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <section>
-        <h3 className="text-sm font-semibold text-gray-500 mb-2">En espera de atención ({enEspera.length})</h3>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold text-gray-500">En espera de atención ({enEspera.length})</h3>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-gray-500">Fecha</label>
+            <input
+              type="date"
+              value={fecha}
+              onChange={(e) => setFecha(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2 py-1 text-sm"
+            />
+          </div>
+        </div>
         <div className="space-y-2">
           {enEspera.map((v) => (
             <button
