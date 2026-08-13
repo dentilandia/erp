@@ -19,6 +19,7 @@ export function useSedeActiva() {
   const { perfil, sede } = useAuth();
   const [sedes, setSedes] = useState<Sede[]>([]);
   const [sedeAdminId, setSedeAdminId] = useState<string | null>(null);
+  const [errorSedes, setErrorSedes] = useState<string | null>(null);
 
   useEffect(() => {
     if (perfil?.rol !== "admin") return;
@@ -26,7 +27,12 @@ export function useSedeActiva() {
       .from("sedes")
       .select("id, nombre, color_acento")
       .order("nombre")
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (error) {
+          console.error("No se pudieron cargar las sedes:", error);
+          setErrorSedes(error.message);
+          return;
+        }
         setSedes((data as Sede[]) ?? []);
         if (data && data.length > 0) setSedeAdminId((prev) => prev ?? data[0].id);
       });
@@ -34,14 +40,14 @@ export function useSedeActiva() {
 
   if (perfil?.rol === "admin") {
     const activa = sedes.find((s) => s.id === sedeAdminId) ?? null;
-    return { sedeActiva: activa, sedes, setSedeAdminId, esAdmin: true };
+    return { sedeActiva: activa, sedes, setSedeAdminId, esAdmin: true, errorSedes };
   }
-  return { sedeActiva: sede, sedes: sede ? [sede] : [], setSedeAdminId: () => {}, esAdmin: false };
+  return { sedeActiva: sede, sedes: sede ? [sede] : [], setSedeAdminId: () => {}, esAdmin: false, errorSedes: null };
 }
 
 export function Layout() {
   const { perfil, signOut } = useAuth();
-  const { sedeActiva, sedes, setSedeAdminId, esAdmin } = useSedeActiva();
+  const { sedeActiva, sedes, setSedeAdminId, esAdmin, errorSedes } = useSedeActiva();
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -55,21 +61,35 @@ export function Layout() {
         </div>
         <div className="flex items-center gap-3">
           {esAdmin ? (
-            <select
-              value={sedeActiva?.id ?? ""}
-              onChange={(e) => setSedeAdminId(e.target.value)}
-              className="text-sm rounded-md px-2 py-1 text-tinta"
-            >
-              {sedes.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.nombre}
-                </option>
-              ))}
-            </select>
+            errorSedes ? (
+              <span className="text-xs text-red-300">No se pudieron cargar las sedes: {errorSedes}</span>
+            ) : sedes.length === 0 ? (
+              <span className="text-xs text-gris">Cargando sedes…</span>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                {sedes.map((s) => {
+                  const activa = sedeActiva?.id === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      onClick={() => setSedeAdminId(s.id)}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-full border-2 transition-colors"
+                      style={{
+                        background: activa ? s.color_acento : "transparent",
+                        borderColor: s.color_acento,
+                        color: activa ? "#ffffff" : s.color_acento,
+                      }}
+                    >
+                      {s.nombre}
+                    </button>
+                  );
+                })}
+              </div>
+            )
           ) : (
             sedeActiva && (
               <span
-                className="text-xs font-semibold px-3 py-1 rounded-full"
+                className="text-xs font-semibold px-3 py-1.5 rounded-full"
                 style={{ background: sedeActiva.color_acento }}
               >
                 {sedeActiva.nombre}
