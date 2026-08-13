@@ -282,9 +282,10 @@ function ModalAtencion({
         <div>
           <label className="block text-sm font-medium mb-1">Próxima cita</label>
           <input
-            type="date"
+            type="text"
             value={proximaCita}
             onChange={(e) => setProximaCita(e.target.value)}
+            placeholder="Ej: en 3 semanas para ajuste, o 15 de agosto"
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
           />
         </div>
