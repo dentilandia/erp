@@ -280,6 +280,7 @@ function ModalCobro({
   const [excedenteValor, setExcedenteValor] = useState("");
   const [conceptoTipo, setConceptoTipo] = useState(CONCEPTOS_ADMINISTRATIVOS[0]);
   const [conceptoValor, setConceptoValor] = useState("");
+  const [motivoCero, setMotivoCero] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [cargandoModal, setCargandoModal] = useState(true);
@@ -288,14 +289,21 @@ function ModalCobro({
     (async () => {
       const { data: visita } = await supabase
         .from("visitas")
-        .select("id, estado, paciente_id, pacientes(nombre)")
+        .select("id, estado, paciente_id, motivo_valor_cero, pacientes(nombre)")
         .eq("id", visitaId)
         .single();
       if (!visita) return;
-      const v = visita as unknown as { id: string; estado: "espera" | "consulta" | "cobrado"; paciente_id: string; pacientes: { nombre: string } };
+      const v = visita as unknown as {
+        id: string;
+        estado: "espera" | "consulta" | "cobrado";
+        paciente_id: string;
+        motivo_valor_cero: string | null;
+        pacientes: { nombre: string };
+      };
       setPacienteId(v.paciente_id);
       setPacienteNombre(v.pacientes?.nombre ?? "");
       setEstadoVisita(v.estado);
+      setMotivoCero(v.motivo_valor_cero ?? "");
 
       const { data: cargosData } = await supabase
         .from("cargos")
@@ -379,6 +387,10 @@ function ModalCobro({
 
   async function confirmar() {
     setErrorMsg(null);
+    if (cargos.length === 0 && !motivoCero.trim()) {
+      setErrorMsg("Este paciente no tiene ningún cargo. Escribe el motivo para cobrar $0.");
+      return;
+    }
     for (const c of cargos) {
       const suma = c.pagos.reduce((a, p) => a + (Number(p.valor) || 0), 0);
       if (Math.round(suma) !== Math.round(c.valor)) {
@@ -443,7 +455,14 @@ function ModalCobro({
         });
       }
 
-      await supabase.from("visitas").update({ estado: "cobrado", updated_at: new Date().toISOString() }).eq("id", visitaId);
+      await supabase
+        .from("visitas")
+        .update({
+          estado: "cobrado",
+          motivo_valor_cero: cargos.length === 0 ? motivoCero.trim() : null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", visitaId);
       onConfirmado();
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : "Error al guardar el cobro.");
@@ -472,6 +491,20 @@ function ModalCobro({
               <p className="text-sm text-[var(--acento)] bg-[var(--acento)]/10 rounded-lg px-3 py-2 mb-3">
                 Saldo a favor disponible: {fmtCOP(saldoDisponible)}
               </p>
+            )}
+
+            {cargos.length === 0 && (
+              <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-4">
+                <label className="block text-xs font-medium text-gray-500 mb-1">
+                  Este paciente no tiene ningún cargo — motivo para cobrar $0
+                </label>
+                <input
+                  value={motivoCero}
+                  onChange={(e) => setMotivoCero(e.target.value)}
+                  placeholder="Ej: revisión de cortesía, ajuste sin costo"
+                  className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </div>
             )}
 
             <div className="space-y-3 mb-4">
@@ -588,7 +621,7 @@ function ModalCobro({
 
             <button
               onClick={confirmar}
-              disabled={guardando || cargos.length === 0}
+              disabled={guardando || (cargos.length === 0 && !motivoCero.trim())}
               className="w-full rounded-lg bg-[var(--acento)] text-white py-2.5 text-sm font-medium disabled:opacity-40"
             >
               {guardando ? "Guardando…" : "Confirmar cobro"}
