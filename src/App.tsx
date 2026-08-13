@@ -7,6 +7,9 @@ import { Consultorio } from "./pages/operacion/Consultorio";
 import { CierreDiario } from "./pages/operacion/CierreDiario";
 import { LaboratorioOperativo } from "./pages/operacion/LaboratorioOperativo";
 import { Historial } from "./pages/operacion/Historial";
+import { Liquidaciones } from "./pages/Liquidaciones";
+import { Financiacion } from "./pages/Financiacion";
+import { Parametros } from "./pages/Parametros";
 
 function Gate({ children }: { children: React.ReactNode }) {
   const { loading, session, perfil, error } = useAuth();
@@ -42,6 +45,9 @@ function App() {
               <Route path="operacion/cierre" element={<CierreDiario />} />
               <Route path="operacion/laboratorio" element={<LaboratorioOperativo />} />
               <Route path="operacion/historial" element={<Historial />} />
+              <Route path="liquidaciones" element={<Liquidaciones />} />
+              <Route path="financiacion" element={<Financiacion />} />
+              <Route path="parametros" element={<Parametros />} />
             </Route>
           </Routes>
         </Gate>

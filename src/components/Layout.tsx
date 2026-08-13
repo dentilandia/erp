@@ -1,6 +1,17 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { NavLink, Outlet } from "react-router-dom";
-import { ClipboardList, Stethoscope, Wallet, FlaskConical, History, LogOut } from "lucide-react";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
+import {
+  ClipboardList,
+  Stethoscope,
+  Wallet,
+  FlaskConical,
+  History,
+  LogOut,
+  LayoutGrid,
+  Receipt,
+  CreditCard,
+  Settings,
+} from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
 import type { Sede } from "../lib/types";
@@ -11,6 +22,13 @@ const TABS = [
   { to: "/operacion/cierre", label: "Cierre diario", icon: Wallet },
   { to: "/operacion/laboratorio", label: "Laboratorio", icon: FlaskConical },
   { to: "/operacion/historial", label: "Historial", icon: History },
+];
+
+const SECCIONES = [
+  { to: "/operacion/recepcion", match: "/operacion", label: "Operación Diaria", icon: LayoutGrid },
+  { to: "/liquidaciones", match: "/liquidaciones", label: "Liquidaciones", icon: Receipt },
+  { to: "/financiacion", match: "/financiacion", label: "Financiación", icon: CreditCard },
+  { to: "/parametros", match: "/parametros", label: "Parámetros", icon: Settings },
 ];
 
 /** Sede sobre la que trabaja la pantalla: fija si el perfil es de operación,
@@ -48,6 +66,8 @@ export function useSedeActiva() {
 export function Layout() {
   const { perfil, signOut } = useAuth();
   const { sedeActiva, sedes, setSedeAdminId, esAdmin, errorSedes } = useSedeActiva();
+  const location = useLocation();
+  const enOperacion = location.pathname.startsWith("/operacion");
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -103,23 +123,46 @@ export function Layout() {
         </div>
       </header>
 
-      <nav className="flex gap-1 px-4 py-2 bg-white border-b border-gray-200 overflow-x-auto">
-        {TABS.map((t) => (
-          <NavLink
-            key={t.to}
-            to={t.to}
-            className={({ isActive }) =>
-              `flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${
-                isActive ? "text-white" : "text-gray-500 hover:bg-gray-100"
-              }`
-            }
-            style={({ isActive }) => (isActive ? { background: "#2E253A" } : {})}
-          >
-            <t.icon size={16} />
-            {t.label}
-          </NavLink>
-        ))}
-      </nav>
+      {esAdmin && (
+        <nav className="flex gap-1 px-4 py-2 bg-tinta/95 overflow-x-auto">
+          {SECCIONES.map((s) => {
+            const activa = location.pathname.startsWith(s.match);
+            return (
+              <NavLink
+                key={s.to}
+                to={s.to}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${
+                  activa ? "text-white" : "text-gris hover:bg-white/10"
+                }`}
+                style={activa ? { background: "#009F98" } : {}}
+              >
+                <s.icon size={16} />
+                {s.label}
+              </NavLink>
+            );
+          })}
+        </nav>
+      )}
+
+      {enOperacion && (
+        <nav className="flex gap-1 px-4 py-2 bg-white border-b border-gray-200 overflow-x-auto">
+          {TABS.map((t) => (
+            <NavLink
+              key={t.to}
+              to={t.to}
+              className={({ isActive }) =>
+                `flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${
+                  isActive ? "text-white" : "text-gray-500 hover:bg-gray-100"
+                }`
+              }
+              style={({ isActive }) => (isActive ? { background: "#2E253A" } : {})}
+            >
+              <t.icon size={16} />
+              {t.label}
+            </NavLink>
+          ))}
+        </nav>
+      )}
 
       <main
         className="flex-1 p-4"
