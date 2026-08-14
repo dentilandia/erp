@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, Check } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Doctora } from "../lib/types";
 
@@ -21,6 +21,7 @@ export function Parametros() {
   const [nuevoNombre, setNuevoNombre] = useState("");
   const [nuevoColor, setNuevoColor] = useState(PALETA_SUGERIDA[0]);
   const [guardando, setGuardando] = useState(false);
+  const [precioGuardado, setPrecioGuardado] = useState<string | null>(null);
 
   async function cargar() {
     const { data: d } = await supabase.from("doctoras").select("*").order("nombre");
@@ -47,9 +48,14 @@ export function Parametros() {
     cargar();
   }
 
-  async function actualizarPrecio(clave: string, valor: number) {
+  function editarPrecio(clave: string, valor: number) {
     setPrecios((prev) => prev.map((p) => (p.clave === clave ? { ...p, valor } : p)));
+  }
+
+  async function guardarPrecio(clave: string, valor: number) {
     await supabase.from("precios_config").update({ valor }).eq("clave", clave);
+    setPrecioGuardado(clave);
+    setTimeout(() => setPrecioGuardado((prev) => (prev === clave ? null : prev)), 1500);
   }
 
   return (
@@ -126,12 +132,20 @@ export function Parametros() {
           {precios.map((p) => (
             <div key={p.clave} className="flex items-center justify-between py-2.5">
               <span className="text-sm">{ETIQUETAS_PRECIOS[p.clave] ?? p.clave}</span>
-              <input
-                type="number"
-                value={p.valor}
-                onChange={(e) => actualizarPrecio(p.clave, Number(e.target.value))}
-                className="w-32 rounded-md border border-gray-300 px-2 py-1 text-sm text-right"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={p.valor}
+                  onChange={(e) => editarPrecio(p.clave, Number(e.target.value))}
+                  className="w-32 rounded-md border border-gray-300 px-2 py-1 text-sm text-right"
+                />
+                <button
+                  onClick={() => guardarPrecio(p.clave, p.valor)}
+                  className="flex items-center gap-1 rounded-md bg-[var(--acento)] text-white px-3 py-1.5 text-xs font-medium"
+                >
+                  {precioGuardado === p.clave ? <Check size={14} /> : "Guardar"}
+                </button>
+              </div>
             </div>
           ))}
         </div>
