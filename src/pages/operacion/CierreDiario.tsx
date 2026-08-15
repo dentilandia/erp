@@ -11,10 +11,20 @@ interface CargoPagoFila {
   cargos: { categoria: string; doctoras: { nombre: string } };
 }
 
+interface OtroIngresoFila {
+  id: string;
+  valor: number;
+  medio_origen: string;
+  pacientes: { nombre: string } | null;
+}
+
+const ETIQUETAS_MEDIO: Record<string, string> = Object.fromEntries(MEDIOS_PAGO.map((m) => [m.value, m.label]));
+
 export function CierreDiario() {
   const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
   const [fecha, setFecha] = useState(today());
   const [filas, setFilas] = useState<CargoPagoFila[]>([]);
+  const [otrosIngresosAuto, setOtrosIngresosAuto] = useState<OtroIngresoFila[]>([]);
   const [cierre, setCierre] = useState<CierreDiarioRow | null>(null);
   const [otrosIngresos, setOtrosIngresos] = useState("0");
   const [gasto, setGasto] = useState("0");
@@ -28,6 +38,13 @@ export function CierreDiario() {
         .eq("cargos.sede_id", sedeActiva.id)
         .eq("cargos.fecha", fecha);
       setFilas((data as unknown as CargoPagoFila[]) ?? []);
+
+      const { data: saldosData } = await supabase
+        .from("saldos_favor")
+        .select("id, valor, medio_origen, pacientes(nombre)")
+        .eq("sede_origen_id", sedeActiva.id)
+        .eq("fecha", fecha);
+      setOtrosIngresosAuto((saldosData as unknown as OtroIngresoFila[]) ?? []);
 
       const { data: cierreRow } = await supabase
         .from("cierres_diarios")
@@ -59,7 +76,19 @@ export function CierreDiario() {
     return totales;
   }, [filas]);
 
-  const totalEfectivoCierre = (totalPorMedio["efectivo"] ?? 0) + Number(otrosIngresos || 0) - Number(gasto || 0);
+  const totalOtrosAutoPorMedio = useMemo(() => {
+    const totales: Record<string, number> = {};
+    for (const o of otrosIngresosAuto) totales[o.medio_origen] = (totales[o.medio_origen] ?? 0) + Number(o.valor);
+    return totales;
+  }, [otrosIngresosAuto]);
+
+  const totalOtrosAuto = otrosIngresosAuto.reduce((a, o) => a + Number(o.valor), 0);
+
+  const totalEfectivoCierre =
+    (totalPorMedio["efectivo"] ?? 0) +
+    (totalOtrosAutoPorMedio["efectivo"] ?? 0) +
+    Number(otrosIngresos || 0) -
+    Number(gasto || 0);
 
   async function guardarManual() {
     await supabase.from("cierres_diarios").upsert(
@@ -198,9 +227,32 @@ export function CierreDiario() {
         </table>
       </div>
 
+      {otrosIngresosAuto.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <h3 className="text-sm font-semibold text-gray-500 mb-2">
+            Otros ingresos (saldo a favor generado hoy)
+          </h3>
+          <div className="divide-y divide-gray-100 text-sm">
+            {otrosIngresosAuto.map((o) => (
+              <div key={o.id} className="flex items-center justify-between py-1.5">
+                <span>
+                  {o.pacientes?.nombre ?? "—"}{" "}
+                  <span className="text-gray-400">· {ETIQUETAS_MEDIO[o.medio_origen] ?? o.medio_origen}</span>
+                </span>
+                <span className="font-medium">{fmtCOP(o.valor)}</span>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between pt-2 mt-2 border-t border-gray-100 text-sm font-semibold">
+            <span>Total otros ingresos</span>
+            <span>{fmtCOP(totalOtrosAuto)}</span>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-gray-200 p-4 grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium mb-1">Otros ingresos</label>
+          <label className="block text-sm font-medium mb-1">Otros ingresos manuales</label>
           <input
             type="number"
             value={otrosIngresos}

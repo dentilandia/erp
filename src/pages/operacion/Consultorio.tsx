@@ -168,6 +168,7 @@ function ModalAtencion({
   const [pacienteNombre, setPacienteNombre] = useState("");
   const [tratamiento, setTratamiento] = useState("");
   const [valorTratamiento, setValorTratamiento] = useState("");
+  const [motivoCero, setMotivoCero] = useState("");
   const [proximaCita, setProximaCita] = useState("");
   const [rxTomada, setRxTomada] = useState(false);
   const [insumos, setInsumos] = useState<Record<string, boolean>>({});
@@ -192,7 +193,10 @@ function ModalAtencion({
     })();
   }, [visitaId]);
 
+  const sinCargo = !(Number(valorTratamiento) > 0) && !rxTomada;
+
   async function guardar() {
+    if (sinCargo && !motivoCero.trim()) return;
     setGuardando(true);
     const { data: visita } = await supabase.from("visitas").select("doctora_id, paciente_id").eq("id", visitaId).single();
     if (!visita) {
@@ -244,6 +248,7 @@ function ModalAtencion({
         estado: "consulta",
         tratamiento,
         proxima_cita: proximaCita || null,
+        motivo_valor_cero: sinCargo ? motivoCero.trim() : null,
         updated_at: new Date().toISOString(),
       })
       .eq("id", visitaId);
@@ -271,7 +276,7 @@ function ModalAtencion({
           />
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">Valor del tratamiento (honorario doctora)</label>
+          <label className="block text-sm font-medium mb-1">Valor de venta</label>
           <input
             type="number"
             value={valorTratamiento}
@@ -279,6 +284,18 @@ function ModalAtencion({
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
           />
         </div>
+
+        {sinCargo && (
+          <div>
+            <label className="block text-sm font-medium mb-1">Motivo para no cobrar (paciente sin cargo)</label>
+            <input
+              value={motivoCero}
+              onChange={(e) => setMotivoCero(e.target.value)}
+              placeholder="Ej: revisión de cortesía, ajuste sin costo"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          </div>
+        )}
         <div>
           <label className="block text-sm font-medium mb-1">Próxima cita</label>
           <input
@@ -346,7 +363,7 @@ function ModalAtencion({
 
         <button
           onClick={guardar}
-          disabled={guardando}
+          disabled={guardando || (sinCargo && !motivoCero.trim())}
           className="w-full rounded-lg bg-[var(--acento)] text-white py-2.5 text-sm font-medium disabled:opacity-40"
         >
           {guardando ? "Guardando…" : "Guardar y pasar a cobro"}

@@ -14,6 +14,8 @@ import {
 } from "../../lib/types";
 import { PacienteAutocomplete } from "../../components/PacienteAutocomplete";
 
+const CONCEPTO_PRECIO_CLAVE: Record<string, string> = { GUM: "gum" };
+
 interface VisitaRow {
   id: string;
   estado: "espera" | "consulta" | "cobrado";
@@ -280,6 +282,7 @@ function ModalCobro({
   const [excedenteValor, setExcedenteValor] = useState("");
   const [conceptoTipo, setConceptoTipo] = useState(CONCEPTOS_ADMINISTRATIVOS[0]);
   const [conceptoValor, setConceptoValor] = useState("");
+  const [precios, setPrecios] = useState<Record<string, number>>({});
   const [motivoCero, setMotivoCero] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -330,6 +333,11 @@ function ModalCobro({
         .eq("paciente_id", v.paciente_id)
         .gt("valor_disponible", 0);
       setSaldoDisponible((saldos ?? []).reduce((a, s) => a + Number(s.valor_disponible), 0));
+
+      const { data: preciosData } = await supabase.from("precios_config").select("clave, valor");
+      const preciosMap: Record<string, number> = {};
+      (preciosData ?? []).forEach((p) => (preciosMap[p.clave] = Number(p.valor)));
+      setPrecios(preciosMap);
       setCargandoModal(false);
     })();
   }, [visitaId]);
@@ -562,7 +570,11 @@ function ModalCobro({
               <div className="flex gap-2">
                 <select
                   value={conceptoTipo}
-                  onChange={(e) => setConceptoTipo(e.target.value)}
+                  onChange={(e) => {
+                    setConceptoTipo(e.target.value);
+                    const clave = CONCEPTO_PRECIO_CLAVE[e.target.value];
+                    setConceptoValor(clave && precios[clave] ? String(precios[clave]) : "");
+                  }}
                   className="flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm"
                 >
                   {CONCEPTOS_ADMINISTRATIVOS.map((c) => (

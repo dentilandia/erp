@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { Plus, Check } from "lucide-react";
+import { Plus, Check, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
-import type { Doctora } from "../lib/types";
+import { today } from "../lib/format";
+import type { Doctora, Sede, Paciente } from "../lib/types";
+import { PacienteAutocomplete } from "../components/PacienteAutocomplete";
 
 const PALETA_SUGERIDA = [
   "#B08FC7", "#7FCBC4", "#F0C48A", "#E39B9B", "#8FBFA8", "#A8A0D8",
@@ -13,6 +15,7 @@ const ETIQUETAS_PRECIOS: Record<string, string> = {
   elasticos_intraoral: "Elásticos intraoral",
   traccion_extraoral: "Tracción extra oral",
   rx: "RX",
+  gum: "GUM",
 };
 
 export function Parametros() {
@@ -23,11 +26,23 @@ export function Parametros() {
   const [guardando, setGuardando] = useState(false);
   const [precioGuardado, setPrecioGuardado] = useState<string | null>(null);
 
+  const [sedes, setSedes] = useState<Sede[]>([]);
+  const [pacienteSaldo, setPacienteSaldo] = useState<Paciente | null>(null);
+  const [sedeSaldoId, setSedeSaldoId] = useState("");
+  const [fechaSaldo, setFechaSaldo] = useState(today());
+  const [valorSaldo, setValorSaldo] = useState("");
+  const [notasSaldo, setNotasSaldo] = useState("");
+  const [guardandoSaldo, setGuardandoSaldo] = useState(false);
+  const [saldoRegistrado, setSaldoRegistrado] = useState(false);
+
   async function cargar() {
     const { data: d } = await supabase.from("doctoras").select("*").order("nombre");
     setDoctoras((d as Doctora[]) ?? []);
     const { data: p } = await supabase.from("precios_config").select("clave, valor").order("clave");
     setPrecios(p ?? []);
+    const { data: s } = await supabase.from("sedes").select("id, nombre, color_acento").order("nombre");
+    setSedes((s as Sede[]) ?? []);
+    if (s && s.length > 0) setSedeSaldoId((prev) => prev || s[0].id);
   }
 
   useEffect(() => {
@@ -56,6 +71,27 @@ export function Parametros() {
     await supabase.from("precios_config").update({ valor }).eq("clave", clave);
     setPrecioGuardado(clave);
     setTimeout(() => setPrecioGuardado((prev) => (prev === clave ? null : prev)), 1500);
+  }
+
+  async function registrarSaldo() {
+    const valor = Number(valorSaldo);
+    if (!pacienteSaldo || !sedeSaldoId || !valor) return;
+    setGuardandoSaldo(true);
+    await supabase.from("saldos_favor").insert({
+      paciente_id: pacienteSaldo.id,
+      sede_origen_id: sedeSaldoId,
+      valor,
+      valor_disponible: valor,
+      medio_origen: "ajuste_manual",
+      fecha: fechaSaldo,
+      notas: notasSaldo.trim() || null,
+    });
+    setGuardandoSaldo(false);
+    setPacienteSaldo(null);
+    setValorSaldo("");
+    setNotasSaldo("");
+    setSaldoRegistrado(true);
+    setTimeout(() => setSaldoRegistrado(false), 2000);
   }
 
   return (
@@ -148,6 +184,66 @@ export function Parametros() {
               </div>
             </div>
           ))}
+        </div>
+      </section>
+
+      <section className="bg-white rounded-xl border border-gray-200 p-4">
+        <h2 className="font-semibold text-tinta mb-1">Registrar saldo a favor manual</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Para saldos que el paciente ya tenía antes del sistema, o para correcciones. Una vez registrado,
+          queda disponible como medio de pago "Saldo a favor" en el cobro de ese paciente.
+        </p>
+        <div className="space-y-2">
+          {pacienteSaldo ? (
+            <div className="flex items-center justify-between rounded-lg border border-[var(--acento)] bg-[var(--acento)]/5 px-3 py-2 text-sm">
+              <span>{pacienteSaldo.nombre}</span>
+              <button onClick={() => setPacienteSaldo(null)}>
+                <X size={14} />
+              </button>
+            </div>
+          ) : (
+            <PacienteAutocomplete onSelect={setPacienteSaldo} placeholder="Buscar paciente…" />
+          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={sedeSaldoId}
+              onChange={(e) => setSedeSaldoId(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            >
+              {sedes.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.nombre}
+                </option>
+              ))}
+            </select>
+            <input
+              type="date"
+              value={fechaSaldo}
+              onChange={(e) => setFechaSaldo(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <input
+              type="number"
+              placeholder="Valor"
+              value={valorSaldo}
+              onChange={(e) => setValorSaldo(e.target.value)}
+              className="w-32 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          </div>
+          <input
+            value={notasSaldo}
+            onChange={(e) => setNotasSaldo(e.target.value)}
+            placeholder="Nota (ej: saldo trasladado del sistema anterior)"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          />
+          <button
+            onClick={registrarSaldo}
+            disabled={!pacienteSaldo || !valorSaldo || guardandoSaldo}
+            className="flex items-center gap-2 rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+          >
+            {saldoRegistrado ? <Check size={16} /> : <Plus size={16} />}
+            {guardandoSaldo ? "Registrando…" : saldoRegistrado ? "Registrado" : "Registrar saldo"}
+          </button>
         </div>
       </section>
     </div>
