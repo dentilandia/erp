@@ -276,8 +276,12 @@ function ModalCobro({
   const [pacienteId, setPacienteId] = useState<string | null>(null);
   const [pacienteNombre, setPacienteNombre] = useState("");
   const [estadoVisita, setEstadoVisita] = useState<"espera" | "consulta" | "cobrado">("consulta");
+  const [visitaFecha, setVisitaFecha] = useState(today());
+  const [tratamiento, setTratamiento] = useState("");
+  const [proximaCita, setProximaCita] = useState("");
   const [cargos, setCargos] = useState<CargoEdit[]>([]);
   const [saldoDisponible, setSaldoDisponible] = useState(0);
+  const [excedentes, setExcedentes] = useState<PagoLinea[]>([]);
   const [excedenteMedio, setExcedenteMedio] = useState<MedioPago>("efectivo");
   const [excedenteValor, setExcedenteValor] = useState("");
   const [conceptoTipo, setConceptoTipo] = useState(CONCEPTOS_ADMINISTRATIVOS[0]);
@@ -292,20 +296,26 @@ function ModalCobro({
     (async () => {
       const { data: visita } = await supabase
         .from("visitas")
-        .select("id, estado, paciente_id, motivo_valor_cero, pacientes(nombre)")
+        .select("id, estado, fecha, paciente_id, motivo_valor_cero, tratamiento, proxima_cita, pacientes(nombre)")
         .eq("id", visitaId)
         .single();
       if (!visita) return;
       const v = visita as unknown as {
         id: string;
         estado: "espera" | "consulta" | "cobrado";
+        fecha: string;
         paciente_id: string;
         motivo_valor_cero: string | null;
+        tratamiento: string | null;
+        proxima_cita: string | null;
         pacientes: { nombre: string };
       };
       setPacienteId(v.paciente_id);
       setPacienteNombre(v.pacientes?.nombre ?? "");
       setEstadoVisita(v.estado);
+      setVisitaFecha(v.fecha);
+      setTratamiento(v.tratamiento ?? "");
+      setProximaCita(v.proxima_cita ?? "");
       setMotivoCero(v.motivo_valor_cero ?? "");
 
       const { data: cargosData } = await supabase
@@ -393,6 +403,17 @@ function ModalCobro({
     setCargos((prev) => prev.filter((_, i) => i !== idx));
   }
 
+  function agregarExcedente() {
+    const valor = Number(excedenteValor);
+    if (!valor) return;
+    setExcedentes((prev) => [...prev, { medio: excedenteMedio, valor }]);
+    setExcedenteValor("");
+  }
+
+  function quitarExcedente(idx: number) {
+    setExcedentes((prev) => prev.filter((_, i) => i !== idx));
+  }
+
   async function confirmar() {
     setErrorMsg(null);
     if (cargos.length === 0 && !motivoCero.trim()) {
@@ -451,15 +472,15 @@ function ModalCobro({
         }
       }
 
-      const excedente = Number(excedenteValor) || 0;
-      if (excedente > 0) {
+      for (const e of excedentes) {
+        if (!e.valor) continue;
         await supabase.from("saldos_favor").insert({
           paciente_id: pacienteId,
           sede_origen_id: sedeId,
-          valor: excedente,
-          valor_disponible: excedente,
-          medio_origen: excedenteMedio,
-          fecha: today(),
+          valor: e.valor,
+          valor_disponible: e.valor,
+          medio_origen: e.medio,
+          fecha: visitaFecha,
         });
       }
 
@@ -468,6 +489,7 @@ function ModalCobro({
         .update({
           estado: "cobrado",
           motivo_valor_cero: cargos.length === 0 ? motivoCero.trim() : null,
+          proxima_cita: proximaCita || null,
           updated_at: new Date().toISOString(),
         })
         .eq("id", visitaId);
@@ -500,6 +522,22 @@ function ModalCobro({
                 Saldo a favor disponible: {fmtCOP(saldoDisponible)}
               </p>
             )}
+
+            {tratamiento && (
+              <p className="text-sm bg-gray-50 rounded-lg px-3 py-2 mb-3">
+                <span className="text-gray-500">Tratamiento (consultorio):</span> {tratamiento}
+              </p>
+            )}
+
+            <div className="mb-3">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Próxima cita</label>
+              <input
+                value={proximaCita}
+                onChange={(e) => setProximaCita(e.target.value)}
+                placeholder="Nota de consultorio, o la fecha ya agendada"
+                className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+              />
+            </div>
 
             {cargos.length === 0 && (
               <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-4">
@@ -598,6 +636,20 @@ function ModalCobro({
 
             <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-4">
               <p className="text-xs font-medium text-gray-500 mb-2">Excedente / anticipo (crea saldo a favor)</p>
+              {excedentes.length > 0 && (
+                <div className="space-y-1 mb-2">
+                  {excedentes.map((e, idx) => (
+                    <div key={idx} className="flex items-center justify-between rounded-md bg-gray-50 px-2 py-1 text-sm">
+                      <span>
+                        {MEDIOS_PAGO.find((m) => m.value === e.medio)?.label} · {fmtCOP(e.valor)}
+                      </span>
+                      <button onClick={() => quitarExcedente(idx)}>
+                        <X size={14} className="text-gray-400" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="flex gap-2">
                 <select
                   value={excedenteMedio}
@@ -617,6 +669,9 @@ function ModalCobro({
                   onChange={(e) => setExcedenteValor(e.target.value)}
                   className="w-32 rounded-md border border-gray-300 px-2 py-1 text-sm"
                 />
+                <button onClick={agregarExcedente} className="rounded-md bg-gray-100 px-3 text-sm font-medium">
+                  <Plus size={14} />
+                </button>
               </div>
             </div>
 
