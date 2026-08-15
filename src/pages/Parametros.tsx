@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Plus, Check, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
-import type { Doctora, Sede, Paciente } from "../lib/types";
+import type { Doctora, Sede, Paciente, SaldoFavor } from "../lib/types";
 import { PacienteAutocomplete } from "../components/PacienteAutocomplete";
 
 const PALETA_SUGERIDA = [
@@ -34,6 +34,10 @@ export function Parametros() {
   const [notasSaldo, setNotasSaldo] = useState("");
   const [guardandoSaldo, setGuardandoSaldo] = useState(false);
   const [saldoRegistrado, setSaldoRegistrado] = useState(false);
+
+  const [pacienteEditar, setPacienteEditar] = useState<Paciente | null>(null);
+  const [saldosPaciente, setSaldosPaciente] = useState<SaldoFavor[]>([]);
+  const [saldoGuardadoId, setSaldoGuardadoId] = useState<string | null>(null);
 
   async function cargar() {
     const { data: d } = await supabase.from("doctoras").select("*").order("nombre");
@@ -92,6 +96,31 @@ export function Parametros() {
     setNotasSaldo("");
     setSaldoRegistrado(true);
     setTimeout(() => setSaldoRegistrado(false), 2000);
+  }
+
+  async function cargarSaldosPaciente(p: Paciente) {
+    setPacienteEditar(p);
+    const { data } = await supabase
+      .from("saldos_favor")
+      .select("*")
+      .eq("paciente_id", p.id)
+      .order("fecha", { ascending: false });
+    setSaldosPaciente((data as SaldoFavor[]) ?? []);
+  }
+
+  function editarSaldoPaciente(id: string, cambios: Partial<SaldoFavor>) {
+    setSaldosPaciente((prev) => prev.map((s) => (s.id === id ? { ...s, ...cambios } : s)));
+  }
+
+  async function guardarSaldoPaciente(id: string) {
+    const s = saldosPaciente.find((x) => x.id === id);
+    if (!s) return;
+    await supabase
+      .from("saldos_favor")
+      .update({ fecha: s.fecha, valor: s.valor, valor_disponible: s.valor_disponible, notas: s.notas })
+      .eq("id", id);
+    setSaldoGuardadoId(id);
+    setTimeout(() => setSaldoGuardadoId((prev) => (prev === id ? null : prev)), 1500);
   }
 
   return (
@@ -245,6 +274,68 @@ export function Parametros() {
             {guardandoSaldo ? "Registrando…" : saldoRegistrado ? "Registrado" : "Registrar saldo"}
           </button>
         </div>
+      </section>
+
+      <section className="bg-white rounded-xl border border-gray-200 p-4">
+        <h2 className="font-semibold text-tinta mb-1">Corregir saldo a favor existente</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Para arreglar la fecha o el valor de un saldo a favor que ya quedó mal registrado.
+        </p>
+        {pacienteEditar ? (
+          <div className="flex items-center justify-between rounded-lg border border-[var(--acento)] bg-[var(--acento)]/5 px-3 py-2 text-sm mb-2">
+            <span>{pacienteEditar.nombre}</span>
+            <button
+              onClick={() => {
+                setPacienteEditar(null);
+                setSaldosPaciente([]);
+              }}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        ) : (
+          <PacienteAutocomplete onSelect={cargarSaldosPaciente} placeholder="Buscar paciente…" />
+        )}
+
+        {pacienteEditar && (
+          <div className="space-y-3 mt-2">
+            {saldosPaciente.map((s) => (
+              <div key={s.id} className="rounded-lg border border-gray-200 p-3 flex items-center gap-2 flex-wrap">
+                <input
+                  type="date"
+                  value={s.fecha}
+                  onChange={(e) => editarSaldoPaciente(s.id, { fecha: e.target.value })}
+                  className="rounded-md border border-gray-300 px-2 py-1 text-sm"
+                />
+                <div>
+                  <label className="block text-[10px] text-gray-400">Valor total</label>
+                  <input
+                    type="number"
+                    value={s.valor}
+                    onChange={(e) => editarSaldoPaciente(s.id, { valor: Number(e.target.value) })}
+                    className="w-28 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-gray-400">Disponible</label>
+                  <input
+                    type="number"
+                    value={s.valor_disponible}
+                    onChange={(e) => editarSaldoPaciente(s.id, { valor_disponible: Number(e.target.value) })}
+                    className="w-28 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                  />
+                </div>
+                <button
+                  onClick={() => guardarSaldoPaciente(s.id)}
+                  className="flex items-center gap-1 rounded-md bg-[var(--acento)] text-white px-3 py-1.5 text-xs font-medium"
+                >
+                  {saldoGuardadoId === s.id ? <Check size={14} /> : "Guardar"}
+                </button>
+              </div>
+            ))}
+            {saldosPaciente.length === 0 && <p className="text-sm text-gray-400">Sin saldos a favor registrados.</p>}
+          </div>
+        )}
       </section>
     </div>
   );

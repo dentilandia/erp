@@ -379,6 +379,14 @@ function ModalCobro({
     );
   }
 
+  function actualizarConcepto(idx: number, concepto: string) {
+    setCargos((prev) => prev.map((c, i) => (i !== idx ? c : { ...c, concepto })));
+  }
+
+  function actualizarValorCargo(idx: number, valor: string) {
+    setCargos((prev) => prev.map((c, i) => (i !== idx ? c : { ...c, valor: Number(valor) || 0 })));
+  }
+
   function dividirPago(idx: number) {
     setCargos((prev) =>
       prev.map((c, i) => (i !== idx ? c : { ...c, pagos: [...c.pagos, { medio: "efectivo" as MedioPago, valor: 0 }] })),
@@ -443,6 +451,10 @@ function ModalCobro({
             .single();
           if (error) throw error;
           cargoId = data.id;
+        } else {
+          // Permite corregir concepto/valor de un cargo ya existente (error de digitación).
+          const { error } = await supabase.from("cargos").update({ concepto: c.concepto, valor: c.valor }).eq("id", cargoId);
+          if (error) throw error;
         }
         // Reemplaza los pagos existentes de este cargo por el estado actual del formulario.
         await supabase.from("cargo_pagos").delete().eq("cargo_id", cargoId);
@@ -556,20 +568,26 @@ function ModalCobro({
             <div className="space-y-3 mb-4">
               {cargos.map((c, idx) => (
                 <div key={c.id ?? `nuevo-${idx}`} className="rounded-lg border border-gray-200 p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium">
-                      {c.concepto} <span className="text-gray-400">· {fmtCOP(c.valor)}</span>
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => dividirPago(idx)} title="Dividir en varios medios de pago">
-                        <Split size={14} className="text-gray-400" />
+                  <div className="flex items-center gap-2 mb-2">
+                    <input
+                      value={c.concepto}
+                      onChange={(e) => actualizarConcepto(idx, e.target.value)}
+                      className="flex-1 min-w-0 rounded-md border border-gray-200 px-2 py-1 text-sm font-medium"
+                    />
+                    <input
+                      type="number"
+                      value={c.valor || ""}
+                      onChange={(e) => actualizarValorCargo(idx, e.target.value)}
+                      className="w-28 rounded-md border border-gray-200 px-2 py-1 text-sm"
+                    />
+                    <button onClick={() => dividirPago(idx)} title="Dividir en varios medios de pago">
+                      <Split size={14} className="text-gray-400" />
+                    </button>
+                    {c.categoria === "concepto_administrativo" && (
+                      <button onClick={() => quitarCargo(idx)}>
+                        <X size={14} className="text-gray-400" />
                       </button>
-                      {c.categoria === "concepto_administrativo" && (
-                        <button onClick={() => quitarCargo(idx)}>
-                          <X size={14} className="text-gray-400" />
-                        </button>
-                      )}
-                    </div>
+                    )}
                   </div>
                   <div className="space-y-1.5">
                     {c.pagos.map((p, pIdx) => (
