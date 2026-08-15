@@ -8,14 +8,20 @@ import { MEDIOS_PAGO, type Sede, type MedioPago, type CierreDiario as CierreDiar
 interface CargoPagoFila {
   medio_pago: MedioPago;
   valor: number;
-  cargos: { categoria: string; doctoras: { nombre: string } };
+  cargos: {
+    categoria: string;
+    concepto: string;
+    doctoras: { nombre: string } | null;
+    visitas: { pacientes: { nombre: string } | null } | null;
+  };
 }
 
-interface OtroIngresoFila {
+interface OtroIngresoAuto {
   id: string;
   valor: number;
-  medio_origen: string;
-  pacientes: { nombre: string } | null;
+  medio: string;
+  paciente: string;
+  concepto: string;
 }
 
 const ETIQUETAS_MEDIO: Record<string, string> = Object.fromEntries(MEDIOS_PAGO.map((m) => [m.value, m.label]));
@@ -24,7 +30,8 @@ export function CierreDiario() {
   const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
   const [fecha, setFecha] = useState(today());
   const [filas, setFilas] = useState<CargoPagoFila[]>([]);
-  const [otrosIngresosAuto, setOtrosIngresosAuto] = useState<OtroIngresoFila[]>([]);
+  const [otrosCargos, setOtrosCargos] = useState<OtroIngresoAuto[]>([]);
+  const [otrosSaldos, setOtrosSaldos] = useState<OtroIngresoAuto[]>([]);
   const [cierre, setCierre] = useState<CierreDiarioRow | null>(null);
   const [otrosIngresos, setOtrosIngresos] = useState("0");
   const [gasto, setGasto] = useState("0");
@@ -34,17 +41,43 @@ export function CierreDiario() {
     (async () => {
       const { data } = await supabase
         .from("cargo_pagos")
-        .select("medio_pago, valor, cargos!inner(categoria, sede_id, fecha, doctoras(nombre))")
+        .select(
+          "medio_pago, valor, cargos!inner(categoria, concepto, sede_id, fecha, doctoras(nombre), visitas(pacientes(nombre)))",
+        )
         .eq("cargos.sede_id", sedeActiva.id)
         .eq("cargos.fecha", fecha);
-      setFilas((data as unknown as CargoPagoFila[]) ?? []);
+      const todas = (data as unknown as CargoPagoFila[]) ?? [];
+      // Solo "procedimiento" cuenta como venta de la doctora (honorario). RX y
+      // conceptos administrativos (GUM, sedación, anticipos...) van a "otros ingresos".
+      setFilas(todas.filter((f) => f.cargos.categoria === "procedimiento"));
+      setOtrosCargos(
+        todas
+          .filter((f) => f.cargos.categoria !== "procedimiento")
+          .map((f, i) => ({
+            id: `cargo-${i}`,
+            valor: Number(f.valor),
+            medio: f.medio_pago,
+            paciente: f.cargos.visitas?.pacientes?.nombre ?? "—",
+            concepto: f.cargos.concepto,
+          })),
+      );
 
       const { data: saldosData } = await supabase
         .from("saldos_favor")
         .select("id, valor, medio_origen, pacientes(nombre)")
         .eq("sede_origen_id", sedeActiva.id)
         .eq("fecha", fecha);
-      setOtrosIngresosAuto((saldosData as unknown as OtroIngresoFila[]) ?? []);
+      setOtrosSaldos(
+        ((saldosData as unknown as { id: string; valor: number; medio_origen: string; pacientes: { nombre: string } | null }[]) ?? []).map(
+          (s) => ({
+            id: s.id,
+            valor: Number(s.valor),
+            medio: s.medio_origen,
+            paciente: s.pacientes?.nombre ?? "—",
+            concepto: "Anticipo / saldo a favor",
+          }),
+        ),
+      );
 
       const { data: cierreRow } = await supabase
         .from("cierres_diarios")
@@ -58,7 +91,10 @@ export function CierreDiario() {
     })();
   }, [sedeActiva.id, fecha]);
 
-  const doctoras = useMemo(() => Array.from(new Set(filas.map((f) => f.cargos.doctoras?.nombre))).sort(), [filas]);
+  const doctoras = useMemo(
+    () => Array.from(new Set(filas.map((f) => f.cargos.doctoras?.nombre ?? "—"))).sort(),
+    [filas],
+  );
 
   const tabla = useMemo(() => {
     const map: Record<string, Record<string, number>> = {};
@@ -76,13 +112,15 @@ export function CierreDiario() {
     return totales;
   }, [filas]);
 
+  const otrosIngresosAuto = useMemo(() => [...otrosCargos, ...otrosSaldos], [otrosCargos, otrosSaldos]);
+
   const totalOtrosAutoPorMedio = useMemo(() => {
     const totales: Record<string, number> = {};
-    for (const o of otrosIngresosAuto) totales[o.medio_origen] = (totales[o.medio_origen] ?? 0) + Number(o.valor);
+    for (const o of otrosIngresosAuto) totales[o.medio] = (totales[o.medio] ?? 0) + o.valor;
     return totales;
   }, [otrosIngresosAuto]);
 
-  const totalOtrosAuto = otrosIngresosAuto.reduce((a, o) => a + Number(o.valor), 0);
+  const totalOtrosAuto = otrosIngresosAuto.reduce((a, o) => a + o.valor, 0);
 
   const totalEfectivoCierre =
     (totalPorMedio["efectivo"] ?? 0) +
@@ -229,15 +267,16 @@ export function CierreDiario() {
 
       {otrosIngresosAuto.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <h3 className="text-sm font-semibold text-gray-500 mb-2">
-            Otros ingresos (saldo a favor generado hoy)
-          </h3>
+          <h3 className="text-sm font-semibold text-gray-500 mb-1">Otros ingresos</h3>
+          <p className="text-xs text-gray-400 mb-2">
+            RX, conceptos administrativos (GUM, sedación, anticipos…) y saldo a favor generado hoy — no cuentan
+            como venta de la doctora.
+          </p>
           <div className="divide-y divide-gray-100 text-sm">
             {otrosIngresosAuto.map((o) => (
               <div key={o.id} className="flex items-center justify-between py-1.5">
                 <span>
-                  {o.pacientes?.nombre ?? "—"}{" "}
-                  <span className="text-gray-400">· {ETIQUETAS_MEDIO[o.medio_origen] ?? o.medio_origen}</span>
+                  {o.paciente} <span className="text-gray-400">· {o.concepto} · {ETIQUETAS_MEDIO[o.medio] ?? o.medio}</span>
                 </span>
                 <span className="font-medium">{fmtCOP(o.valor)}</span>
               </div>
