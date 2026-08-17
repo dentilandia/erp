@@ -10,6 +10,7 @@ interface VisitaRow {
   estado: string;
   tratamiento: string | null;
   doctora_id: string;
+  remision_especialidad: string | null;
   pacientes: { nombre: string };
   doctoras: { nombre: string; color_pastel: string };
   cargos: { categoria: string; valor: number; cargo_pagos: { valor: number }[] }[];
@@ -21,6 +22,7 @@ export function Historial() {
   const [hasta, setHasta] = useState(today());
   const [doctoraId, setDoctoraId] = useState("");
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
+  const [soloRemisiones, setSoloRemisiones] = useState(false);
   const [visitas, setVisitas] = useState<VisitaRow[]>([]);
 
   useEffect(() => {
@@ -32,21 +34,22 @@ export function Historial() {
       let q = supabase
         .from("visitas")
         .select(
-          "id, fecha, estado, tratamiento, doctora_id, pacientes(nombre), doctoras(nombre, color_pastel), cargos(categoria, valor, cargo_pagos(valor))",
+          "id, fecha, estado, tratamiento, doctora_id, remision_especialidad, pacientes(nombre), doctoras(nombre, color_pastel), cargos(categoria, valor, cargo_pagos(valor))",
         )
         .eq("sede_id", sedeActiva.id)
         .gte("fecha", desde)
         .lte("fecha", hasta)
         .order("fecha", { ascending: false });
       if (doctoraId) q = q.eq("doctora_id", doctoraId);
+      if (soloRemisiones) q = q.not("remision_especialidad", "is", null);
       const { data } = await q;
       setVisitas((data as unknown as VisitaRow[]) ?? []);
     })();
-  }, [sedeActiva.id, desde, hasta, doctoraId]);
+  }, [sedeActiva.id, desde, hasta, doctoraId, soloRemisiones]);
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
-      <div className="flex gap-3 flex-wrap">
+      <div className="flex gap-3 flex-wrap items-center">
         <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
         <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
         <select
@@ -61,6 +64,10 @@ export function Historial() {
             </option>
           ))}
         </select>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={soloRemisiones} onChange={(e) => setSoloRemisiones(e.target.checked)} />
+          Solo remisiones a otra especialidad
+        </label>
       </div>
       <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
         {visitas.map((v) => {
@@ -74,6 +81,11 @@ export function Historial() {
                 <span className="text-gray-400">
                   · {v.fecha} · {v.tratamiento || "—"}
                 </span>
+                {v.remision_especialidad && (
+                  <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                    Remitido: {v.remision_especialidad}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: v.doctoras?.color_pastel + "40" }}>

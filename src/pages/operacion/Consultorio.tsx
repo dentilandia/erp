@@ -177,6 +177,8 @@ function ModalAtencion({
   const [laboratorios, setLaboratorios] = useState<Laboratorio[]>([]);
   const [laboratorioId, setLaboratorioId] = useState("");
   const [tipoServicio, setTipoServicio] = useState(TIPOS_SERVICIO_LAB[0].value);
+  const [remitido, setRemitido] = useState(false);
+  const [remisionEspecialidad, setRemisionEspecialidad] = useState("");
   const [guardando, setGuardando] = useState(false);
 
   useEffect(() => {
@@ -249,6 +251,7 @@ function ModalAtencion({
         tratamiento,
         proxima_cita: proximaCita || null,
         motivo_valor_cero: sinCargo ? motivoCero.trim() : null,
+        remision_especialidad: remitido ? remisionEspecialidad.trim() || null : null,
         updated_at: new Date().toISOString(),
       })
       .eq("id", visitaId);
@@ -311,6 +314,21 @@ function ModalAtencion({
           <input type="checkbox" checked={rxTomada} onChange={(e) => setRxTomada(e.target.checked)} />
           RX tomada {precios["rx"] ? `(${fmtCOP(precios["rx"])})` : ""}
         </label>
+
+        <div>
+          <label className="flex items-center gap-2 text-sm mb-2">
+            <input type="checkbox" checked={remitido} onChange={(e) => setRemitido(e.target.checked)} />
+            Remisión a otra especialidad
+          </label>
+          {remitido && (
+            <input
+              value={remisionEspecialidad}
+              onChange={(e) => setRemisionEspecialidad(e.target.value)}
+              placeholder="Ej: Endodoncia, Ortodoncia interceptiva…"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          )}
+        </div>
 
         <div>
           <p className="text-sm font-medium mb-1">Insumos de aparatología entregados</p>

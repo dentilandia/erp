@@ -16,6 +16,7 @@ const ETIQUETAS_PRECIOS: Record<string, string> = {
   traccion_extraoral: "Tracción extra oral",
   rx: "RX",
   gum: "GUM",
+  porcentaje_honorario: "% honorario doctora (Odontopediatra)",
 };
 
 export function Parametros() {

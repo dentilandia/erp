@@ -40,6 +40,7 @@ export interface Visita {
   tratamiento: string | null;
   proxima_cita: string | null;
   motivo_valor_cero: string | null;
+  remision_especialidad: string | null;
   atendido_por: string | null;
   created_at: string;
   updated_at: string;
