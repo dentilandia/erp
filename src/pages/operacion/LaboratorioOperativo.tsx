@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { Plus, X } from "lucide-react";
+import { Plus, X, Pencil, Check } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
 import { TIPOS_SERVICIO_LAB, type Sede, type Doctora, type Laboratorio, type Paciente, type EstadoLab } from "../../lib/types";
@@ -13,6 +13,8 @@ interface LabRow {
   factura_numero: string | null;
   valor_factura: number | null;
   doctora_id: string;
+  laboratorio_id: string;
+  tipo_servicio: string;
   pacientes: { nombre: string };
   doctoras: { nombre: string };
   laboratorios: { nombre: string };
@@ -31,6 +33,11 @@ export function LaboratorioOperativo() {
   const [laboratorios, setLaboratorios] = useState<Laboratorio[]>([]);
   const [filtroDoctora, setFiltroDoctora] = useState("");
   const [abierto, setAbierto] = useState<EstadoLab>("enviado");
+  const [editandoId, setEditandoId] = useState<string | null>(null);
+  const [editDoctoraId, setEditDoctoraId] = useState("");
+  const [editLaboratorioId, setEditLaboratorioId] = useState("");
+  const [editTipoServicio, setEditTipoServicio] = useState("");
+  const [guardandoEdit, setGuardandoEdit] = useState(false);
 
   const [mostrarForm, setMostrarForm] = useState(false);
   const [nuevoPaciente, setNuevoPaciente] = useState<Paciente | null>(null);
@@ -59,7 +66,9 @@ export function LaboratorioOperativo() {
   async function cargarOrdenes() {
     let q = supabase
       .from("lab_ordenes")
-      .select("id, estado, fecha_envio, factura_numero, valor_factura, doctora_id, pacientes(nombre), doctoras(nombre), laboratorios(nombre)")
+      .select(
+        "id, estado, fecha_envio, factura_numero, valor_factura, doctora_id, laboratorio_id, tipo_servicio, pacientes(nombre), doctoras(nombre), laboratorios(nombre)",
+      )
       .eq("sede_id", sedeActiva.id)
       .order("fecha_envio", { ascending: false });
     if (filtroDoctora) q = q.eq("doctora_id", filtroDoctora);
@@ -83,6 +92,24 @@ export function LaboratorioOperativo() {
     setMostrarForm(false);
     setNuevoPaciente(null);
     setNuevaFecha(today());
+    cargarOrdenes();
+  }
+
+  function empezarEdicion(o: LabRow) {
+    setEditandoId(o.id);
+    setEditDoctoraId(o.doctora_id);
+    setEditLaboratorioId(o.laboratorio_id);
+    setEditTipoServicio(o.tipo_servicio);
+  }
+
+  async function guardarEdicion(id: string) {
+    setGuardandoEdit(true);
+    await supabase
+      .from("lab_ordenes")
+      .update({ doctora_id: editDoctoraId, laboratorio_id: editLaboratorioId, tipo_servicio: editTipoServicio })
+      .eq("id", id);
+    setGuardandoEdit(false);
+    setEditandoId(null);
     cargarOrdenes();
   }
 
@@ -213,21 +240,77 @@ export function LaboratorioOperativo() {
             </button>
             {abierto === e.value && (
               <div className="border-t border-gray-100 divide-y divide-gray-100">
-                {items.map((o) => (
-                  <div key={o.id} className="flex items-center justify-between px-4 py-2 text-sm">
-                    <span>
-                      {o.pacientes?.nombre} <span className="text-gray-400">· {o.doctoras?.nombre} · {o.laboratorios?.nombre}</span>
-                    </span>
-                    <span className="flex items-center gap-3">
-                      {o.valor_factura && <span className="text-gray-500">{fmtCOP(o.valor_factura)}</span>}
-                      {e.value === "enviado" && (
-                        <button onClick={() => marcarRecibido(o.id)} className="text-[var(--acento)] font-medium text-xs">
-                          Marcar recibido
+                {items.map((o) =>
+                  editandoId === o.id ? (
+                    <div key={o.id} className="px-4 py-3 space-y-2">
+                      <p className="text-sm font-medium">{o.pacientes?.nombre}</p>
+                      <div className="flex gap-2 flex-wrap">
+                        <select
+                          value={editDoctoraId}
+                          onChange={(e) => setEditDoctoraId(e.target.value)}
+                          className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                        >
+                          {doctoras.map((d) => (
+                            <option key={d.id} value={d.id}>
+                              {d.nombre}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={editLaboratorioId}
+                          onChange={(e) => setEditLaboratorioId(e.target.value)}
+                          className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                        >
+                          {laboratorios.map((l) => (
+                            <option key={l.id} value={l.id}>
+                              {l.nombre}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex gap-2">
+                        <select
+                          value={editTipoServicio}
+                          onChange={(e) => setEditTipoServicio(e.target.value)}
+                          className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                        >
+                          {TIPOS_SERVICIO_LAB.map((t) => (
+                            <option key={t.value} value={t.value}>
+                              {t.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => guardarEdicion(o.id)}
+                          disabled={guardandoEdit}
+                          className="flex items-center gap-1 rounded-md bg-[var(--acento)] text-white px-3 text-sm font-medium disabled:opacity-40"
+                        >
+                          <Check size={14} /> Guardar
                         </button>
-                      )}
-                    </span>
-                  </div>
-                ))}
+                        <button onClick={() => setEditandoId(null)} className="px-2 text-gray-400">
+                          <X size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div key={o.id} className="flex items-center justify-between px-4 py-2 text-sm">
+                      <span>
+                        {o.pacientes?.nombre} <span className="text-gray-400">· {o.doctoras?.nombre} · {o.laboratorios?.nombre}</span>
+                      </span>
+                      <span className="flex items-center gap-3">
+                        {o.valor_factura && <span className="text-gray-500">{fmtCOP(o.valor_factura)}</span>}
+                        <button onClick={() => empezarEdicion(o)} title="Editar" className="text-gray-400 hover:text-[var(--acento)]">
+                          <Pencil size={14} />
+                        </button>
+                        {e.value === "enviado" && (
+                          <button onClick={() => marcarRecibido(o.id)} className="text-[var(--acento)] font-medium text-xs">
+                            Marcar recibido
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                  ),
+                )}
                 {items.length === 0 && <p className="px-4 py-3 text-sm text-gray-400">Sin órdenes.</p>}
               </div>
             )}
