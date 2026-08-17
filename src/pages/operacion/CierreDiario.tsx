@@ -52,7 +52,9 @@ export function CierreDiario() {
       setFilas(todas.filter((f) => f.cargos.categoria === "procedimiento"));
       setOtrosCargos(
         todas
-          .filter((f) => f.cargos.categoria !== "procedimiento")
+          // Un pago con saldo a favor es dinero que ya se contó el día que se generó
+          // ese saldo — contarlo otra vez aquí duplicaría el ingreso del día.
+          .filter((f) => f.cargos.categoria !== "procedimiento" && f.medio_pago !== "saldo_favor")
           .map((f, i) => ({
             id: `cargo-${i}`,
             valor: Number(f.valor),
@@ -66,7 +68,10 @@ export function CierreDiario() {
         .from("saldos_favor")
         .select("id, valor, medio_origen, pacientes(nombre)")
         .eq("sede_origen_id", sedeActiva.id)
-        .eq("fecha", fecha);
+        .eq("fecha", fecha)
+        // Los saldos registrados manualmente desde Parámetros (traslado de un saldo
+        // previo, corrección) no son plata recibida ese día — no deben sumar al cierre.
+        .neq("medio_origen", "ajuste_manual");
       setOtrosSaldos(
         ((saldosData as unknown as { id: string; valor: number; medio_origen: string; pacientes: { nombre: string } | null }[]) ?? []).map(
           (s) => ({
