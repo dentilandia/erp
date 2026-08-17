@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { CheckCircle2, X, Search } from "lucide-react";
+import { CheckCircle2, X, Search, Plus } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
 import { TIPOS_INSUMO_CONSULTA, TIPOS_SERVICIO_LAB, type Sede, type Laboratorio } from "../../lib/types";
@@ -18,6 +18,12 @@ interface LabPendienteInstalar {
   pacientes: { nombre: string };
   laboratorios: { nombre: string };
   tipo_servicio: string;
+}
+
+interface EnvioLab {
+  laboratorioId: string;
+  laboratorioNombre: string;
+  tipoServicio: string;
 }
 
 export function Consultorio() {
@@ -177,6 +183,7 @@ function ModalAtencion({
   const [laboratorios, setLaboratorios] = useState<Laboratorio[]>([]);
   const [laboratorioId, setLaboratorioId] = useState("");
   const [tipoServicio, setTipoServicio] = useState(TIPOS_SERVICIO_LAB[0].value);
+  const [enviosLab, setEnviosLab] = useState<EnvioLab[]>([]);
   const [remitido, setRemitido] = useState(false);
   const [remisionEspecialidad, setRemisionEspecialidad] = useState("");
   const [guardando, setGuardando] = useState(false);
@@ -196,6 +203,16 @@ function ModalAtencion({
   }, [visitaId]);
 
   const sinCargo = !(Number(valorTratamiento) > 0) && !rxTomada;
+
+  function agregarEnvioLab() {
+    const lab = laboratorios.find((l) => l.id === laboratorioId);
+    if (!lab) return;
+    setEnviosLab((prev) => [...prev, { laboratorioId, laboratorioNombre: lab.nombre, tipoServicio }]);
+  }
+
+  function quitarEnvioLab(idx: number) {
+    setEnviosLab((prev) => prev.filter((_, i) => i !== idx));
+  }
 
   async function guardar() {
     if (sinCargo && !motivoCero.trim()) return;
@@ -231,14 +248,14 @@ function ModalAtencion({
         valor_costo: precios[tipo] ?? 0,
       });
     }
-    if (enviarLab && laboratorioId) {
+    for (const envio of enviosLab) {
       await supabase.from("lab_ordenes").insert({
         visita_id: visitaId,
         sede_id: sedeId,
         doctora_id: visita.doctora_id,
         paciente_id: visita.paciente_id,
-        laboratorio_id: laboratorioId,
-        tipo_servicio: tipoServicio,
+        laboratorio_id: envio.laboratorioId,
+        tipo_servicio: envio.tipoServicio,
         estado: "enviado",
         fecha_envio: today(),
       });
@@ -352,29 +369,51 @@ function ModalAtencion({
             Enviar aparato a laboratorio
           </label>
           {enviarLab && (
-            <div className="flex gap-2">
-              <select
-                value={laboratorioId}
-                onChange={(e) => setLaboratorioId(e.target.value)}
-                className="flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm"
-              >
-                {laboratorios.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.nombre}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={tipoServicio}
-                onChange={(e) => setTipoServicio(e.target.value)}
-                className="flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm"
-              >
-                {TIPOS_SERVICIO_LAB.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
+            <div className="space-y-2">
+              {enviosLab.length > 0 && (
+                <div className="space-y-1">
+                  {enviosLab.map((e, idx) => (
+                    <div key={idx} className="flex items-center justify-between rounded-md bg-gray-50 px-2 py-1.5 text-sm">
+                      <span>
+                        {e.laboratorioNombre} · {TIPOS_SERVICIO_LAB.find((t) => t.value === e.tipoServicio)?.label}
+                      </span>
+                      <button onClick={() => quitarEnvioLab(idx)}>
+                        <X size={14} className="text-gray-400" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <select
+                  value={laboratorioId}
+                  onChange={(e) => setLaboratorioId(e.target.value)}
+                  className="flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                >
+                  {laboratorios.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.nombre}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={tipoServicio}
+                  onChange={(e) => setTipoServicio(e.target.value)}
+                  className="flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                >
+                  {TIPOS_SERVICIO_LAB.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+                <button onClick={agregarEnvioLab} className="rounded-md bg-gray-100 px-3 text-sm font-medium">
+                  <Plus size={14} />
+                </button>
+              </div>
+              <p className="text-xs text-gray-400">
+                Agrega uno por cada aparato (ej. si va superior e inferior, agrega los dos).
+              </p>
             </div>
           )}
         </div>

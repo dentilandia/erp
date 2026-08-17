@@ -6,6 +6,12 @@ import { fmtCOP, today } from "../../lib/format";
 import { TIPOS_SERVICIO_LAB, type Sede, type Doctora, type Laboratorio, type Paciente, type EstadoLab } from "../../lib/types";
 import { PacienteAutocomplete } from "../../components/PacienteAutocomplete";
 
+interface EnvioLab {
+  laboratorioId: string;
+  laboratorioNombre: string;
+  tipoServicio: string;
+}
+
 interface LabRow {
   id: string;
   estado: EstadoLab;
@@ -45,6 +51,7 @@ export function LaboratorioOperativo() {
   const [nuevoLaboratorioId, setNuevoLaboratorioId] = useState("");
   const [nuevoTipoServicio, setNuevoTipoServicio] = useState(TIPOS_SERVICIO_LAB[0].value);
   const [nuevaFecha, setNuevaFecha] = useState(today());
+  const [enviosLab, setEnviosLab] = useState<EnvioLab[]>([]);
   const [enviando, setEnviando] = useState(false);
 
   useEffect(() => {
@@ -76,21 +83,34 @@ export function LaboratorioOperativo() {
     setOrdenes((data as unknown as LabRow[]) ?? []);
   }
 
+  function agregarEnvioLab() {
+    const lab = laboratorios.find((l) => l.id === nuevoLaboratorioId);
+    if (!lab) return;
+    setEnviosLab((prev) => [...prev, { laboratorioId: nuevoLaboratorioId, laboratorioNombre: lab.nombre, tipoServicio: nuevoTipoServicio }]);
+  }
+
+  function quitarEnvioLab(idx: number) {
+    setEnviosLab((prev) => prev.filter((_, i) => i !== idx));
+  }
+
   async function enviarAparato() {
-    if (!nuevoPaciente || !nuevaDoctoraId || !nuevoLaboratorioId) return;
+    if (!nuevoPaciente || !nuevaDoctoraId || enviosLab.length === 0) return;
     setEnviando(true);
-    await supabase.from("lab_ordenes").insert({
-      sede_id: sedeActiva.id,
-      doctora_id: nuevaDoctoraId,
-      paciente_id: nuevoPaciente.id,
-      laboratorio_id: nuevoLaboratorioId,
-      tipo_servicio: nuevoTipoServicio,
-      estado: "enviado",
-      fecha_envio: nuevaFecha,
-    });
+    for (const envio of enviosLab) {
+      await supabase.from("lab_ordenes").insert({
+        sede_id: sedeActiva.id,
+        doctora_id: nuevaDoctoraId,
+        paciente_id: nuevoPaciente.id,
+        laboratorio_id: envio.laboratorioId,
+        tipo_servicio: envio.tipoServicio,
+        estado: "enviado",
+        fecha_envio: nuevaFecha,
+      });
+    }
     setEnviando(false);
     setMostrarForm(false);
     setNuevoPaciente(null);
+    setEnviosLab([]);
     setNuevaFecha(today());
     cargarOrdenes();
   }
@@ -175,18 +195,39 @@ export function LaboratorioOperativo() {
           ) : (
             <PacienteAutocomplete onSelect={setNuevoPaciente} />
           )}
-          <div className="flex gap-2 flex-wrap">
-            <select
-              value={nuevaDoctoraId}
-              onChange={(e) => setNuevaDoctoraId(e.target.value)}
-              className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-            >
-              {doctoras.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.nombre}
-                </option>
+          <select
+            value={nuevaDoctoraId}
+            onChange={(e) => setNuevaDoctoraId(e.target.value)}
+            className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+          >
+            {doctoras.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.nombre}
+              </option>
+            ))}
+          </select>
+          <input
+            type="date"
+            value={nuevaFecha}
+            onChange={(e) => setNuevaFecha(e.target.value)}
+            className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+          />
+
+          {enviosLab.length > 0 && (
+            <div className="space-y-1">
+              {enviosLab.map((e, idx) => (
+                <div key={idx} className="flex items-center justify-between rounded-md bg-gray-50 px-2 py-1.5 text-sm">
+                  <span>
+                    {e.laboratorioNombre} · {TIPOS_SERVICIO_LAB.find((t) => t.value === e.tipoServicio)?.label}
+                  </span>
+                  <button onClick={() => quitarEnvioLab(idx)}>
+                    <X size={14} className="text-gray-400" />
+                  </button>
+                </div>
               ))}
-            </select>
+            </div>
+          )}
+          <div className="flex gap-2 flex-wrap">
             <select
               value={nuevoLaboratorioId}
               onChange={(e) => setNuevoLaboratorioId(e.target.value)}
@@ -198,8 +239,6 @@ export function LaboratorioOperativo() {
                 </option>
               ))}
             </select>
-          </div>
-          <div className="flex gap-2 flex-wrap">
             <select
               value={nuevoTipoServicio}
               onChange={(e) => setNuevoTipoServicio(e.target.value)}
@@ -211,16 +250,14 @@ export function LaboratorioOperativo() {
                 </option>
               ))}
             </select>
-            <input
-              type="date"
-              value={nuevaFecha}
-              onChange={(e) => setNuevaFecha(e.target.value)}
-              className="rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-            />
+            <button onClick={agregarEnvioLab} className="rounded-md bg-gray-100 px-3 text-sm font-medium">
+              <Plus size={14} />
+            </button>
           </div>
+          <p className="text-xs text-gray-400">Agrega uno por cada aparato (ej. si va superior e inferior, agrega los dos).</p>
           <button
             onClick={enviarAparato}
-            disabled={!nuevoPaciente || enviando}
+            disabled={!nuevoPaciente || enviosLab.length === 0 || enviando}
             className="w-full rounded-lg bg-[var(--acento)] text-white py-2 text-sm font-medium disabled:opacity-40"
           >
             {enviando ? "Enviando…" : "Enviar a laboratorio"}
