@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
-import type { Sede, Doctora } from "../../lib/types";
+import { TIPOS_INSUMO_CONSULTA, type Sede, type Doctora } from "../../lib/types";
 
 interface VisitaRow {
   id: string;
@@ -14,6 +14,7 @@ interface VisitaRow {
   pacientes: { nombre: string };
   doctoras: { nombre: string; color_pastel: string };
   cargos: { categoria: string; valor: number; cargo_pagos: { valor: number }[] }[];
+  insumos_consulta: { tipo: string }[];
 }
 
 export function Historial() {
@@ -23,6 +24,7 @@ export function Historial() {
   const [doctoraId, setDoctoraId] = useState("");
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
   const [soloRemisiones, setSoloRemisiones] = useState(false);
+  const [insumoFiltro, setInsumoFiltro] = useState("");
   const [visitas, setVisitas] = useState<VisitaRow[]>([]);
 
   useEffect(() => {
@@ -31,10 +33,11 @@ export function Historial() {
 
   useEffect(() => {
     (async () => {
+      const insumosSelect = insumoFiltro ? "insumos_consulta!inner(tipo)" : "insumos_consulta(tipo)";
       let q = supabase
         .from("visitas")
         .select(
-          "id, fecha, estado, tratamiento, doctora_id, remision_especialidad, pacientes(nombre), doctoras(nombre, color_pastel), cargos(categoria, valor, cargo_pagos(valor))",
+          `id, fecha, estado, tratamiento, doctora_id, remision_especialidad, pacientes(nombre), doctoras(nombre, color_pastel), cargos(categoria, valor, cargo_pagos(valor)), ${insumosSelect}`,
         )
         .eq("sede_id", sedeActiva.id)
         .gte("fecha", desde)
@@ -42,10 +45,11 @@ export function Historial() {
         .order("fecha", { ascending: false });
       if (doctoraId) q = q.eq("doctora_id", doctoraId);
       if (soloRemisiones) q = q.not("remision_especialidad", "is", null);
+      if (insumoFiltro) q = q.eq("insumos_consulta.tipo", insumoFiltro);
       const { data } = await q;
       setVisitas((data as unknown as VisitaRow[]) ?? []);
     })();
-  }, [sedeActiva.id, desde, hasta, doctoraId, soloRemisiones]);
+  }, [sedeActiva.id, desde, hasta, doctoraId, soloRemisiones, insumoFiltro]);
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
@@ -68,6 +72,18 @@ export function Historial() {
           <input type="checkbox" checked={soloRemisiones} onChange={(e) => setSoloRemisiones(e.target.checked)} />
           Solo remisiones a otra especialidad
         </label>
+        <select
+          value={insumoFiltro}
+          onChange={(e) => setInsumoFiltro(e.target.value)}
+          className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+        >
+          <option value="">Cualquier insumo</option>
+          {TIPOS_INSUMO_CONSULTA.map((t) => (
+            <option key={t.value} value={t.value}>
+              {t.label}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
         {visitas.map((v) => {
@@ -86,6 +102,11 @@ export function Historial() {
                     Remitido: {v.remision_especialidad}
                   </span>
                 )}
+                {v.insumos_consulta?.map((i, idx) => (
+                  <span key={idx} className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
+                    {TIPOS_INSUMO_CONSULTA.find((t) => t.value === i.tipo)?.label ?? i.tipo}
+                  </span>
+                ))}
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: v.doctoras?.color_pastel + "40" }}>
