@@ -6,6 +6,7 @@ import { fmtCOP, today } from "../../lib/format";
 import {
   MEDIOS_PAGO,
   CONCEPTOS_ADMINISTRATIVOS,
+  TIPOS_INSUMO_CONSULTA,
   type Sede,
   type Doctora,
   type Paciente,
@@ -279,7 +280,9 @@ function ModalCobro({
   const [visitaFecha, setVisitaFecha] = useState(today());
   const [tratamiento, setTratamiento] = useState("");
   const [proximaCita, setProximaCita] = useState("");
+  const [insumos, setInsumos] = useState<string[]>([]);
   const [cargos, setCargos] = useState<CargoEdit[]>([]);
+  const [cargosOriginalesIds, setCargosOriginalesIds] = useState<string[]>([]);
   const [saldoDisponible, setSaldoDisponible] = useState(0);
   const [excedentes, setExcedentes] = useState<PagoLinea[]>([]);
   const [excedenteMedio, setExcedenteMedio] = useState<MedioPago>("efectivo");
@@ -336,6 +339,10 @@ function ModalCobro({
               : [{ medio: "efectivo" as MedioPago, valor: c.valor }],
         })),
       );
+      setCargosOriginalesIds(rows.map((c) => c.id));
+
+      const { data: insumosData } = await supabase.from("insumos_consulta").select("tipo").eq("visita_id", visitaId);
+      setInsumos((insumosData ?? []).map((i) => i.tipo));
 
       const { data: saldos } = await supabase
         .from("saldos_favor")
@@ -441,6 +448,13 @@ function ModalCobro({
     }
     setGuardando(true);
     try {
+      const idsActuales = cargos.filter((c) => c.id).map((c) => c.id);
+      const idsAEliminar = cargosOriginalesIds.filter((id) => !idsActuales.includes(id));
+      for (const id of idsAEliminar) {
+        const { error } = await supabase.from("cargos").delete().eq("id", id);
+        if (error) throw error;
+      }
+
       for (const c of cargos) {
         let cargoId = c.id;
         if (!cargoId) {
@@ -538,6 +552,13 @@ function ModalCobro({
             {tratamiento && (
               <p className="text-sm bg-gray-50 rounded-lg px-3 py-2 mb-3">
                 <span className="text-gray-500">Tratamiento (consultorio):</span> {tratamiento}
+              </p>
+            )}
+
+            {insumos.length > 0 && (
+              <p className="text-sm bg-gray-50 rounded-lg px-3 py-2 mb-3">
+                <span className="text-gray-500">Insumos entregados:</span>{" "}
+                {insumos.map((i) => TIPOS_INSUMO_CONSULTA.find((t) => t.value === i)?.label ?? i).join(", ")}
               </p>
             )}
 
