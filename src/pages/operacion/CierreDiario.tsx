@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { Download, Paperclip } from "lucide-react";
+import { Download, Paperclip, FileText } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
 import { MEDIOS_PAGO, type Sede, type MedioPago, type CierreDiario as CierreDiarioRow } from "../../lib/types";
@@ -189,6 +189,76 @@ export function CierreDiario() {
     setSubiendo(false);
   }
 
+  function exportarPDF() {
+    const totalGeneral = Object.values(totalPorMedio).reduce((a, v) => a + v, 0);
+    const filasHtml = doctoras
+      .map((doc) => {
+        const fila = tabla[doc] ?? {};
+        const total = MEDIOS_PAGO.reduce((a, m) => a + (fila[m.value] ?? 0), 0);
+        return `<tr><td>${doc}</td>${MEDIOS_PAGO.map(
+          (m) => `<td style="text-align:right">${fila[m.value] ? fmtCOP(fila[m.value]) : "—"}</td>`,
+        ).join("")}<td style="text-align:right;font-weight:600">${fmtCOP(total)}</td></tr>`;
+      })
+      .join("");
+
+    const otrosHtml =
+      otrosIngresosAuto.length > 0
+        ? `<h3>Otros ingresos</h3>
+           <table>
+             <thead><tr><th>Paciente</th><th>Concepto</th><th>Medio</th><th style="text-align:right">Valor</th></tr></thead>
+             <tbody>${otrosIngresosAuto
+               .map(
+                 (o) =>
+                   `<tr><td>${o.paciente}</td><td>${o.concepto}</td><td>${ETIQUETAS_MEDIO[o.medio] ?? o.medio}</td><td style="text-align:right">${fmtCOP(o.valor)}</td></tr>`,
+               )
+               .join("")}</tbody>
+           </table>
+           <p style="text-align:right;font-weight:600">Total otros ingresos: ${fmtCOP(totalOtrosAuto)}</p>`
+        : "";
+
+    const win = window.open("", "_blank");
+    if (!win) return;
+    win.document.write(`
+      <html>
+        <head>
+          <title>Cierre ${sedeActiva.nombre} - ${fecha}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 24px; color: #2a2438; }
+            h2 { margin-bottom: 0; }
+            h3 { margin-bottom: 6px; margin-top: 24px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+            th, td { padding: 6px 10px; border-bottom: 1px solid #ddd; font-size: 13px; }
+            th { text-align: left; background: #f5f4f7; }
+            tfoot td { font-weight: 700; border-top: 2px solid #333; }
+            .resumen p { margin: 4px 0; }
+          </style>
+        </head>
+        <body>
+          <h2>Cierre diario — ${sedeActiva.nombre}</h2>
+          <p>Fecha: ${fecha}</p>
+          <table>
+            <thead>
+              <tr><th>Doctora</th>${MEDIOS_PAGO.map((m) => `<th style="text-align:right">${m.label}</th>`).join("")}<th style="text-align:right">Total</th></tr>
+            </thead>
+            <tbody>${filasHtml || `<tr><td colspan="${MEDIOS_PAGO.length + 2}">Sin cobros este día.</td></tr>`}</tbody>
+            <tfoot>
+              <tr><td>Total</td>${MEDIOS_PAGO.map((m) => `<td style="text-align:right">${totalPorMedio[m.value] ? fmtCOP(totalPorMedio[m.value]) : "—"}</td>`).join("")}<td style="text-align:right">${fmtCOP(totalGeneral)}</td></tr>
+            </tfoot>
+          </table>
+          ${otrosHtml}
+          <div class="resumen">
+            <p>Gasto del día: ${fmtCOP(Number(gasto) || 0)}</p>
+            <p><strong>Total efectivo (Cierre): ${fmtCOP(totalEfectivoCierre)}</strong></p>
+            <p>Día consignado: ${cierre?.consignado ? "Sí" : "No"}</p>
+          </div>
+        </body>
+      </html>
+    `);
+    win.document.close();
+    win.focus();
+    win.print();
+  }
+
   function exportarCSV() {
     const encabezado = ["Doctora", ...MEDIOS_PAGO.map((m) => m.label), "Total"];
     const lineas = doctoras.map((doc) => {
@@ -210,9 +280,14 @@ export function CierreDiario() {
     <div className="max-w-4xl mx-auto space-y-4">
       <div className="flex items-center justify-between">
         <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-        <button onClick={exportarCSV} className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]">
-          <Download size={16} /> Exportar
-        </button>
+        <div className="flex items-center gap-4">
+          <button onClick={exportarPDF} className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]">
+            <FileText size={16} /> Descargar PDF
+          </button>
+          <button onClick={exportarCSV} className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]">
+            <Download size={16} /> Exportar
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
