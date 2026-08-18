@@ -90,6 +90,7 @@ export interface CargoPago {
   saldo_id: string | null;
   financiacion_pagado: boolean | null;
   financiacion_fecha_pago: string | null;
+  comprobante_financiacion_url: string | null;
   created_at: string;
 }
 

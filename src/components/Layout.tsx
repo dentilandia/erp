@@ -11,6 +11,7 @@ import {
   Receipt,
   CreditCard,
   Settings,
+  Paperclip,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -22,6 +23,7 @@ const TABS = [
   { to: "/operacion/cierre", label: "Cierre diario", icon: Wallet },
   { to: "/operacion/laboratorio", label: "Laboratorio", icon: FlaskConical },
   { to: "/operacion/historial", label: "Historial", icon: History },
+  { to: "/operacion/comprobantes", label: "Comprobantes", icon: Paperclip },
 ];
 
 const SECCIONES = [

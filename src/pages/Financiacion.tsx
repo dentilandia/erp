@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Paperclip } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { fmtCOP, today } from "../lib/format";
 import type { MedioPago } from "../lib/types";
@@ -9,6 +10,7 @@ interface FilaFinanciacion {
   medio_pago: MedioPago;
   financiacion_pagado: boolean | null;
   financiacion_fecha_pago: string | null;
+  comprobante_financiacion_url: string | null;
   cargos: {
     concepto: string;
     fecha: string;
@@ -26,7 +28,7 @@ export function Financiacion() {
     let q = supabase
       .from("cargo_pagos")
       .select(
-        "id, valor, medio_pago, financiacion_pagado, financiacion_fecha_pago, cargos!inner(concepto, fecha, doctoras(nombre), sedes(nombre), visitas(pacientes(nombre)))",
+        "id, valor, medio_pago, financiacion_pagado, financiacion_fecha_pago, comprobante_financiacion_url, cargos!inner(concepto, fecha, doctoras(nombre), sedes(nombre), visitas(pacientes(nombre)))",
       )
       .in("medio_pago", ["addi", "sistecredito"])
       .order("cargos(fecha)", { ascending: false });
@@ -46,6 +48,11 @@ export function Financiacion() {
       .update({ financiacion_pagado: pagado, financiacion_fecha_pago: pagado ? today() : null })
       .eq("id", id);
     cargar();
+  }
+
+  async function verComprobante(path: string) {
+    const { data } = await supabase.storage.from("comprobantes").createSignedUrl(path, 60);
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
   }
 
   const total = filas.reduce((a, f) => a + Number(f.valor), 0);
@@ -79,6 +86,16 @@ export function Financiacion() {
                 {f.medio_pago === "addi" ? "Addi" : "Sistecrédito"}
               </span>
               <span className="font-semibold">{fmtCOP(f.valor)}</span>
+              {f.comprobante_financiacion_url ? (
+                <button
+                  onClick={() => verComprobante(f.comprobante_financiacion_url!)}
+                  className="flex items-center gap-1 text-xs text-[var(--acento)] font-medium"
+                >
+                  <Paperclip size={12} /> Ver comprobante
+                </button>
+              ) : (
+                <span className="text-xs text-amber-600">Sin comprobante</span>
+              )}
               {f.financiacion_pagado ? (
                 <span className="text-xs text-gray-400">Pagado {f.financiacion_fecha_pago}</span>
               ) : null}

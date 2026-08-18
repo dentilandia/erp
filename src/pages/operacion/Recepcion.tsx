@@ -78,7 +78,11 @@ export function Recepcion() {
     cargarVisitas();
     supabase.from("doctoras").select("*").eq("activa", true).order("nombre").then(({ data }) => {
       setDoctoras((data as Doctora[]) ?? []);
-      if (data && data.length > 0) setNuevaDoctoraId(data[0].id);
+      if (data && data.length > 0) {
+        const recordada = localStorage.getItem(`recepcion_doctora_${sedeActiva.id}`);
+        const existe = recordada && data.some((d) => d.id === recordada);
+        setNuevaDoctoraId(existe ? recordada! : data[0].id);
+      }
     });
 
     const channel = supabase
@@ -157,7 +161,10 @@ export function Recepcion() {
           </div>
           <select
             value={nuevaDoctoraId}
-            onChange={(e) => setNuevaDoctoraId(e.target.value)}
+            onChange={(e) => {
+              setNuevaDoctoraId(e.target.value);
+              localStorage.setItem(`recepcion_doctora_${sedeActiva.id}`, e.target.value);
+            }}
             className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
           >
             {doctoras.map((d) => (
