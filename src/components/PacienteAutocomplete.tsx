@@ -30,9 +30,11 @@ export function PacienteAutocomplete({ onSelect, placeholder }: Props) {
     return () => clearTimeout(t);
   }, [query]);
 
+  const coincidenciaExacta = resultados.some((r) => r.nombre.trim().toLowerCase() === query.trim().toLowerCase());
+
   async function crearPaciente() {
     const nombre = query.trim();
-    if (!nombre) return;
+    if (!nombre || coincidenciaExacta) return;
     setCreando(true);
     const { data, error } = await supabase
       .from("pacientes")
@@ -75,14 +77,20 @@ export function PacienteAutocomplete({ onSelect, placeholder }: Props) {
               {p.nombre}
             </button>
           ))}
-          <button
-            type="button"
-            disabled={creando}
-            onClick={crearPaciente}
-            className="w-full text-left px-3 py-2 text-sm text-[var(--acento)] font-medium hover:bg-gray-50 border-t border-gray-100"
-          >
-            {creando ? "Creando…" : `+ Crear paciente "${query.trim()}"`}
-          </button>
+          {coincidenciaExacta ? (
+            <p className="px-3 py-2 text-xs text-gray-400 border-t border-gray-100">
+              Ya existe un paciente con este nombre exacto — selecciónalo de la lista de arriba.
+            </p>
+          ) : (
+            <button
+              type="button"
+              disabled={creando}
+              onClick={crearPaciente}
+              className="w-full text-left px-3 py-2 text-sm text-[var(--acento)] font-medium hover:bg-gray-50 border-t border-gray-100"
+            >
+              {creando ? "Creando…" : `+ Crear paciente "${query.trim()}"`}
+            </button>
+          )}
         </div>
       )}
     </div>
