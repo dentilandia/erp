@@ -60,6 +60,7 @@ export function Recepcion() {
   const [creandoVisita, setCreandoVisita] = useState(false);
 
   const [cobrandoId, setCobrandoId] = useState<string | null>(null);
+  const [filtroDoctoraCobradas, setFiltroDoctoraCobradas] = useState("");
 
   async function cargarVisitas() {
     const { data } = await supabase
@@ -115,7 +116,11 @@ export function Recepcion() {
 
   const enEspera = visitas.filter((v) => v.estado === "espera");
   const listaCobro = visitas.filter((v) => v.estado === "consulta");
-  const cobradas = visitas.filter((v) => v.estado === "cobrado");
+  const cobradasTodas = visitas.filter((v) => v.estado === "cobrado");
+  const doctorasCobradas = Array.from(
+    new Map(cobradasTodas.map((v) => [v.doctora_id, v.doctoras?.nombre])).entries(),
+  ).sort((a, b) => (a[1] ?? "").localeCompare(b[1] ?? ""));
+  const cobradas = filtroDoctoraCobradas ? cobradasTodas.filter((v) => v.doctora_id === filtroDoctoraCobradas) : cobradasTodas;
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -192,7 +197,32 @@ export function Recepcion() {
       </section>
 
       <section>
-        <h3 className="text-sm font-semibold text-gray-500 mb-2">Cobrados hoy ({cobradas.length})</h3>
+        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <h3 className="text-sm font-semibold text-gray-500">Cobrados hoy ({cobradas.length})</h3>
+          {doctorasCobradas.length > 1 && (
+            <div className="flex gap-1 flex-wrap">
+              <button
+                onClick={() => setFiltroDoctoraCobradas("")}
+                className={`text-xs font-medium px-2.5 py-1 rounded-full ${
+                  filtroDoctoraCobradas === "" ? "bg-[var(--acento)] text-white" : "bg-gray-100 text-gray-500"
+                }`}
+              >
+                Todas
+              </button>
+              {doctorasCobradas.map(([id, nombre]) => (
+                <button
+                  key={id}
+                  onClick={() => setFiltroDoctoraCobradas(id)}
+                  className={`text-xs font-medium px-2.5 py-1 rounded-full ${
+                    filtroDoctoraCobradas === id ? "bg-[var(--acento)] text-white" : "bg-gray-100 text-gray-500"
+                  }`}
+                >
+                  {nombre}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="space-y-2">
           {cobradas.map((v) => (
             <VisitaCard key={v.id} v={v} onClick={() => setCobrandoId(v.id)} cobrado />
@@ -280,7 +310,8 @@ function ModalCobro({
   const [visitaFecha, setVisitaFecha] = useState(today());
   const [tratamiento, setTratamiento] = useState("");
   const [proximaCita, setProximaCita] = useState("");
-  const [insumos, setInsumos] = useState<string[]>([]);
+  const [insumos, setInsumos] = useState<Record<string, boolean>>({});
+  const [insumosOriginales, setInsumosOriginales] = useState<string[]>([]);
   const [cargos, setCargos] = useState<CargoEdit[]>([]);
   const [cargosOriginalesIds, setCargosOriginalesIds] = useState<string[]>([]);
   const [saldoDisponible, setSaldoDisponible] = useState(0);
@@ -342,7 +373,9 @@ function ModalCobro({
       setCargosOriginalesIds(rows.map((c) => c.id));
 
       const { data: insumosData } = await supabase.from("insumos_consulta").select("tipo").eq("visita_id", visitaId);
-      setInsumos((insumosData ?? []).map((i) => i.tipo));
+      const tiposExistentes = (insumosData ?? []).map((i) => i.tipo);
+      setInsumosOriginales(tiposExistentes);
+      setInsumos(Object.fromEntries(tiposExistentes.map((t) => [t, true])));
 
       const { data: saldos } = await supabase
         .from("saldos_favor")
@@ -455,6 +488,20 @@ function ModalCobro({
         if (error) throw error;
       }
 
+      const tiposActuales = Object.keys(insumos).filter((k) => insumos[k]);
+      const tiposAAgregar = tiposActuales.filter((t) => !insumosOriginales.includes(t));
+      const tiposAQuitar = insumosOriginales.filter((t) => !tiposActuales.includes(t));
+      for (const tipo of tiposAAgregar) {
+        const { error } = await supabase
+          .from("insumos_consulta")
+          .insert({ visita_id: visitaId, tipo, valor_costo: precios[tipo] ?? 0 });
+        if (error) throw error;
+      }
+      for (const tipo of tiposAQuitar) {
+        const { error } = await supabase.from("insumos_consulta").delete().eq("visita_id", visitaId).eq("tipo", tipo);
+        if (error) throw error;
+      }
+
       for (const c of cargos) {
         let cargoId = c.id;
         if (!cargoId) {
@@ -555,12 +602,21 @@ function ModalCobro({
               </p>
             )}
 
-            {insumos.length > 0 && (
-              <p className="text-sm bg-gray-50 rounded-lg px-3 py-2 mb-3">
-                <span className="text-gray-500">Insumos entregados:</span>{" "}
-                {insumos.map((i) => TIPOS_INSUMO_CONSULTA.find((t) => t.value === i)?.label ?? i).join(", ")}
-              </p>
-            )}
+            <div className="rounded-lg bg-gray-50 px-3 py-2 mb-3">
+              <p className="text-xs text-gray-500 mb-1.5">Insumos de aparatología entregados</p>
+              <div className="flex flex-col gap-1">
+                {TIPOS_INSUMO_CONSULTA.map((t) => (
+                  <label key={t.value} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={!!insumos[t.value]}
+                      onChange={(e) => setInsumos((prev) => ({ ...prev, [t.value]: e.target.checked }))}
+                    />
+                    {t.label} {precios[t.value] ? `(${fmtCOP(precios[t.value])})` : ""}
+                  </label>
+                ))}
+              </div>
+            </div>
 
             <div className="mb-3">
               <label className="block text-xs font-medium text-gray-500 mb-1">Próxima cita</label>
