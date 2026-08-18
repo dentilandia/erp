@@ -33,7 +33,6 @@ export function CierreDiario() {
   const [otrosCargos, setOtrosCargos] = useState<OtroIngresoAuto[]>([]);
   const [otrosSaldos, setOtrosSaldos] = useState<OtroIngresoAuto[]>([]);
   const [cierre, setCierre] = useState<CierreDiarioRow | null>(null);
-  const [otrosIngresos, setOtrosIngresos] = useState("0");
   const [gasto, setGasto] = useState("0");
   const [subiendo, setSubiendo] = useState(false);
 
@@ -91,7 +90,6 @@ export function CierreDiario() {
         .eq("fecha", fecha)
         .maybeSingle();
       setCierre((cierreRow as CierreDiarioRow) ?? null);
-      setOtrosIngresos(String(cierreRow?.otros_ingresos ?? 0));
       setGasto(String(cierreRow?.gasto ?? 0));
     })();
   }, [sedeActiva.id, fecha]);
@@ -128,17 +126,13 @@ export function CierreDiario() {
   const totalOtrosAuto = otrosIngresosAuto.reduce((a, o) => a + o.valor, 0);
 
   const totalEfectivoCierre =
-    (totalPorMedio["efectivo"] ?? 0) +
-    (totalOtrosAutoPorMedio["efectivo"] ?? 0) +
-    Number(otrosIngresos || 0) -
-    Number(gasto || 0);
+    (totalPorMedio["efectivo"] ?? 0) + (totalOtrosAutoPorMedio["efectivo"] ?? 0) - Number(gasto || 0);
 
   async function guardarManual() {
     await supabase.from("cierres_diarios").upsert(
       {
         sede_id: sedeActiva.id,
         fecha,
-        otros_ingresos: Number(otrosIngresos) || 0,
         gasto: Number(gasto) || 0,
         consignado: cierre?.consignado ?? false,
         comprobante_url: cierre?.comprobante_url ?? null,
@@ -149,13 +143,16 @@ export function CierreDiario() {
   }
 
   async function marcarConsignado(consignado: boolean) {
+    if (consignado && !cierre?.comprobante_url) {
+      window.alert("Adjunta el comprobante de consignación antes de marcar el día como consignado.");
+      return;
+    }
     await supabase
       .from("cierres_diarios")
       .upsert(
         {
           sede_id: sedeActiva.id,
           fecha,
-          otros_ingresos: Number(otrosIngresos) || 0,
           gasto: Number(gasto) || 0,
           consignado,
           fecha_consignacion: consignado ? today() : null,
@@ -179,7 +176,6 @@ export function CierreDiario() {
           {
             sede_id: sedeActiva.id,
             fecha,
-            otros_ingresos: Number(otrosIngresos) || 0,
             gasto: Number(gasto) || 0,
             consignado: cierre?.consignado ?? false,
             comprobante_url: path,
@@ -294,17 +290,7 @@ export function CierreDiario() {
         </div>
       )}
 
-      <div className="bg-white rounded-xl border border-gray-200 p-4 grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium mb-1">Otros ingresos manuales</label>
-          <input
-            type="number"
-            value={otrosIngresos}
-            onChange={(e) => setOtrosIngresos(e.target.value)}
-            onBlur={guardarManual}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-          />
-        </div>
+      <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
         <div>
           <label className="block text-sm font-medium mb-1">Gasto del día</label>
           <input
@@ -315,7 +301,7 @@ export function CierreDiario() {
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
           />
         </div>
-        <div className="col-span-2 flex items-center justify-between pt-2 border-t border-gray-100">
+        <div className="flex items-center justify-between pt-2 border-t border-gray-100">
           <span className="text-sm text-gray-500">Total efectivo (Cierre)</span>
           <span className="font-semibold">{fmtCOP(totalEfectivoCierre)}</span>
         </div>

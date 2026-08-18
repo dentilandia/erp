@@ -3,7 +3,7 @@ import { useOutletContext } from "react-router-dom";
 import { CheckCircle2, X, Search, Plus } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
-import { TIPOS_INSUMO_CONSULTA, TIPOS_SERVICIO_LAB, type Sede, type Laboratorio } from "../../lib/types";
+import { TIPOS_INSUMO_CONSULTA, TIPOS_SERVICIO_LAB, type Sede, type Laboratorio, type Doctora } from "../../lib/types";
 
 interface VisitaRow {
   id: string;
@@ -29,10 +29,16 @@ interface EnvioLab {
 export function Consultorio() {
   const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
   const [fecha, setFecha] = useState(today());
-  const [enEspera, setEnEspera] = useState<VisitaRow[]>([]);
+  const [enEsperaTodas, setEnEsperaTodas] = useState<VisitaRow[]>([]);
   const [atendiendoId, setAtendiendoId] = useState<string | null>(null);
   const [buscarInstalar, setBuscarInstalar] = useState("");
   const [pendientesInstalar, setPendientesInstalar] = useState<LabPendienteInstalar[]>([]);
+  const [doctoras, setDoctoras] = useState<Doctora[]>([]);
+  const [filtroDoctora, setFiltroDoctora] = useState("");
+
+  useEffect(() => {
+    supabase.from("doctoras").select("*").order("nombre").then(({ data }) => setDoctoras((data as Doctora[]) ?? []));
+  }, []);
 
   async function cargarEnEspera() {
     const { data } = await supabase
@@ -42,8 +48,10 @@ export function Consultorio() {
       .eq("fecha", fecha)
       .eq("estado", "espera")
       .order("created_at");
-    setEnEspera((data as unknown as VisitaRow[]) ?? []);
+    setEnEsperaTodas((data as unknown as VisitaRow[]) ?? []);
   }
+
+  const enEspera = filtroDoctora ? enEsperaTodas.filter((v) => v.doctora_id === filtroDoctora) : enEsperaTodas;
 
   useEffect(() => {
     cargarEnEspera();
@@ -85,6 +93,18 @@ export function Consultorio() {
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-semibold text-gray-500">En espera de atención ({enEspera.length})</h3>
           <div className="flex items-center gap-2">
+            <select
+              value={filtroDoctora}
+              onChange={(e) => setFiltroDoctora(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2 py-1 text-sm"
+            >
+              <option value="">Todas las doctoras</option>
+              {doctoras.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.nombre}
+                </option>
+              ))}
+            </select>
             <label className="text-xs text-gray-500">Fecha</label>
             <input
               type="date"

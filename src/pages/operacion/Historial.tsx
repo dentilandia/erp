@@ -25,6 +25,7 @@ export function Historial() {
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
   const [soloRemisiones, setSoloRemisiones] = useState(false);
   const [insumoFiltro, setInsumoFiltro] = useState("");
+  const [buscarPaciente, setBuscarPaciente] = useState("");
   const [visitas, setVisitas] = useState<VisitaRow[]>([]);
 
   useEffect(() => {
@@ -34,10 +35,11 @@ export function Historial() {
   useEffect(() => {
     (async () => {
       const insumosSelect = insumoFiltro ? "insumos_consulta!inner(tipo)" : "insumos_consulta(tipo)";
+      const pacientesSelect = buscarPaciente.trim() ? "pacientes!inner(nombre)" : "pacientes(nombre)";
       let q = supabase
         .from("visitas")
         .select(
-          `id, fecha, estado, tratamiento, doctora_id, remision_especialidad, pacientes(nombre), doctoras(nombre, color_pastel), cargos(categoria, valor, cargo_pagos(valor)), ${insumosSelect}`,
+          `id, fecha, estado, tratamiento, doctora_id, remision_especialidad, ${pacientesSelect}, doctoras(nombre, color_pastel), cargos(categoria, valor, cargo_pagos(valor)), ${insumosSelect}`,
         )
         .eq("sede_id", sedeActiva.id)
         .gte("fecha", desde)
@@ -46,16 +48,32 @@ export function Historial() {
       if (doctoraId) q = q.eq("doctora_id", doctoraId);
       if (soloRemisiones) q = q.not("remision_especialidad", "is", null);
       if (insumoFiltro) q = q.eq("insumos_consulta.tipo", insumoFiltro);
+      if (buscarPaciente.trim()) q = q.ilike("pacientes.nombre", `%${buscarPaciente.trim()}%`);
       const { data } = await q;
       setVisitas((data as unknown as VisitaRow[]) ?? []);
     })();
-  }, [sedeActiva.id, desde, hasta, doctoraId, soloRemisiones, insumoFiltro]);
+  }, [sedeActiva.id, desde, hasta, doctoraId, soloRemisiones, insumoFiltro, buscarPaciente]);
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
       <div className="flex gap-3 flex-wrap items-center">
+        <input
+          value={buscarPaciente}
+          onChange={(e) => setBuscarPaciente(e.target.value)}
+          placeholder="Buscar paciente por nombre…"
+          className="rounded-lg border border-gray-300 px-3 py-2 text-sm min-w-[200px]"
+        />
         <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
         <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+        <button
+          onClick={() => {
+            setDesde("2020-01-01");
+            setHasta(today());
+          }}
+          className="text-xs font-medium text-[var(--acento)]"
+        >
+          Ver todo el rango
+        </button>
         <select
           value={doctoraId}
           onChange={(e) => setDoctoraId(e.target.value)}

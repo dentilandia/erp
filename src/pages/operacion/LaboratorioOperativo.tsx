@@ -19,6 +19,7 @@ interface LabRow {
   factura_numero: string | null;
   consecutivo: string | null;
   valor_factura: number | null;
+  fecha_emision_factura: string | null;
   doctora_id: string;
   laboratorio_id: string;
   paciente_id: string;
@@ -76,7 +77,7 @@ export function LaboratorioOperativo() {
     let q = supabase
       .from("lab_ordenes")
       .select(
-        "id, estado, fecha_envio, factura_numero, consecutivo, valor_factura, doctora_id, laboratorio_id, paciente_id, tipo_servicio, pacientes(nombre), doctoras(nombre), laboratorios(nombre)",
+        "id, estado, fecha_envio, factura_numero, consecutivo, valor_factura, fecha_emision_factura, doctora_id, laboratorio_id, paciente_id, tipo_servicio, pacientes(nombre), doctoras(nombre), laboratorios(nombre)",
       )
       .eq("sede_id", sedeActiva.id)
       .order("fecha_envio", { ascending: false });
@@ -161,20 +162,30 @@ export function LaboratorioOperativo() {
     if (facturaNumero === null) return;
     const valorFacturaStr = window.prompt("Valor de la factura:");
     if (valorFacturaStr === null) return;
+    const fechaEmision = window.prompt("Fecha de emisión de la factura (AAAA-MM-DD):", today());
+    if (fechaEmision === null) return;
     await supabase
       .from("lab_ordenes")
       .update({
         estado: "recibido",
-        fecha_recibido: new Date().toISOString().slice(0, 10),
+        fecha_recibido: today(),
         factura_numero: facturaNumero || null,
         consecutivo: consecutivo.trim() || null,
         valor_factura: Number(valorFacturaStr) || null,
+        fecha_emision_factura: fechaEmision.trim() || null,
       })
       .eq("id", o.id);
     setOrdenes((prev) =>
       prev.map((x) =>
         x.id === o.id
-          ? { ...x, estado: "recibido", factura_numero: facturaNumero, consecutivo: consecutivo.trim() || null, valor_factura: Number(valorFacturaStr) || null }
+          ? {
+              ...x,
+              estado: "recibido",
+              factura_numero: facturaNumero,
+              consecutivo: consecutivo.trim() || null,
+              valor_factura: Number(valorFacturaStr) || null,
+              fecha_emision_factura: fechaEmision.trim() || null,
+            }
           : x,
       ),
     );
