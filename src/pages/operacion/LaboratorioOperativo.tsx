@@ -17,9 +17,11 @@ interface LabRow {
   estado: EstadoLab;
   fecha_envio: string;
   factura_numero: string | null;
+  consecutivo: string | null;
   valor_factura: number | null;
   doctora_id: string;
   laboratorio_id: string;
+  paciente_id: string;
   tipo_servicio: string;
   pacientes: { nombre: string };
   doctoras: { nombre: string };
@@ -74,7 +76,7 @@ export function LaboratorioOperativo() {
     let q = supabase
       .from("lab_ordenes")
       .select(
-        "id, estado, fecha_envio, factura_numero, valor_factura, doctora_id, laboratorio_id, tipo_servicio, pacientes(nombre), doctoras(nombre), laboratorios(nombre)",
+        "id, estado, fecha_envio, factura_numero, consecutivo, valor_factura, doctora_id, laboratorio_id, paciente_id, tipo_servicio, pacientes(nombre), doctoras(nombre), laboratorios(nombre)",
       )
       .eq("sede_id", sedeActiva.id)
       .order("fecha_envio", { ascending: false });
@@ -133,7 +135,28 @@ export function LaboratorioOperativo() {
     cargarOrdenes();
   }
 
-  async function marcarRecibido(id: string) {
+  async function marcarRecibido(o: LabRow) {
+    const consecutivo = window.prompt(
+      "Consecutivo de la factura del laboratorio (el mismo si vienen varios aparatos en una sola factura):",
+    );
+    if (consecutivo === null) return;
+    if (consecutivo.trim()) {
+      const { data: existentes } = await supabase
+        .from("lab_ordenes")
+        .select("paciente_id, pacientes(nombre)")
+        .eq("laboratorio_id", o.laboratorio_id)
+        .eq("consecutivo", consecutivo.trim())
+        .neq("id", o.id);
+      const conflicto = ((existentes as unknown as { paciente_id: string; pacientes: { nombre: string } | null }[]) ?? []).find(
+        (e) => e.paciente_id !== o.paciente_id,
+      );
+      if (conflicto) {
+        const seguir = window.confirm(
+          `Ese consecutivo ya está asociado a ${conflicto.pacientes?.nombre ?? "otro paciente"} — ¿seguro que quieres usarlo también aquí?`,
+        );
+        if (!seguir) return;
+      }
+    }
     const facturaNumero = window.prompt("Número de factura del laboratorio:");
     if (facturaNumero === null) return;
     const valorFacturaStr = window.prompt("Valor de la factura:");
@@ -144,12 +167,15 @@ export function LaboratorioOperativo() {
         estado: "recibido",
         fecha_recibido: new Date().toISOString().slice(0, 10),
         factura_numero: facturaNumero || null,
+        consecutivo: consecutivo.trim() || null,
         valor_factura: Number(valorFacturaStr) || null,
       })
-      .eq("id", id);
+      .eq("id", o.id);
     setOrdenes((prev) =>
-      prev.map((o) =>
-        o.id === id ? { ...o, estado: "recibido", factura_numero: facturaNumero, valor_factura: Number(valorFacturaStr) || null } : o,
+      prev.map((x) =>
+        x.id === o.id
+          ? { ...x, estado: "recibido", factura_numero: facturaNumero, consecutivo: consecutivo.trim() || null, valor_factura: Number(valorFacturaStr) || null }
+          : x,
       ),
     );
   }
@@ -340,7 +366,7 @@ export function LaboratorioOperativo() {
                           <Pencil size={14} />
                         </button>
                         {e.value === "enviado" && (
-                          <button onClick={() => marcarRecibido(o.id)} className="text-[var(--acento)] font-medium text-xs">
+                          <button onClick={() => marcarRecibido(o)} className="text-[var(--acento)] font-medium text-xs">
                             Marcar recibido
                           </button>
                         )}
