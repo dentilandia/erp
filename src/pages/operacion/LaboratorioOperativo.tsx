@@ -137,16 +137,16 @@ export function LaboratorioOperativo() {
   }
 
   async function marcarRecibido(o: LabRow) {
-    const consecutivo = window.prompt(
-      "Consecutivo de la factura del laboratorio (el mismo si vienen varios aparatos en una sola factura):",
+    const facturaNumero = window.prompt(
+      "Consecutivo de la factura (el mismo si vienen varios aparatos en una sola factura):",
     );
-    if (consecutivo === null) return;
-    if (consecutivo.trim()) {
+    if (facturaNumero === null) return;
+    if (facturaNumero.trim()) {
       const { data: existentes } = await supabase
         .from("lab_ordenes")
         .select("paciente_id, pacientes(nombre)")
         .eq("laboratorio_id", o.laboratorio_id)
-        .eq("consecutivo", consecutivo.trim())
+        .eq("factura_numero", facturaNumero.trim())
         .neq("id", o.id);
       const conflicto = ((existentes as unknown as { paciente_id: string; pacientes: { nombre: string } | null }[]) ?? []).find(
         (e) => e.paciente_id !== o.paciente_id,
@@ -158,19 +158,17 @@ export function LaboratorioOperativo() {
         if (!seguir) return;
       }
     }
-    const facturaNumero = window.prompt("Número de factura del laboratorio:");
-    if (facturaNumero === null) return;
     const valorFacturaStr = window.prompt("Valor de la factura:");
     if (valorFacturaStr === null) return;
-    const fechaEmision = window.prompt("Fecha de emisión de la factura (AAAA-MM-DD):", today());
+    const fechaEmision = window.prompt("Fecha de la factura (AAAA-MM-DD):", today());
     if (fechaEmision === null) return;
     await supabase
       .from("lab_ordenes")
       .update({
         estado: "recibido",
         fecha_recibido: today(),
-        factura_numero: facturaNumero || null,
-        consecutivo: consecutivo.trim() || null,
+        factura_numero: facturaNumero.trim() || null,
+        consecutivo: facturaNumero.trim() || null,
         valor_factura: Number(valorFacturaStr) || null,
         fecha_emision_factura: fechaEmision.trim() || null,
       })
@@ -181,8 +179,8 @@ export function LaboratorioOperativo() {
           ? {
               ...x,
               estado: "recibido",
-              factura_numero: facturaNumero,
-              consecutivo: consecutivo.trim() || null,
+              factura_numero: facturaNumero.trim() || null,
+              consecutivo: facturaNumero.trim() || null,
               valor_factura: Number(valorFacturaStr) || null,
               fecha_emision_factura: fechaEmision.trim() || null,
             }
