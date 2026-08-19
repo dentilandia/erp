@@ -13,7 +13,7 @@ interface FilaFinanciacion {
   cargos: {
     concepto: string;
     fecha: string;
-    doctoras: { nombre: string } | null;
+    doctoras: { nombre: string; color_pastel: string } | null;
     visitas: { pacientes: { nombre: string } | null } | null;
   };
 }
@@ -28,7 +28,7 @@ export function ComprobantesFinanciacion() {
     let q = supabase
       .from("cargo_pagos")
       .select(
-        "id, valor, medio_pago, comprobante_financiacion_url, cargos!inner(concepto, fecha, sede_id, doctoras(nombre), visitas(pacientes(nombre)))",
+        "id, valor, medio_pago, comprobante_financiacion_url, cargos!inner(concepto, fecha, sede_id, doctoras(nombre, color_pastel), visitas(pacientes(nombre)))",
       )
       .eq("cargos.sede_id", sedeActiva.id)
       .in("medio_pago", ["addi", "sistecredito"])
@@ -64,16 +64,26 @@ export function ComprobantesFinanciacion() {
       <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
         {filas.map((f) => (
           <div key={f.id} className="flex items-center justify-between px-4 py-3 text-sm flex-wrap gap-2">
-            <div>
-              <span className="font-medium">{f.cargos.visitas?.pacientes?.nombre ?? "—"}</span>{" "}
-              <span className="text-gray-400">
-                · {f.cargos.fecha} · {f.cargos.concepto} · {f.cargos.doctoras?.nombre}
-              </span>
+            <div className="flex items-center gap-2">
+              <div>
+                <span className="font-medium">{f.cargos.visitas?.pacientes?.nombre ?? "—"}</span>{" "}
+                <span className="text-gray-400">
+                  · {f.cargos.fecha} · {f.cargos.concepto}
+                </span>
+              </div>
+              {f.cargos.doctoras && (
+                <span
+                  className="text-xs font-semibold px-2 py-0.5 rounded-full text-white"
+                  style={{ background: f.cargos.doctoras.color_pastel }}
+                >
+                  {f.cargos.doctoras.nombre}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-3">
               <span
-                className="text-xs font-medium px-2 py-0.5 rounded-full"
-                style={{ background: f.medio_pago === "addi" ? "#F0C48A40" : "#8FBFA840" }}
+                className="text-xs font-semibold px-2 py-0.5 rounded-full text-white"
+                style={{ background: f.medio_pago === "addi" ? "#D99A2B" : "#4C8F6E" }}
               >
                 {f.medio_pago === "addi" ? "Addi" : "Sistecrédito"}
               </span>

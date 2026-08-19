@@ -231,6 +231,9 @@ export function CierreDiario() {
             th { text-align: left; background: #f5f4f7; }
             tfoot td { font-weight: 700; border-top: 2px solid #333; }
             .resumen p { margin: 4px 0; }
+            .firma { margin-top: 60px; display: flex; gap: 40px; }
+            .firma div { flex: 1; border-top: 1px solid #333; padding-top: 6px; font-size: 12px; color: #555; }
+            .vouchers { margin-top: 40px; border: 1px dashed #999; border-radius: 6px; padding: 12px; font-size: 12px; color: #555; }
           </style>
         </head>
         <body>
@@ -250,6 +253,11 @@ export function CierreDiario() {
             <p>Gasto del día: ${fmtCOP(Number(gasto) || 0)}</p>
             <p><strong>Total efectivo (Cierre): ${fmtCOP(totalEfectivoCierre)}</strong></p>
             <p>Día consignado: ${cierre?.consignado ? "Sí" : "No"}</p>
+          </div>
+          <div class="vouchers">Adjuntar aquí los vouchers del datafono y demás soportes físicos del día.</div>
+          <div class="firma">
+            <div>Firma auxiliar</div>
+            <div>Firma responsable / recibido</div>
           </div>
         </body>
       </html>
