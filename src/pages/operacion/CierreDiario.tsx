@@ -189,6 +189,11 @@ export function CierreDiario() {
     setSubiendo(false);
   }
 
+  async function verComprobante(path: string) {
+    const { data } = await supabase.storage.from("comprobantes").createSignedUrl(path, 60);
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+  }
+
   function exportarPDF() {
     const totalGeneral = Object.values(totalPorMedio).reduce((a, v) => a + v, 0);
     const filasHtml = doctoras
@@ -395,15 +400,25 @@ export function CierreDiario() {
           <input type="checkbox" checked={cierre?.consignado ?? false} onChange={(e) => marcarConsignado(e.target.checked)} />
           Día consignado
         </label>
-        <label className="flex items-center gap-2 text-sm text-[var(--acento)] font-medium cursor-pointer">
-          <Paperclip size={14} />
-          {subiendo ? "Subiendo…" : cierre?.comprobante_url ? "Comprobante adjunto" : "Adjuntar comprobante"}
-          <input
-            type="file"
-            className="hidden"
-            onChange={(e) => e.target.files?.[0] && subirComprobante(e.target.files[0])}
-          />
-        </label>
+        <div className="flex items-center gap-3">
+          {cierre?.comprobante_url && (
+            <button
+              onClick={() => verComprobante(cierre.comprobante_url!)}
+              className="text-sm text-[var(--acento)] font-medium underline"
+            >
+              Ver comprobante
+            </button>
+          )}
+          <label className="flex items-center gap-2 text-sm text-[var(--acento)] font-medium cursor-pointer">
+            <Paperclip size={14} />
+            {subiendo ? "Subiendo…" : cierre?.comprobante_url ? "Reemplazar" : "Adjuntar comprobante"}
+            <input
+              type="file"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && subirComprobante(e.target.files[0])}
+            />
+          </label>
+        </div>
       </div>
     </div>
   );
