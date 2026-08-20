@@ -167,3 +167,69 @@ export interface CierreDiario {
   fecha_consignacion: string | null;
   notas: string | null;
 }
+
+export interface ErrorCruzado {
+  tipo: string;
+  paciente: string;
+  valor: number;
+  sede_recibo: string;
+}
+
+export interface TransfPendiente {
+  paciente: string;
+  valor: number;
+}
+
+export interface DupElec {
+  paciente: string;
+  valor: number;
+  medio: string;
+  nota: string;
+}
+
+export interface AddiDetalle {
+  paciente: string;
+  valor: number;
+  medio: string;
+  nota?: string;
+}
+
+export interface CierreCaja {
+  id: string;
+  fecha: string;
+  sede: string;
+  tarjeta_fact: number;
+  transf_fact: number;
+  efvo_fact: number;
+  addi: number;
+  total: number;
+  arqueo: number | null;
+  dataf_spro: number | null;
+  dataf_qr: number | null;
+  monto_cruzado: number;
+  dif_dataf_bruta: number | null;
+  dif_dataf_neta: number | null;
+  dataf_explicado: boolean;
+  transf_directa: number;
+  dif_efvo: number;
+  cuadra: boolean;
+  transf_por_verificar: boolean;
+  transf_sin_banco: boolean;
+  dataf_sin_docs: boolean;
+  urgente_transf: boolean;
+  gasto: number | null;
+  fuente_dataf: string | null;
+  fuente_transf: string | null;
+  dataf_explicacion: string | null;
+  nota_dataf_extra: string | null;
+  nota_transf_extra: string | null;
+  nota_banco_extra: string | null;
+  nota_limitacion: string | null;
+  nota_cuenta2: string | null;
+  consignacion_cuenta2: boolean;
+  nota_consignacion_pendiente: string | null;
+  errores: ErrorCruzado[];
+  transfs: TransfPendiente[];
+  dups_elec: DupElec[];
+  addi_detalle: AddiDetalle[];
+}

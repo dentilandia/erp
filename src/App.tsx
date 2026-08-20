@@ -10,6 +10,7 @@ import { Historial } from "./pages/operacion/Historial";
 import { ComprobantesFinanciacion } from "./pages/operacion/ComprobantesFinanciacion";
 import { Liquidaciones } from "./pages/Liquidaciones";
 import { Financiacion } from "./pages/Financiacion";
+import { CierreCaja } from "./pages/CierreCaja";
 import { Parametros } from "./pages/Parametros";
 
 function Gate({ children }: { children: React.ReactNode }) {
@@ -49,6 +50,7 @@ function App() {
               <Route path="operacion/comprobantes" element={<ComprobantesFinanciacion />} />
               <Route path="liquidaciones" element={<Liquidaciones />} />
               <Route path="financiacion" element={<Financiacion />} />
+              <Route path="cierre-caja" element={<CierreCaja />} />
               <Route path="parametros" element={<Parametros />} />
             </Route>
           </Routes>

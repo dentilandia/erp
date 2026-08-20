@@ -12,6 +12,7 @@ import {
   CreditCard,
   Settings,
   Paperclip,
+  Landmark,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -30,6 +31,7 @@ const SECCIONES = [
   { to: "/operacion/recepcion", match: "/operacion", label: "Operación Diaria", icon: LayoutGrid },
   { to: "/liquidaciones", match: "/liquidaciones", label: "Liquidaciones", icon: Receipt },
   { to: "/financiacion", match: "/financiacion", label: "Financiación", icon: CreditCard },
+  { to: "/cierre-caja", match: "/cierre-caja", label: "Cierre de Caja", icon: Landmark },
   { to: "/parametros", match: "/parametros", label: "Parámetros", icon: Settings },
 ];
 
