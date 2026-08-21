@@ -261,11 +261,16 @@ export function CierreCaja() {
                           const claveRev = `${c.fecha}|${claveSede}`;
                           return (
                             <div key={c.id} className="flex items-center justify-between px-4 py-3 text-sm flex-wrap gap-2">
-                              <button onClick={() => setDetalle(c)} className="flex items-center gap-3 text-left flex-1 min-w-[220px]">
+                              <button
+                                onClick={() => setDetalle(c)}
+                                className="flex items-center gap-2 text-left flex-1 min-w-[220px] hover:opacity-70"
+                                title="Ver detalle y adjuntar soportes"
+                              >
                                 <div>
                                   <p className="font-medium text-tinta">{fechaCorta(c.fecha)}</p>
                                   <p className="font-semibold">{fmtCOP(c.total)}</p>
                                 </div>
+                                <ChevronRight size={14} className="text-gray-300 shrink-0" />
                               </button>
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span
