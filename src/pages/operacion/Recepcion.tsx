@@ -185,9 +185,13 @@ export function Recepcion() {
 
       <section>
         <h3 className="text-sm font-semibold text-gray-500 mb-2">En espera ({enEspera.length})</h3>
+        <p className="text-xs text-gray-400 mb-2">
+          Toca un paciente en espera para cobrarle directamente un concepto administrativo (RX, GUM, anticipo de
+          sedación, etc.) sin necesidad de que pase por consultorio.
+        </p>
         <div className="space-y-2">
           {enEspera.map((v) => (
-            <VisitaCard key={v.id} v={v} onDelete={() => eliminarVisita(v.id)} />
+            <VisitaCard key={v.id} v={v} onClick={() => setCobrandoId(v.id)} onDelete={() => eliminarVisita(v.id)} />
           ))}
           {enEspera.length === 0 && !cargando && <p className="text-sm text-gray-400">Sin pacientes en espera.</p>}
         </div>
