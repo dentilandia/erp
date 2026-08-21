@@ -232,4 +232,8 @@ export interface CierreCaja {
   transfs: TransfPendiente[];
   dups_elec: DupElec[];
   addi_detalle: AddiDetalle[];
+  url_recibos_caja: string | null;
+  url_movimientos_banco: string | null;
+  url_tirilla_datafono: string | null;
+  url_reporte_datafono: string | null;
 }
