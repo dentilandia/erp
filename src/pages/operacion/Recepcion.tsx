@@ -458,6 +458,11 @@ function ModalCobro({
     setConceptoValor("");
   }
 
+  function agregarRx() {
+    const valor = precios["rx"] ?? 0;
+    setCargos((prev) => [...prev, { categoria: "rx", concepto: "RX", valor, pagos: [{ medio: "efectivo", valor }] }]);
+  }
+
   function quitarCargo(idx: number) {
     setCargos((prev) => prev.filter((_, i) => i !== idx));
   }
@@ -671,7 +676,7 @@ function ModalCobro({
                     <button onClick={() => dividirPago(idx)} title="Dividir en varios medios de pago">
                       <Split size={14} className="text-gray-400" />
                     </button>
-                    {c.categoria === "concepto_administrativo" && (
+                    {c.categoria !== "procedimiento" && (
                       <button onClick={() => quitarCargo(idx)}>
                         <X size={14} className="text-gray-400" />
                       </button>
@@ -708,6 +713,15 @@ function ModalCobro({
                 </div>
               ))}
             </div>
+
+            {!cargos.some((c) => c.categoria === "rx") && (
+              <button
+                onClick={agregarRx}
+                className="w-full flex items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 py-2 text-sm font-medium text-gray-500 mb-4 hover:bg-gray-50"
+              >
+                <Plus size={14} /> Agregar RX {precios["rx"] ? `(${fmtCOP(precios["rx"])})` : ""}
+              </button>
+            )}
 
             <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-4">
               <p className="text-xs font-medium text-gray-500 mb-2">Agregar concepto administrativo</p>
