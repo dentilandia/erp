@@ -17,6 +17,7 @@ interface LabPendienteInstalar {
   paciente_id: string;
   pacientes: { nombre: string };
   laboratorios: { nombre: string };
+  doctoras: { nombre: string; color_pastel: string };
   tipo_servicio: string;
 }
 
@@ -73,7 +74,7 @@ export function Consultorio() {
     const t = setTimeout(async () => {
       const { data } = await supabase
         .from("lab_ordenes")
-        .select("id, paciente_id, tipo_servicio, pacientes!inner(nombre), laboratorios(nombre)")
+        .select("id, paciente_id, tipo_servicio, pacientes!inner(nombre), laboratorios(nombre), doctoras(nombre, color_pastel)")
         .eq("sede_id", sedeActiva.id)
         .eq("estado", "recibido")
         .ilike("pacientes.nombre", `%${buscarInstalar.trim()}%`);
@@ -145,8 +146,18 @@ export function Consultorio() {
         <div className="space-y-1.5">
           {pendientesInstalar.map((p) => (
             <div key={p.id} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm">
-              <span>
-                {p.pacientes?.nombre} <span className="text-gray-400">· {p.laboratorios?.nombre} · {p.tipo_servicio}</span>
+              <span className="flex items-center gap-2">
+                <span>
+                  {p.pacientes?.nombre} <span className="text-gray-400">· {p.laboratorios?.nombre} · {p.tipo_servicio}</span>
+                </span>
+                {p.doctoras && (
+                  <span
+                    className="text-xs font-semibold px-2 py-0.5 rounded-full text-white shrink-0"
+                    style={{ background: p.doctoras.color_pastel }}
+                  >
+                    {p.doctoras.nombre}
+                  </span>
+                )}
               </span>
               <button
                 onClick={() => marcarInstalado(p.id)}
