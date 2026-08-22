@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { Plus, X, Split, Trash2 } from "lucide-react";
+import { Plus, X, Split, Trash2, Check } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
 import {
@@ -62,6 +62,13 @@ export function Recepcion() {
   const [cobrandoId, setCobrandoId] = useState<string | null>(null);
   const [filtroDoctoraCobradas, setFiltroDoctoraCobradas] = useState("");
 
+  const [pacienteSaldoExterno, setPacienteSaldoExterno] = useState<Paciente | null>(null);
+  const [medioSaldoExterno, setMedioSaldoExterno] = useState<MedioPago>("efectivo");
+  const [valorSaldoExterno, setValorSaldoExterno] = useState("");
+  const [notaSaldoExterno, setNotaSaldoExterno] = useState("");
+  const [guardandoSaldoExterno, setGuardandoSaldoExterno] = useState(false);
+  const [saldoExternoOk, setSaldoExternoOk] = useState(false);
+
   async function cargarVisitas() {
     const { data } = await supabase
       .from("visitas")
@@ -116,6 +123,27 @@ export function Recepcion() {
     if (!window.confirm("¿Eliminar esta visita? Esto no se puede deshacer.")) return;
     await supabase.from("visitas").delete().eq("id", id);
     cargarVisitas();
+  }
+
+  async function registrarSaldoSinCita() {
+    const valor = Number(valorSaldoExterno);
+    if (!pacienteSaldoExterno || !valor) return;
+    setGuardandoSaldoExterno(true);
+    await supabase.from("saldos_favor").insert({
+      paciente_id: pacienteSaldoExterno.id,
+      sede_origen_id: sedeActiva.id,
+      valor,
+      valor_disponible: valor,
+      medio_origen: medioSaldoExterno,
+      fecha,
+      notas: notaSaldoExterno.trim() || null,
+    });
+    setGuardandoSaldoExterno(false);
+    setPacienteSaldoExterno(null);
+    setValorSaldoExterno("");
+    setNotaSaldoExterno("");
+    setSaldoExternoOk(true);
+    setTimeout(() => setSaldoExternoOk(false), 2000);
   }
 
   const enEspera = visitas.filter((v) => v.estado === "espera");
@@ -179,6 +207,60 @@ export function Recepcion() {
             className="flex items-center justify-center gap-2 rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
           >
             <Plus size={16} /> Registrar llegada
+          </button>
+        </div>
+      </section>
+
+      <section className="bg-white rounded-xl border border-dashed border-gray-300 p-4">
+        <h2 className="font-semibold text-tinta mb-1">Registrar saldo a favor (paciente sin cita hoy)</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Para cuando un paciente paga por adelantado sin venir ese día — ej. anticipo de sedación que agenda
+          después. Este pago sí cuenta como ingreso del día en Cierre diario.
+        </p>
+        <div className="space-y-2">
+          {pacienteSaldoExterno ? (
+            <div className="flex items-center justify-between rounded-lg border border-[var(--acento)] bg-[var(--acento)]/5 px-3 py-2 text-sm">
+              <span>{pacienteSaldoExterno.nombre}</span>
+              <button onClick={() => setPacienteSaldoExterno(null)}>
+                <X size={14} />
+              </button>
+            </div>
+          ) : (
+            <PacienteAutocomplete onSelect={setPacienteSaldoExterno} placeholder="Buscar paciente…" />
+          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={medioSaldoExterno}
+              onChange={(e) => setMedioSaldoExterno(e.target.value as MedioPago)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            >
+              {MEDIOS_PAGO.filter((m) => m.value !== "saldo_favor").map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              placeholder="Valor"
+              value={valorSaldoExterno}
+              onChange={(e) => setValorSaldoExterno(e.target.value)}
+              className="w-32 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          </div>
+          <input
+            value={notaSaldoExterno}
+            onChange={(e) => setNotaSaldoExterno(e.target.value)}
+            placeholder="Nota (ej: anticipo sedación, pendiente de agendar)"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          />
+          <button
+            onClick={registrarSaldoSinCita}
+            disabled={!pacienteSaldoExterno || !valorSaldoExterno || guardandoSaldoExterno}
+            className="flex items-center gap-2 rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+          >
+            {saldoExternoOk ? <Check size={16} /> : <Plus size={16} />}
+            {guardandoSaldoExterno ? "Registrando…" : saldoExternoOk ? "Registrado" : "Registrar saldo a favor"}
           </button>
         </div>
       </section>
