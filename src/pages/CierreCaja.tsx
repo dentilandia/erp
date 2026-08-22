@@ -27,12 +27,26 @@ function claveSedeDe(sede: Sede) {
 
 /** Un día tiene algo pendiente de revisar/resolver. Mismo criterio para el
  *  filtro "Solo días con pendientes" y para la lista de la pestaña Pendientes. */
+/** Falta el respaldo del cierre físico de caja: ni el arqueo del histórico
+ *  (días viejos) ni el documento de recibos de caja (días nuevos, con el
+ *  flujo de adjuntar documentos) están presentes. */
+function faltaCierreFisico(c: CierreCajaRow) {
+  return c.arqueo === null && !c.url_recibos_caja;
+}
+
+/** Falta el respaldo de datáfono: la bandera legacy sigue en true (nunca se
+ *  adjuntó nada, ni antes ni ahora) y tampoco hay ninguno de los 2 documentos
+ *  de datáfono adjuntos. */
+function faltaDatafono(c: CierreCajaRow) {
+  return c.dataf_sin_docs && !c.url_tirilla_datafono && !c.url_reporte_datafono;
+}
+
 function tienePendientes(c: CierreCajaRow) {
   return (
     !c.cuadra ||
     c.errores.length > 0 ||
-    c.dataf_sin_docs ||
-    c.arqueo === null ||
+    faltaDatafono(c) ||
+    faltaCierreFisico(c) ||
     (!!c.dif_dataf_bruta && !c.dataf_explicado) ||
     c.addi > 0 ||
     !!c.nota_consignacion_pendiente
@@ -49,20 +63,20 @@ interface PendienteItem {
 function pendientesDe(c: CierreCajaRow, claveSede: string): PendienteItem[] {
   const items: PendienteItem[] = [];
   const base = `${c.fecha}|${claveSede}`;
-  if (c.dataf_sin_docs) {
+  if (faltaDatafono(c)) {
     items.push({
       clave: `${base}|Datáfono`,
       fecha: c.fecha,
       tipo: "Datáfono",
-      descripcion: `Falta el comprobante de ${c.fuente_dataf ?? "Redeban/SPRO Bold"} (tarjeta facturada ${fmtCOP(c.tarjeta_fact)}).`,
+      descripcion: `Falta adjuntar la tirilla o el reporte de ${c.fuente_dataf ?? "datáfono"} (tarjeta facturada ${fmtCOP(c.tarjeta_fact)}).`,
     });
   }
-  if (c.arqueo === null) {
+  if (faltaCierreFisico(c)) {
     items.push({
       clave: `${base}|Cierre físico`,
       fecha: c.fecha,
       tipo: "Cierre físico",
-      descripcion: "Falta el cierre físico (arqueo de efectivo) de este día.",
+      descripcion: "Falta adjuntar el reporte de recibos de caja de este día.",
     });
   }
   if (c.dif_dataf_bruta && !c.dataf_explicado) {
@@ -131,7 +145,7 @@ export function CierreCaja() {
 
     setMesesAbiertos((prev) => {
       if (prev.size > 0) return prev;
-      const mesesConFaltantes = new Set(filas.filter((c) => c.dataf_sin_docs || c.arqueo === null).map((c) => c.fecha.slice(0, 7)));
+      const mesesConFaltantes = new Set(filas.filter((c) => faltaDatafono(c) || faltaCierreFisico(c)).map((c) => c.fecha.slice(0, 7)));
       const mesMasReciente = filas[0]?.fecha.slice(0, 7);
       if (mesMasReciente) mesesConFaltantes.add(mesMasReciente);
       return mesesConFaltantes;
@@ -315,12 +329,12 @@ export function CierreCaja() {
                                     🏦 Cuenta 2
                                   </span>
                                 )}
-                                {c.dataf_sin_docs && (
+                                {faltaDatafono(c) && (
                                   <span className="text-xs font-semibold px-2 py-0.5 rounded-full text-white" style={{ background: "#C0392B" }}>
-                                    ⚠ Falta {c.fuente_dataf ?? "Redeban/SPRO Bold"}
+                                    ⚠ Falta {c.fuente_dataf ?? "tirilla/reporte de datáfono"}
                                   </span>
                                 )}
-                                {c.arqueo === null && (
+                                {faltaCierreFisico(c) && (
                                   <span className="text-xs font-semibold px-2 py-0.5 rounded-full text-white" style={{ background: "#C0392B" }}>
                                     ⚠ Falta cierre físico
                                   </span>
@@ -425,20 +439,15 @@ interface FormCierre {
   tarjeta_fact: string;
   transf_fact: string;
   addi: string;
-  arqueo: string;
-  dataf_spro: string;
-  dataf_qr: string;
   gasto: string;
   transf_directa: string;
-  dataf_explicado: boolean;
+  cuadra: boolean;
   transf_por_verificar: boolean;
   transf_sin_banco: boolean;
-  dataf_sin_docs: boolean;
   urgente_transf: boolean;
   consignacion_cuenta2: boolean;
   fuente_dataf: string;
   fuente_transf: string;
-  dataf_explicacion: string;
   nota_dataf_extra: string;
   nota_transf_extra: string;
   nota_banco_extra: string;
@@ -452,20 +461,15 @@ const FORM_VACIO: FormCierre = {
   tarjeta_fact: "0",
   transf_fact: "0",
   addi: "0",
-  arqueo: "",
-  dataf_spro: "",
-  dataf_qr: "",
   gasto: "",
   transf_directa: "0",
-  dataf_explicado: false,
+  cuadra: false,
   transf_por_verificar: false,
   transf_sin_banco: false,
-  dataf_sin_docs: false,
   urgente_transf: false,
   consignacion_cuenta2: false,
   fuente_dataf: "",
   fuente_transf: "",
-  dataf_explicacion: "",
   nota_dataf_extra: "",
   nota_transf_extra: "",
   nota_banco_extra: "",
@@ -491,6 +495,7 @@ function FormularioCierre({
   const [mensaje, setMensaje] = useState<string | null>(null);
   const [form, setForm] = useState<FormCierre>(FORM_VACIO);
   const [addiDetalleAuto, setAddiDetalleAuto] = useState<{ paciente: string; valor: number; medio: string }[]>([]);
+  const [subiendoDoc, setSubiendoDoc] = useState<string | null>(null);
 
   const existente = cierres.find((c) => c.fecha === fecha) ?? null;
 
@@ -560,20 +565,15 @@ function FormularioCierre({
           tarjeta_fact: String(ex.tarjeta_fact),
           transf_fact: String(ex.transf_fact),
           addi: String(ex.addi),
-          arqueo: ex.arqueo === null ? "" : String(ex.arqueo),
-          dataf_spro: ex.dataf_spro === null ? "" : String(ex.dataf_spro),
-          dataf_qr: ex.dataf_qr === null ? "" : String(ex.dataf_qr),
           gasto: ex.gasto === null || ex.gasto === undefined ? "" : String(ex.gasto),
           transf_directa: String(ex.transf_directa),
-          dataf_explicado: ex.dataf_explicado,
+          cuadra: ex.cuadra,
           transf_por_verificar: ex.transf_por_verificar,
           transf_sin_banco: ex.transf_sin_banco,
-          dataf_sin_docs: ex.dataf_sin_docs,
           urgente_transf: ex.urgente_transf,
           consignacion_cuenta2: ex.consignacion_cuenta2,
           fuente_dataf: ex.fuente_dataf ?? "",
           fuente_transf: ex.fuente_transf ?? "",
-          dataf_explicacion: ex.dataf_explicacion ?? "",
           nota_dataf_extra: ex.nota_dataf_extra ?? "",
           nota_transf_extra: ex.nota_transf_extra ?? "",
           nota_banco_extra: ex.nota_banco_extra ?? "",
@@ -615,16 +615,16 @@ function FormularioCierre({
   const tarjeta_fact = Number(form.tarjeta_fact) || 0;
   const transf_fact = Number(form.transf_fact) || 0;
   const addi = Number(form.addi) || 0;
-  const arqueo = form.arqueo === "" ? null : Number(form.arqueo);
-  const dataf_spro = form.dataf_spro === "" ? null : Number(form.dataf_spro);
   const total = efvo_fact + tarjeta_fact + transf_fact + addi;
-  const dif_efvo = arqueo === null ? 0 : Math.round((efvo_fact - arqueo) * 100) / 100;
-  const dif_dataf_bruta = dataf_spro === null ? null : Math.round((tarjeta_fact - dataf_spro) * 100) / 100;
-  const cuadraCalc =
-    arqueo !== null &&
-    dataf_spro !== null &&
-    Math.round(dif_efvo) === 0 &&
-    (Math.round(dif_dataf_bruta ?? 0) === 0 || form.dataf_explicado);
+
+  async function subirDoc(campo: keyof CierreCajaRow, file: File) {
+    if (!existente) return;
+    setSubiendoDoc(campo);
+    const { error } = await subirDocumentoCierre(existente.id, claveSede, fecha, campo, file);
+    if (error) window.alert(`No se pudo subir el documento: ${error.message}`);
+    else onGuardado();
+    setSubiendoDoc(null);
+  }
 
   async function guardar() {
     setGuardando(true);
@@ -638,23 +638,14 @@ function FormularioCierre({
         transf_fact,
         addi,
         total,
-        arqueo,
-        dataf_spro,
-        dataf_qr: form.dataf_qr === "" ? null : Number(form.dataf_qr),
-        dif_efvo,
-        dif_dataf_bruta,
-        dif_dataf_neta: dif_dataf_bruta,
-        cuadra: cuadraCalc,
-        dataf_explicado: form.dataf_explicado,
+        cuadra: form.cuadra,
         transf_directa: Number(form.transf_directa) || 0,
         transf_por_verificar: form.transf_por_verificar,
         transf_sin_banco: form.transf_sin_banco,
-        dataf_sin_docs: form.dataf_sin_docs,
         urgente_transf: form.urgente_transf,
         gasto: form.gasto === "" ? null : Number(form.gasto),
         fuente_dataf: form.fuente_dataf || null,
         fuente_transf: form.fuente_transf || null,
-        dataf_explicacion: form.dataf_explicacion || null,
         nota_dataf_extra: form.nota_dataf_extra || null,
         nota_transf_extra: form.nota_transf_extra || null,
         nota_banco_extra: form.nota_banco_extra || null,
@@ -662,6 +653,18 @@ function FormularioCierre({
         nota_cuenta2: form.nota_cuenta2 || null,
         consignacion_cuenta2: form.consignacion_cuenta2,
         nota_consignacion_pendiente: form.nota_consignacion_pendiente || null,
+        // El cuadre ya no se digita a mano (arqueo/datáfono/banco) — se valida
+        // adjuntando los documentos de abajo. Estos campos legacy se preservan
+        // tal cual si el día ya existía (histórico anterior a este cambio).
+        arqueo: existente?.arqueo ?? null,
+        dataf_spro: existente?.dataf_spro ?? null,
+        dataf_qr: existente?.dataf_qr ?? null,
+        dif_efvo: existente?.dif_efvo ?? 0,
+        dif_dataf_bruta: existente?.dif_dataf_bruta ?? null,
+        dif_dataf_neta: existente?.dif_dataf_neta ?? null,
+        dataf_explicado: existente?.dataf_explicado ?? false,
+        dataf_explicacion: existente?.dataf_explicacion ?? null,
+        dataf_sin_docs: existente ? existente.dataf_sin_docs : true,
         monto_cruzado: existente?.monto_cruzado ?? 0,
         errores: existente?.errores ?? [],
         transfs: existente?.transfs ?? [],
@@ -723,36 +726,43 @@ function FormularioCierre({
           </div>
 
           <div>
-            <p className="text-xs font-semibold text-gray-500 mb-1.5">Real / documentos físicos (contado por caja)</p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              <label className="text-xs text-gray-500">
-                Arqueo efectivo
-                <input
-                  type="number"
-                  value={form.arqueo}
-                  onChange={(e) => campo("arqueo", e.target.value)}
-                  className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="text-xs text-gray-500">
-                Datáfono (SPRO/Redeban)
-                <input
-                  type="number"
-                  value={form.dataf_spro}
-                  onChange={(e) => campo("dataf_spro", e.target.value)}
-                  className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="text-xs text-gray-500">
-                Datáfono QR
-                <input
-                  type="number"
-                  value={form.dataf_qr}
-                  onChange={(e) => campo("dataf_qr", e.target.value)}
-                  className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                />
-              </label>
-            </div>
+            <p className="text-xs font-semibold text-gray-500 mb-1.5">Documentos del cierre (esto es lo que valida el cuadre)</p>
+            {!existente ? (
+              <p className="text-xs text-gray-400 rounded-lg border border-dashed border-gray-300 p-3">
+                Guarda el cierre primero (botón de abajo) para poder adjuntar aquí los documentos de este día.
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {DOCUMENTOS.map((d) => {
+                  const url = existente[d.campo] as string | null;
+                  return (
+                    <div key={d.campo} className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm">
+                      <span className="text-gray-600">{d.label}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {url && (
+                          <button onClick={() => verDocumentoCierre(url)} className="text-xs font-medium text-[var(--acento)] underline">
+                            Ver
+                          </button>
+                        )}
+                        <label className="text-xs font-medium text-gray-500 underline cursor-pointer">
+                          {subiendoDoc === d.campo ? "Subiendo…" : url ? "Reemplazar" : "Adjuntar"}
+                          <input
+                            type="file"
+                            className="hidden"
+                            disabled={subiendoDoc === d.campo}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) subirDoc(d.campo, file);
+                              e.target.value = "";
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-2">
@@ -802,10 +812,8 @@ function FormularioCierre({
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
               {(
                 [
-                  ["dataf_explicado", "Datáfono explicado"],
                   ["transf_por_verificar", "Transferencia por verificar"],
                   ["transf_sin_banco", "Transferencia sin banco"],
-                  ["dataf_sin_docs", "Datáfono sin documentos"],
                   ["urgente_transf", "Urgente transferencia"],
                   ["consignacion_cuenta2", "Consignación a cuenta 2"],
                 ] as const
@@ -823,7 +831,6 @@ function FormularioCierre({
             <div className="space-y-1.5">
               {(
                 [
-                  ["dataf_explicacion", "Explicación datáfono"],
                   ["nota_dataf_extra", "Nota datáfono extra"],
                   ["nota_transf_extra", "Nota transferencia extra"],
                   ["nota_banco_extra", "Nota banco / consignación"],
@@ -850,23 +857,18 @@ function FormularioCierre({
             desde el ERP al guardar.
           </p>
 
-          <div className="rounded-lg bg-gray-50 px-3 py-2.5 text-sm space-y-1">
+          <div className="rounded-lg bg-gray-50 px-3 py-2.5 text-sm space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-gray-500">Total facturado</span>
+              <span className="text-gray-500">Total facturado (Operación)</span>
               <span className="font-semibold">{fmtCOP(total)}</span>
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-gray-500">Diferencia efectivo</span>
-              <span className={dif_efvo !== 0 ? "text-red-600 font-medium" : ""}>{fmtCOP(dif_efvo)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-gray-500">Diferencia datáfono</span>
-              <span className={dif_dataf_bruta ? "text-red-600 font-medium" : ""}>{dif_dataf_bruta === null ? "—" : fmtCOP(dif_dataf_bruta)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-gray-500">Estado</span>
-              <span className={`font-semibold ${cuadraCalc ? "text-[#3E9B6F]" : "text-red-600"}`}>{cuadraCalc ? "✔ Cuadra" : "Revisar"}</span>
-            </div>
+            <label className="flex items-center gap-2 pt-2 border-t border-gray-100">
+              <input type="checkbox" checked={form.cuadra} onChange={(e) => campo("cuadra", e.target.checked)} />
+              <span className={`font-semibold ${form.cuadra ? "text-[#3E9B6F]" : "text-red-600"}`}>
+                {form.cuadra ? "✔ Cuadra" : "Revisar"}
+              </span>
+              <span className="text-xs text-gray-400">— marca esto tú mismo después de comparar el total contra los documentos adjuntos</span>
+            </label>
           </div>
 
           {mensaje && <p className={`text-sm ${mensaje.startsWith("Error") ? "text-red-600" : "text-[var(--acento)]"}`}>{mensaje}</p>}
@@ -923,11 +925,29 @@ function PendienteRow({
 }
 
 const DOCUMENTOS: { campo: keyof CierreCajaRow; label: string }[] = [
-  { campo: "url_recibos_caja", label: "Reporte de recibos de caja" },
+  { campo: "url_recibos_caja", label: "Reporte de recibos de caja (Oral Drive)" },
   { campo: "url_movimientos_banco", label: "Movimientos de cuentas bancarias" },
   { campo: "url_tirilla_datafono", label: "Tirilla de datáfono" },
   { campo: "url_reporte_datafono", label: "Reporte de datáfono" },
 ];
+
+/** Sube un soporte del día y lo asocia al cierre. Si es un documento de
+ *  datáfono, apaga automáticamente la bandera legacy "dataf_sin_docs" —
+ *  el cuadre ahora se valida adjuntando el archivo, no digitando un monto. */
+async function subirDocumentoCierre(cierreId: string, claveSede: string, fecha: string, campo: keyof CierreCajaRow, file: File) {
+  const path = `cierre-caja/${claveSede}/${fecha}-${campo}-${file.name}`;
+  const { error: errorSubida } = await supabase.storage.from("comprobantes").upload(path, file, { upsert: true });
+  if (errorSubida) return { error: errorSubida };
+  const cambios: Record<string, unknown> = { [campo]: path };
+  if (campo === "url_tirilla_datafono" || campo === "url_reporte_datafono") cambios.dataf_sin_docs = false;
+  const { error: errorGuardado } = await supabase.from("cierres_caja").update(cambios).eq("id", cierreId);
+  return { error: errorGuardado };
+}
+
+async function verDocumentoCierre(path: string) {
+  const { data } = await supabase.storage.from("comprobantes").createSignedUrl(path, 60);
+  if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+}
 
 interface CierreOperacion {
   consignado: boolean;
@@ -996,26 +1016,16 @@ function DetalleModal({
 
   async function subirDocumento(campo: keyof CierreCajaRow, file: File) {
     setSubiendo(campo);
-    const path = `cierre-caja/${claveSede}/${cierre.fecha}-${campo}-${file.name}`;
-    const { error: errorSubida } = await supabase.storage.from("comprobantes").upload(path, file, { upsert: true });
-    if (errorSubida) {
-      window.alert(`No se pudo subir el documento: ${errorSubida.message}`);
-      setSubiendo(null);
-      return;
-    }
-    const { error: errorGuardado } = await supabase.from("cierres_caja").update({ [campo]: path }).eq("id", cierre.id);
-    if (errorGuardado) {
-      window.alert(`El archivo se subió pero no se pudo guardar el registro: ${errorGuardado.message}`);
+    const { error } = await subirDocumentoCierre(cierre.id, claveSede, cierre.fecha, campo, file);
+    if (error) {
+      window.alert(`No se pudo subir el documento: ${error.message}`);
     } else {
       onGuardado();
     }
     setSubiendo(null);
   }
 
-  async function verDocumento(path: string) {
-    const { data } = await supabase.storage.from("comprobantes").createSignedUrl(path, 60);
-    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
-  }
+  const verDocumento = verDocumentoCierre;
 
   const totalOperacionEfectivo = operacion?.porMedio["efectivo"] ?? 0;
   const totalOperacionTarjeta = (operacion?.porMedio["tarjeta_debito"] ?? 0) + (operacion?.porMedio["tarjeta_credito"] ?? 0);
