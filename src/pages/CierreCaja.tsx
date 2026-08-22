@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { ChevronDown, ChevronRight, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
-import { fmtCOP } from "../lib/format";
+import { fmtCOP, today } from "../lib/format";
 import type { Sede, CierreCaja as CierreCajaRow } from "../lib/types";
 
 const DIAS_SEMANA = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
@@ -92,7 +92,7 @@ export function CierreCaja() {
   const [revisiones, setRevisiones] = useState<Record<string, boolean>>({});
   const [pendientesEstado, setPendientesEstado] = useState<Record<string, { resuelto: boolean; solucion: string }>>({});
   const [soloConPendientes, setSoloConPendientes] = useState(false);
-  const [tab, setTab] = useState<"dias" | "pendientes" | "reporte">("dias");
+  const [tab, setTab] = useState<"dias" | "pendientes" | "reporte" | "hacer">("dias");
   const [detalle, setDetalle] = useState<CierreCajaRow | null>(null);
   const [mesesAbiertos, setMesesAbiertos] = useState<Set<string>>(new Set());
   const [reporteDesde, setReporteDesde] = useState(() => new Date().toISOString().slice(0, 8) + "01");
@@ -223,6 +223,12 @@ export function CierreCaja() {
           className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === "reporte" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
         >
           Reporte
+        </button>
+        <button
+          onClick={() => setTab("hacer")}
+          className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === "hacer" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
+        >
+          Hacer cierre
         </button>
       </div>
 
@@ -391,7 +397,453 @@ export function CierreCaja() {
         </div>
       )}
 
+      {tab === "hacer" && (
+        <FormularioCierre cierres={cierres} claveSede={claveSede} sedeActiva={sedeActiva} onGuardado={cargar} />
+      )}
+
       {detalle && <DetalleModal cierre={detalle} onClose={() => setDetalle(null)} claveSede={claveSede} sedeActiva={sedeActiva} onGuardado={cargar} />}
+    </div>
+  );
+}
+
+interface FormCierre {
+  efvo_fact: string;
+  tarjeta_fact: string;
+  transf_fact: string;
+  addi: string;
+  arqueo: string;
+  dataf_spro: string;
+  dataf_qr: string;
+  gasto: string;
+  transf_directa: string;
+  dataf_explicado: boolean;
+  transf_por_verificar: boolean;
+  transf_sin_banco: boolean;
+  dataf_sin_docs: boolean;
+  urgente_transf: boolean;
+  consignacion_cuenta2: boolean;
+  fuente_dataf: string;
+  fuente_transf: string;
+  dataf_explicacion: string;
+  nota_dataf_extra: string;
+  nota_transf_extra: string;
+  nota_banco_extra: string;
+  nota_limitacion: string;
+  nota_cuenta2: string;
+  nota_consignacion_pendiente: string;
+}
+
+const FORM_VACIO: FormCierre = {
+  efvo_fact: "0",
+  tarjeta_fact: "0",
+  transf_fact: "0",
+  addi: "0",
+  arqueo: "",
+  dataf_spro: "",
+  dataf_qr: "",
+  gasto: "",
+  transf_directa: "0",
+  dataf_explicado: false,
+  transf_por_verificar: false,
+  transf_sin_banco: false,
+  dataf_sin_docs: false,
+  urgente_transf: false,
+  consignacion_cuenta2: false,
+  fuente_dataf: "",
+  fuente_transf: "",
+  dataf_explicacion: "",
+  nota_dataf_extra: "",
+  nota_transf_extra: "",
+  nota_banco_extra: "",
+  nota_limitacion: "",
+  nota_cuenta2: "",
+  nota_consignacion_pendiente: "",
+};
+
+function FormularioCierre({
+  cierres,
+  claveSede,
+  sedeActiva,
+  onGuardado,
+}: {
+  cierres: CierreCajaRow[];
+  claveSede: string;
+  sedeActiva: Sede;
+  onGuardado: () => void;
+}) {
+  const [fecha, setFecha] = useState(today());
+  const [cargando, setCargando] = useState(true);
+  const [guardando, setGuardando] = useState(false);
+  const [mensaje, setMensaje] = useState<string | null>(null);
+  const [form, setForm] = useState<FormCierre>(FORM_VACIO);
+  const [addiDetalleAuto, setAddiDetalleAuto] = useState<{ paciente: string; valor: number; medio: string }[]>([]);
+
+  const existente = cierres.find((c) => c.fecha === fecha) ?? null;
+
+  async function facturadoDesdeErp() {
+    const { data: pagosData } = await supabase
+      .from("cargo_pagos")
+      .select("medio_pago, valor, cargos!inner(sede_id, fecha, visitas(pacientes(nombre)))")
+      .eq("cargos.sede_id", sedeActiva.id)
+      .eq("cargos.fecha", fecha)
+      .neq("medio_pago", "saldo_favor");
+    const filas =
+      (pagosData as unknown as {
+        medio_pago: string;
+        valor: number;
+        cargos: { visitas: { pacientes: { nombre: string } | null } | null };
+      }[]) ?? [];
+    const porMedio: Record<string, number> = {};
+    for (const p of filas) porMedio[p.medio_pago] = (porMedio[p.medio_pago] ?? 0) + Number(p.valor);
+    const addiDetalle = filas
+      .filter((p) => p.medio_pago === "addi" || p.medio_pago === "sistecredito")
+      .map((p) => ({
+        paciente: p.cargos.visitas?.pacientes?.nombre ?? "—",
+        valor: Number(p.valor),
+        medio: p.medio_pago === "addi" ? "Addi" : "Sistecrédito",
+      }));
+    return {
+      efectivo: porMedio["efectivo"] ?? 0,
+      tarjeta: (porMedio["tarjeta_debito"] ?? 0) + (porMedio["tarjeta_credito"] ?? 0),
+      transferencia: porMedio["transferencia_debito"] ?? 0,
+      addi: (porMedio["addi"] ?? 0) + (porMedio["sistecredito"] ?? 0),
+      addiDetalle,
+    };
+  }
+
+  useEffect(() => {
+    (async () => {
+      setCargando(true);
+      setMensaje(null);
+      const erp = await facturadoDesdeErp();
+      setAddiDetalleAuto(erp.addiDetalle);
+      const ex = cierres.find((c) => c.fecha === fecha) ?? null;
+      if (ex) {
+        setForm({
+          efvo_fact: String(ex.efvo_fact),
+          tarjeta_fact: String(ex.tarjeta_fact),
+          transf_fact: String(ex.transf_fact),
+          addi: String(ex.addi),
+          arqueo: ex.arqueo === null ? "" : String(ex.arqueo),
+          dataf_spro: ex.dataf_spro === null ? "" : String(ex.dataf_spro),
+          dataf_qr: ex.dataf_qr === null ? "" : String(ex.dataf_qr),
+          gasto: ex.gasto === null || ex.gasto === undefined ? "" : String(ex.gasto),
+          transf_directa: String(ex.transf_directa),
+          dataf_explicado: ex.dataf_explicado,
+          transf_por_verificar: ex.transf_por_verificar,
+          transf_sin_banco: ex.transf_sin_banco,
+          dataf_sin_docs: ex.dataf_sin_docs,
+          urgente_transf: ex.urgente_transf,
+          consignacion_cuenta2: ex.consignacion_cuenta2,
+          fuente_dataf: ex.fuente_dataf ?? "",
+          fuente_transf: ex.fuente_transf ?? "",
+          dataf_explicacion: ex.dataf_explicacion ?? "",
+          nota_dataf_extra: ex.nota_dataf_extra ?? "",
+          nota_transf_extra: ex.nota_transf_extra ?? "",
+          nota_banco_extra: ex.nota_banco_extra ?? "",
+          nota_limitacion: ex.nota_limitacion ?? "",
+          nota_cuenta2: ex.nota_cuenta2 ?? "",
+          nota_consignacion_pendiente: ex.nota_consignacion_pendiente ?? "",
+        });
+      } else {
+        setForm({
+          ...FORM_VACIO,
+          efvo_fact: String(erp.efectivo),
+          tarjeta_fact: String(erp.tarjeta),
+          transf_fact: String(erp.transferencia),
+          addi: String(erp.addi),
+        });
+      }
+      setCargando(false);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fecha, sedeActiva.id]);
+
+  async function recalcularDesdeErp() {
+    const erp = await facturadoDesdeErp();
+    setAddiDetalleAuto(erp.addiDetalle);
+    setForm((f) => ({
+      ...f,
+      efvo_fact: String(erp.efectivo),
+      tarjeta_fact: String(erp.tarjeta),
+      transf_fact: String(erp.transferencia),
+      addi: String(erp.addi),
+    }));
+  }
+
+  function campo<K extends keyof FormCierre>(k: K, v: FormCierre[K]) {
+    setForm((f) => ({ ...f, [k]: v }));
+  }
+
+  const efvo_fact = Number(form.efvo_fact) || 0;
+  const tarjeta_fact = Number(form.tarjeta_fact) || 0;
+  const transf_fact = Number(form.transf_fact) || 0;
+  const addi = Number(form.addi) || 0;
+  const arqueo = form.arqueo === "" ? null : Number(form.arqueo);
+  const dataf_spro = form.dataf_spro === "" ? null : Number(form.dataf_spro);
+  const total = efvo_fact + tarjeta_fact + transf_fact + addi;
+  const dif_efvo = arqueo === null ? 0 : Math.round((efvo_fact - arqueo) * 100) / 100;
+  const dif_dataf_bruta = dataf_spro === null ? null : Math.round((tarjeta_fact - dataf_spro) * 100) / 100;
+  const cuadraCalc =
+    arqueo !== null &&
+    dataf_spro !== null &&
+    Math.round(dif_efvo) === 0 &&
+    (Math.round(dif_dataf_bruta ?? 0) === 0 || form.dataf_explicado);
+
+  async function guardar() {
+    setGuardando(true);
+    setMensaje(null);
+    const { error } = await supabase.from("cierres_caja").upsert(
+      {
+        fecha,
+        sede: claveSede,
+        efvo_fact,
+        tarjeta_fact,
+        transf_fact,
+        addi,
+        total,
+        arqueo,
+        dataf_spro,
+        dataf_qr: form.dataf_qr === "" ? null : Number(form.dataf_qr),
+        dif_efvo,
+        dif_dataf_bruta,
+        dif_dataf_neta: dif_dataf_bruta,
+        cuadra: cuadraCalc,
+        dataf_explicado: form.dataf_explicado,
+        transf_directa: Number(form.transf_directa) || 0,
+        transf_por_verificar: form.transf_por_verificar,
+        transf_sin_banco: form.transf_sin_banco,
+        dataf_sin_docs: form.dataf_sin_docs,
+        urgente_transf: form.urgente_transf,
+        gasto: form.gasto === "" ? null : Number(form.gasto),
+        fuente_dataf: form.fuente_dataf || null,
+        fuente_transf: form.fuente_transf || null,
+        dataf_explicacion: form.dataf_explicacion || null,
+        nota_dataf_extra: form.nota_dataf_extra || null,
+        nota_transf_extra: form.nota_transf_extra || null,
+        nota_banco_extra: form.nota_banco_extra || null,
+        nota_limitacion: form.nota_limitacion || null,
+        nota_cuenta2: form.nota_cuenta2 || null,
+        consignacion_cuenta2: form.consignacion_cuenta2,
+        nota_consignacion_pendiente: form.nota_consignacion_pendiente || null,
+        monto_cruzado: existente?.monto_cruzado ?? 0,
+        errores: existente?.errores ?? [],
+        transfs: existente?.transfs ?? [],
+        dups_elec: existente?.dups_elec ?? [],
+        addi_detalle: addiDetalleAuto,
+      },
+      { onConflict: "fecha,sede" },
+    );
+    setGuardando(false);
+    if (error) {
+      setMensaje(`Error al guardar: ${error.message}`);
+    } else {
+      setMensaje("Cierre guardado ✓");
+      onGuardado();
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4 max-w-2xl">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h3 className="font-semibold text-tinta">Hacer el cierre — {sedeActiva.nombre}</h3>
+          <p className="text-xs text-gray-400">{existente ? "Editando un cierre ya guardado para este día." : "Cierre nuevo para este día."}</p>
+        </div>
+        <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+      </div>
+
+      {cargando ? (
+        <p className="text-sm text-gray-400">Cargando…</p>
+      ) : (
+        <>
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <p className="text-xs font-semibold text-gray-500">Facturado (traído del ERP — puedes corregirlo)</p>
+              <button onClick={recalcularDesdeErp} className="text-xs font-medium text-[var(--acento)] underline">
+                ↺ Recalcular desde ERP
+              </button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {(
+                [
+                  ["efvo_fact", "Efectivo"],
+                  ["tarjeta_fact", "Tarjeta"],
+                  ["transf_fact", "Transferencia"],
+                  ["addi", "Addi/Sistecrédito"],
+                ] as const
+              ).map(([k, label]) => (
+                <label key={k} className="text-xs text-gray-500">
+                  {label}
+                  <input
+                    type="number"
+                    value={form[k]}
+                    onChange={(e) => campo(k, e.target.value)}
+                    className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold text-gray-500 mb-1.5">Real / documentos físicos (contado por caja)</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <label className="text-xs text-gray-500">
+                Arqueo efectivo
+                <input
+                  type="number"
+                  value={form.arqueo}
+                  onChange={(e) => campo("arqueo", e.target.value)}
+                  className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+              <label className="text-xs text-gray-500">
+                Datáfono (SPRO/Redeban)
+                <input
+                  type="number"
+                  value={form.dataf_spro}
+                  onChange={(e) => campo("dataf_spro", e.target.value)}
+                  className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+              <label className="text-xs text-gray-500">
+                Datáfono QR
+                <input
+                  type="number"
+                  value={form.dataf_qr}
+                  onChange={(e) => campo("dataf_qr", e.target.value)}
+                  className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-xs text-gray-500">
+              Gasto del día
+              <input
+                type="number"
+                value={form.gasto}
+                onChange={(e) => campo("gasto", e.target.value)}
+                className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+              />
+            </label>
+            <label className="text-xs text-gray-500">
+              Transferencia directa a cuenta
+              <input
+                type="number"
+                value={form.transf_directa}
+                onChange={(e) => campo("transf_directa", e.target.value)}
+                className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+              />
+            </label>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-xs text-gray-500">
+              Fuente datáfono
+              <input
+                value={form.fuente_dataf}
+                onChange={(e) => campo("fuente_dataf", e.target.value)}
+                placeholder="SPRO Bold / Redeban"
+                className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+              />
+            </label>
+            <label className="text-xs text-gray-500">
+              Fuente transferencia
+              <input
+                value={form.fuente_transf}
+                onChange={(e) => campo("fuente_transf", e.target.value)}
+                placeholder="QR Bold / Bancolombia"
+                className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+              />
+            </label>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold text-gray-500 mb-1.5">Banderas</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+              {(
+                [
+                  ["dataf_explicado", "Datáfono explicado"],
+                  ["transf_por_verificar", "Transferencia por verificar"],
+                  ["transf_sin_banco", "Transferencia sin banco"],
+                  ["dataf_sin_docs", "Datáfono sin documentos"],
+                  ["urgente_transf", "Urgente transferencia"],
+                  ["consignacion_cuenta2", "Consignación a cuenta 2"],
+                ] as const
+              ).map(([k, label]) => (
+                <label key={k} className="flex items-center gap-1.5 text-xs">
+                  <input type="checkbox" checked={form[k]} onChange={(e) => campo(k, e.target.checked)} />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold text-gray-500 mb-1.5">Notas</p>
+            <div className="space-y-1.5">
+              {(
+                [
+                  ["dataf_explicacion", "Explicación datáfono"],
+                  ["nota_dataf_extra", "Nota datáfono extra"],
+                  ["nota_transf_extra", "Nota transferencia extra"],
+                  ["nota_banco_extra", "Nota banco / consignación"],
+                  ["nota_limitacion", "Limitación"],
+                  ["nota_cuenta2", "Nota cuenta 2"],
+                  ["nota_consignacion_pendiente", "Consignación pendiente"],
+                ] as const
+              ).map(([k, label]) => (
+                <input
+                  key={k}
+                  value={form[k]}
+                  onChange={(e) => campo(k, e.target.value)}
+                  placeholder={label}
+                  className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              ))}
+            </div>
+          </div>
+
+          <p className="text-xs text-gray-400">
+            Los cruces entre sede, posibles duplicados y transferencias específicas por verificar todavía no tienen un
+            editor propio — mientras tanto regístralos en las notas de arriba. El Addi/Sistecrédito del día
+            ({addiDetalleAuto.length} registro{addiDetalleAuto.length === 1 ? "" : "s"}) se recalcula automáticamente
+            desde el ERP al guardar.
+          </p>
+
+          <div className="rounded-lg bg-gray-50 px-3 py-2.5 text-sm space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-gray-500">Total facturado</span>
+              <span className="font-semibold">{fmtCOP(total)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-gray-500">Diferencia efectivo</span>
+              <span className={dif_efvo !== 0 ? "text-red-600 font-medium" : ""}>{fmtCOP(dif_efvo)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-gray-500">Diferencia datáfono</span>
+              <span className={dif_dataf_bruta ? "text-red-600 font-medium" : ""}>{dif_dataf_bruta === null ? "—" : fmtCOP(dif_dataf_bruta)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-gray-500">Estado</span>
+              <span className={`font-semibold ${cuadraCalc ? "text-[#3E9B6F]" : "text-red-600"}`}>{cuadraCalc ? "✔ Cuadra" : "Revisar"}</span>
+            </div>
+          </div>
+
+          {mensaje && <p className={`text-sm ${mensaje.startsWith("Error") ? "text-red-600" : "text-[var(--acento)]"}`}>{mensaje}</p>}
+
+          <button
+            onClick={guardar}
+            disabled={guardando}
+            className="w-full rounded-lg bg-[var(--acento)] text-white py-2.5 text-sm font-medium disabled:opacity-40"
+          >
+            {guardando ? "Guardando…" : existente ? "Actualizar cierre" : "Guardar cierre"}
+          </button>
+        </>
+      )}
     </div>
   );
 }
