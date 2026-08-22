@@ -949,9 +949,16 @@ function DetalleModal({
   async function subirDocumento(campo: keyof CierreCajaRow, file: File) {
     setSubiendo(campo);
     const path = `cierre-caja/${claveSede}/${cierre.fecha}-${campo}-${file.name}`;
-    const { error } = await supabase.storage.from("comprobantes").upload(path, file, { upsert: true });
-    if (!error) {
-      await supabase.from("cierres_caja").update({ [campo]: path }).eq("id", cierre.id);
+    const { error: errorSubida } = await supabase.storage.from("comprobantes").upload(path, file, { upsert: true });
+    if (errorSubida) {
+      window.alert(`No se pudo subir el documento: ${errorSubida.message}`);
+      setSubiendo(null);
+      return;
+    }
+    const { error: errorGuardado } = await supabase.from("cierres_caja").update({ [campo]: path }).eq("id", cierre.id);
+    if (errorGuardado) {
+      window.alert(`El archivo se subió pero no se pudo guardar el registro: ${errorGuardado.message}`);
+    } else {
       onGuardado();
     }
     setSubiendo(null);

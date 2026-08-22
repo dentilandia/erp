@@ -46,10 +46,14 @@ export function ComprobantesFinanciacion() {
   async function subirComprobante(id: string, file: File) {
     setSubiendoId(id);
     const path = `${sedeActiva.id}/financiacion-${id}-${file.name}`;
-    const { error } = await supabase.storage.from("comprobantes").upload(path, file, { upsert: true });
-    if (!error) {
-      await supabase.from("cargo_pagos").update({ comprobante_financiacion_url: path }).eq("id", id);
+    const { error: errorSubida } = await supabase.storage.from("comprobantes").upload(path, file, { upsert: true });
+    if (errorSubida) {
+      window.alert(`No se pudo subir el comprobante: ${errorSubida.message}`);
+      setSubiendoId(null);
+      return;
     }
+    const { error: errorGuardado } = await supabase.from("cargo_pagos").update({ comprobante_financiacion_url: path }).eq("id", id);
+    if (errorGuardado) window.alert(`El archivo se subió pero no se pudo guardar el registro: ${errorGuardado.message}`);
     setSubiendoId(null);
     cargar();
   }

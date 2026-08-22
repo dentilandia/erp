@@ -168,23 +168,30 @@ export function CierreDiario() {
   async function subirComprobante(file: File) {
     setSubiendo(true);
     const path = `${sedeActiva.id}/${fecha}-${file.name}`;
-    const { error } = await supabase.storage.from("comprobantes").upload(path, file, { upsert: true });
-    if (!error) {
-      await supabase
-        .from("cierres_diarios")
-        .upsert(
-          {
-            sede_id: sedeActiva.id,
-            fecha,
-            gasto: Number(gasto) || 0,
-            consignado: cierre?.consignado ?? false,
-            comprobante_url: path,
-          },
-          { onConflict: "sede_id,fecha" },
-        )
-        .select("*")
-        .single()
-        .then(({ data }) => setCierre((data as CierreDiarioRow) ?? null));
+    const { error: errorSubida } = await supabase.storage.from("comprobantes").upload(path, file, { upsert: true });
+    if (errorSubida) {
+      window.alert(`No se pudo subir el comprobante: ${errorSubida.message}`);
+      setSubiendo(false);
+      return;
+    }
+    const { data, error: errorGuardado } = await supabase
+      .from("cierres_diarios")
+      .upsert(
+        {
+          sede_id: sedeActiva.id,
+          fecha,
+          gasto: Number(gasto) || 0,
+          consignado: cierre?.consignado ?? false,
+          comprobante_url: path,
+        },
+        { onConflict: "sede_id,fecha" },
+      )
+      .select("*")
+      .single();
+    if (errorGuardado) {
+      window.alert(`El archivo se subió pero no se pudo guardar el registro: ${errorGuardado.message}`);
+    } else {
+      setCierre((data as CierreDiarioRow) ?? null);
     }
     setSubiendo(false);
   }
