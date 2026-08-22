@@ -509,13 +509,35 @@ function FormularioCierre({
       }[]) ?? [];
     const porMedio: Record<string, number> = {};
     for (const p of filas) porMedio[p.medio_pago] = (porMedio[p.medio_pago] ?? 0) + Number(p.valor);
-    const addiDetalle = filas
-      .filter((p) => p.medio_pago === "addi" || p.medio_pago === "sistecredito")
-      .map((p) => ({
-        paciente: p.cargos.visitas?.pacientes?.nombre ?? "—",
-        valor: Number(p.valor),
-        medio: p.medio_pago === "addi" ? "Addi" : "Sistecrédito",
-      }));
+
+    // Saldos a favor creados sin cita (ej. anticipo de sedación pagado por
+    // teléfono) son plata real del día pero no tienen cargo — hay que sumarlos
+    // aparte, igual que ya hace Cierre diario en Operación.
+    const { data: saldosData } = await supabase
+      .from("saldos_favor")
+      .select("valor, medio_origen, pacientes(nombre)")
+      .eq("sede_origen_id", sedeActiva.id)
+      .eq("fecha", fecha)
+      .neq("medio_origen", "ajuste_manual");
+    const saldosFilas = (saldosData as unknown as { valor: number; medio_origen: string; pacientes: { nombre: string } | null }[]) ?? [];
+    for (const s of saldosFilas) porMedio[s.medio_origen] = (porMedio[s.medio_origen] ?? 0) + Number(s.valor);
+
+    const addiDetalle = [
+      ...filas
+        .filter((p) => p.medio_pago === "addi" || p.medio_pago === "sistecredito")
+        .map((p) => ({
+          paciente: p.cargos.visitas?.pacientes?.nombre ?? "—",
+          valor: Number(p.valor),
+          medio: p.medio_pago === "addi" ? "Addi" : "Sistecrédito",
+        })),
+      ...saldosFilas
+        .filter((s) => s.medio_origen === "addi" || s.medio_origen === "sistecredito")
+        .map((s) => ({
+          paciente: s.pacientes?.nombre ?? "—",
+          valor: Number(s.valor),
+          medio: s.medio_origen === "addi" ? "Addi" : "Sistecrédito",
+        })),
+    ];
     return {
       efectivo: porMedio["efectivo"] ?? 0,
       tarjeta: (porMedio["tarjeta_debito"] ?? 0) + (porMedio["tarjeta_credito"] ?? 0),
@@ -949,6 +971,18 @@ function DetalleModal({
       const porMedio: Record<string, number> = {};
       for (const p of (pagosData as unknown as { medio_pago: string; valor: number }[]) ?? []) {
         porMedio[p.medio_pago] = (porMedio[p.medio_pago] ?? 0) + Number(p.valor);
+      }
+
+      // Saldos a favor creados sin cita (anticipos pagados sin que el paciente
+      // se haya atendido) también son plata real del día, aunque no tengan cargo.
+      const { data: saldosData } = await supabase
+        .from("saldos_favor")
+        .select("valor, medio_origen")
+        .eq("sede_origen_id", sedeActiva.id)
+        .eq("fecha", cierre.fecha)
+        .neq("medio_origen", "ajuste_manual");
+      for (const s of (saldosData as unknown as { valor: number; medio_origen: string }[]) ?? []) {
+        porMedio[s.medio_origen] = (porMedio[s.medio_origen] ?? 0) + Number(s.valor);
       }
 
       setOperacion({
