@@ -102,6 +102,7 @@ export function CierreCaja() {
   const [tab, setTab] = useState<"dias" | "pendientes" | "reporte" | "hacer">("dias");
   const [detalle, setDetalle] = useState<CierreCajaRow | null>(null);
   const [mesesAbiertos, setMesesAbiertos] = useState<Set<string>>(new Set());
+  const [consignadosReales, setConsignadosReales] = useState<Record<string, boolean>>({});
   const [reporteDesde, setReporteDesde] = useState(() => new Date().toISOString().slice(0, 8) + "01");
   const [reporteHasta, setReporteHasta] = useState(() => new Date().toISOString().slice(0, 10));
 
@@ -120,6 +121,14 @@ export function CierreCaja() {
     (pendData ?? []).forEach((p) => (mapaPend[p.clave] = { resuelto: p.resuelto, solucion: p.solucion ?? "" }));
     setPendientesEstado(mapaPend);
 
+    // Estado real de "Día consignado", tal como lo marca Operación Diaria en Cierre
+    // diario — reemplaza el texto libre de nota_banco_extra del histórico importado,
+    // que no se actualiza con los días nuevos y por eso mostraba "Sin verificar" mal.
+    const { data: consignadosData } = await supabase.from("cierres_diarios").select("fecha, consignado").eq("sede_id", sedeActiva.id);
+    const mapaConsignado: Record<string, boolean> = {};
+    (consignadosData ?? []).forEach((r) => (mapaConsignado[r.fecha] = r.consignado));
+    setConsignadosReales(mapaConsignado);
+
     setMesesAbiertos((prev) => {
       if (prev.size > 0) return prev;
       const mesesConFaltantes = new Set(filas.filter((c) => c.dataf_sin_docs || c.arqueo === null).map((c) => c.fecha.slice(0, 7)));
@@ -134,6 +143,7 @@ export function CierreCaja() {
     const channel = supabase
       .channel(`cierres_caja_${claveSede}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "cierres_caja" }, cargar)
+      .on("postgres_changes", { event: "*", schema: "public", table: "cierres_diarios", filter: `sede_id=eq.${sedeActiva.id}` }, cargar)
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
@@ -270,7 +280,7 @@ export function CierreCaja() {
                     {abierto && (
                       <div className="border-t border-gray-100 p-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                         {dias.map((c) => {
-                          const consignado = (c.nota_banco_extra ?? "").toLowerCase().includes("consignado");
+                          const consignado = consignadosReales[c.fecha] ?? false;
                           const claveRev = `${c.fecha}|${claveSede}`;
                           const { corta, diaSemana } = fechaTarjeta(c.fecha);
                           return (
