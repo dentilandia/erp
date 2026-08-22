@@ -6,12 +6,19 @@ import { fmtCOP, today } from "../lib/format";
 import type { Sede, CierreCaja as CierreCajaRow } from "../lib/types";
 
 const DIAS_SEMANA = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+const DIAS_SEMANA_LARGO = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
 function fechaCorta(fecha: string) {
   const [y, m, d] = fecha.split("-").map(Number);
   const dt = new Date(y, m - 1, d);
   return `${d} ${MESES[m - 1]} · ${DIAS_SEMANA[dt.getDay()]}`;
+}
+
+function fechaTarjeta(fecha: string) {
+  const [y, m, d] = fecha.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  return { corta: `${d} de ${MESES[m - 1]}`, diaSemana: DIAS_SEMANA_LARGO[dt.getDay()] };
 }
 
 function claveSedeDe(sede: Sede) {
@@ -261,26 +268,23 @@ export function CierreCaja() {
                       <span className="text-gray-500 font-normal">{fmtCOP(dias.reduce((a, c) => a + Number(c.total), 0))}</span>
                     </button>
                     {abierto && (
-                      <div className="border-t border-gray-100 divide-y divide-gray-100">
+                      <div className="border-t border-gray-100 p-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                         {dias.map((c) => {
                           const consignado = (c.nota_banco_extra ?? "").toLowerCase().includes("consignado");
                           const claveRev = `${c.fecha}|${claveSede}`;
+                          const { corta, diaSemana } = fechaTarjeta(c.fecha);
                           return (
-                            <div key={c.id} className="flex items-center justify-between px-4 py-3 text-sm flex-wrap gap-2">
-                              <button
-                                onClick={() => setDetalle(c)}
-                                className="flex items-center gap-2 text-left flex-1 min-w-[220px] hover:opacity-70"
-                                title="Ver detalle y adjuntar soportes"
-                              >
-                                <div>
-                                  <p className="font-medium text-tinta">{fechaCorta(c.fecha)}</p>
-                                  <p className="font-semibold">{fmtCOP(c.total)}</p>
-                                </div>
-                                <ChevronRight size={14} className="text-gray-300 shrink-0" />
+                            <div key={c.id} className="rounded-xl border border-gray-200 bg-white p-3 flex flex-col gap-2">
+                              <button onClick={() => setDetalle(c)} className="text-left hover:opacity-70" title="Ver detalle y adjuntar soportes">
+                                <p className="text-sm font-semibold text-tinta">{corta}</p>
+                                <p className="text-xs font-medium" style={{ color: "var(--acento)" }}>
+                                  {diaSemana} · {claveSede}
+                                </p>
+                                <p className="text-lg font-bold text-tinta mt-1">{fmtCOP(c.total)}</p>
                               </button>
-                              <div className="flex items-center gap-2 flex-wrap">
+                              <div className="flex flex-wrap gap-1">
                                 <span
-                                  className={`text-xs font-semibold px-2 py-0.5 rounded-full text-white ${c.cuadra ? "" : ""}`}
+                                  className="text-xs font-semibold px-2 py-0.5 rounded-full text-white"
                                   style={{ background: c.cuadra ? "#3E9B6F" : "#C0392B" }}
                                 >
                                   {c.cuadra ? "✔ Cuadra" : "Revisar"}
@@ -311,11 +315,11 @@ export function CierreCaja() {
                                     ⚠ Falta cierre físico
                                   </span>
                                 )}
-                                <label className="flex items-center gap-1.5 text-xs text-gray-500 ml-2">
-                                  <input type="checkbox" checked={!!revisiones[claveRev]} onChange={() => toggleRevisado(c.fecha)} />
-                                  Revisé el cierre físico
-                                </label>
                               </div>
+                              <label className="flex items-center gap-1.5 text-xs text-gray-500 pt-1.5 border-t border-gray-100">
+                                <input type="checkbox" checked={!!revisiones[claveRev]} onChange={() => toggleRevisado(c.fecha)} />
+                                Revisé el cierre físico
+                              </label>
                             </div>
                           );
                         })}
