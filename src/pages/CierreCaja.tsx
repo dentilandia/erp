@@ -496,8 +496,26 @@ function FormularioCierre({
   const [form, setForm] = useState<FormCierre>(FORM_VACIO);
   const [addiDetalleAuto, setAddiDetalleAuto] = useState<{ paciente: string; valor: number; medio: string }[]>([]);
   const [subiendoDoc, setSubiendoDoc] = useState<string | null>(null);
+  const [procesandoIA, setProcesandoIA] = useState(false);
+  const [errorIA, setErrorIA] = useState<string | null>(null);
 
   const existente = cierres.find((c) => c.fecha === fecha) ?? null;
+
+  async function procesarConIA() {
+    if (!existente) return;
+    setProcesandoIA(true);
+    setErrorIA(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("procesar-cierre-ia", { body: { cierre_id: existente.id } });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Error desconocido procesando el cierre.");
+      onGuardado();
+    } catch (e) {
+      setErrorIA(e instanceof Error ? e.message : "No se pudo procesar el cierre con IA.");
+    } finally {
+      setProcesandoIA(false);
+    }
+  }
 
   async function facturadoDesdeErp() {
     const { data: pagosData } = await supabase
@@ -764,6 +782,56 @@ function FormularioCierre({
               </div>
             )}
           </div>
+
+          {existente && (existente.url_recibos_caja || existente.url_movimientos_banco || existente.url_tirilla_datafono || existente.url_reporte_datafono) && (
+            <div className="rounded-lg border border-dashed border-gray-300 p-3 space-y-2">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <p className="text-xs font-medium text-gray-500">
+                  Claude puede leer los documentos de arriba y sugerir los totales reales
+                </p>
+                <button
+                  onClick={procesarConIA}
+                  disabled={procesandoIA}
+                  className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-[var(--acento)] text-white disabled:opacity-40"
+                >
+                  {procesandoIA ? "Procesando…" : "✨ Procesar con IA"}
+                </button>
+              </div>
+              {errorIA && <p className="text-xs text-red-600">{errorIA}</p>}
+              {existente.analisis_ia && (
+                <div className="rounded-lg bg-gray-50 p-3 text-sm space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">Efectivo real (IA)</span>
+                    <span>{existente.analisis_ia.efectivo_real === null ? "—" : fmtCOP(existente.analisis_ia.efectivo_real)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">Datáfono real (IA)</span>
+                    <span>{existente.analisis_ia.datafono_real === null ? "—" : fmtCOP(existente.analisis_ia.datafono_real)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">Banco consignado (IA)</span>
+                    <span>{existente.analisis_ia.banco_consignado === null ? "—" : fmtCOP(existente.analisis_ia.banco_consignado)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">Diferencia efectivo</span>
+                    <span className={existente.analisis_ia.diferencia_efectivo ? "text-red-600 font-medium" : ""}>
+                      {existente.analisis_ia.diferencia_efectivo === null ? "—" : fmtCOP(existente.analisis_ia.diferencia_efectivo)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">Diferencia datáfono</span>
+                    <span className={existente.analisis_ia.diferencia_datafono ? "text-red-600 font-medium" : ""}>
+                      {existente.analisis_ia.diferencia_datafono === null ? "—" : fmtCOP(existente.analisis_ia.diferencia_datafono)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 pt-1 border-t border-gray-200">{existente.analisis_ia.resumen}</p>
+                  <p className="text-xs text-gray-400">
+                    Sugerencia de la IA — revísala y marca tú mismo el check "Cuadra" más abajo, no se marca sola.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-2">
             <label className="text-xs text-gray-500">

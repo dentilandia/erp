@@ -236,4 +236,16 @@ export interface CierreCaja {
   url_movimientos_banco: string | null;
   url_tirilla_datafono: string | null;
   url_reporte_datafono: string | null;
+  analisis_ia: AnalisisIA | null;
+}
+
+export interface AnalisisIA {
+  efectivo_real: number | null;
+  datafono_real: number | null;
+  banco_consignado: number | null;
+  diferencia_efectivo: number | null;
+  diferencia_datafono: number | null;
+  cuadra_sugerido: boolean;
+  resumen: string;
+  generado_en: string;
 }
