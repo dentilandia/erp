@@ -165,6 +165,8 @@ export interface CierreDiario {
   consignado: boolean;
   comprobante_url: string | null;
   fecha_consignacion: string | null;
+  entregado_admin: boolean;
+  fecha_entrega_admin: string | null;
   notas: string | null;
 }
 

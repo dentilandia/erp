@@ -116,7 +116,7 @@ export function CierreCaja() {
   const [tab, setTab] = useState<"dias" | "pendientes" | "reporte" | "hacer">("dias");
   const [detalle, setDetalle] = useState<CierreCajaRow | null>(null);
   const [mesesAbiertos, setMesesAbiertos] = useState<Set<string>>(new Set());
-  const [consignadosReales, setConsignadosReales] = useState<Record<string, boolean>>({});
+  const [consignadosReales, setConsignadosReales] = useState<Record<string, { consignado: boolean; entregado_admin: boolean }>>({});
   const [reporteDesde, setReporteDesde] = useState(() => new Date().toISOString().slice(0, 8) + "01");
   const [reporteHasta, setReporteHasta] = useState(() => new Date().toISOString().slice(0, 10));
 
@@ -138,9 +138,12 @@ export function CierreCaja() {
     // Estado real de "Día consignado", tal como lo marca Operación Diaria en Cierre
     // diario — reemplaza el texto libre de nota_banco_extra del histórico importado,
     // que no se actualiza con los días nuevos y por eso mostraba "Sin verificar" mal.
-    const { data: consignadosData } = await supabase.from("cierres_diarios").select("fecha, consignado").eq("sede_id", sedeActiva.id);
-    const mapaConsignado: Record<string, boolean> = {};
-    (consignadosData ?? []).forEach((r) => (mapaConsignado[r.fecha] = r.consignado));
+    const { data: consignadosData } = await supabase
+      .from("cierres_diarios")
+      .select("fecha, consignado, entregado_admin")
+      .eq("sede_id", sedeActiva.id);
+    const mapaConsignado: Record<string, { consignado: boolean; entregado_admin: boolean }> = {};
+    (consignadosData ?? []).forEach((r) => (mapaConsignado[r.fecha] = { consignado: r.consignado, entregado_admin: r.entregado_admin }));
     setConsignadosReales(mapaConsignado);
 
     setMesesAbiertos((prev) => {
@@ -294,7 +297,9 @@ export function CierreCaja() {
                     {abierto && (
                       <div className="border-t border-gray-100 p-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                         {dias.map((c) => {
-                          const consignado = consignadosReales[c.fecha] ?? false;
+                          const estadoOperacion = consignadosReales[c.fecha];
+                          const consignado = estadoOperacion?.consignado ?? false;
+                          const entregadoAdmin = estadoOperacion?.entregado_admin ?? false;
                           const claveRev = `${c.fecha}|${claveSede}`;
                           const { corta, diaSemana } = fechaTarjeta(c.fecha);
                           return (
@@ -320,9 +325,9 @@ export function CierreCaja() {
                                 )}
                                 <span
                                   className="text-xs font-semibold px-2 py-0.5 rounded-full text-white"
-                                  style={{ background: consignado ? "#009F98" : "#8A8D91" }}
+                                  style={{ background: consignado ? "#009F98" : entregadoAdmin ? "#5C7EAA" : "#8A8D91" }}
                                 >
-                                  💰 {consignado ? "Consignado" : "Sin verificar"}
+                                  💰 {consignado ? "Consignado" : entregadoAdmin ? "Entregado a admin" : "Sin verificar"}
                                 </span>
                                 {c.consignacion_cuenta2 && (
                                   <span className="text-xs font-semibold px-2 py-0.5 rounded-full text-white" style={{ background: "#7B5AA6" }}>
@@ -1020,6 +1025,7 @@ async function verDocumentoCierre(path: string) {
 interface CierreOperacion {
   consignado: boolean;
   comprobante_url: string | null;
+  entregado_admin: boolean;
   porMedio: Record<string, number>;
 }
 
@@ -1045,7 +1051,7 @@ function DetalleModal({
       setCargandoOperacion(true);
       const { data: cierreDiario } = await supabase
         .from("cierres_diarios")
-        .select("consignado, comprobante_url")
+        .select("consignado, comprobante_url, entregado_admin")
         .eq("sede_id", sedeActiva.id)
         .eq("fecha", cierre.fecha)
         .maybeSingle();
@@ -1076,6 +1082,7 @@ function DetalleModal({
       setOperacion({
         consignado: cierreDiario?.consignado ?? false,
         comprobante_url: cierreDiario?.comprobante_url ?? null,
+        entregado_admin: cierreDiario?.entregado_admin ?? false,
         porMedio,
       });
       setCargandoOperacion(false);
@@ -1151,6 +1158,8 @@ function DetalleModal({
             <span>
               Consignado desde Operación Diaria:{" "}
               <span className="font-medium">{operacion?.consignado ? "Sí" : "No"}</span>
+              {" · "}Entregado a admin:{" "}
+              <span className="font-medium">{operacion?.entregado_admin ? "Sí" : "No"}</span>
             </span>
             {operacion?.comprobante_url && (
               <button

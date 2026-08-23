@@ -137,6 +137,8 @@ export function CierreDiario() {
         consignado: cierre?.consignado ?? false,
         comprobante_url: cierre?.comprobante_url ?? null,
         fecha_consignacion: cierre?.fecha_consignacion ?? null,
+        entregado_admin: cierre?.entregado_admin ?? false,
+        fecha_entrega_admin: cierre?.fecha_entrega_admin ?? null,
       },
       { onConflict: "sede_id,fecha" },
     );
@@ -157,6 +159,31 @@ export function CierreDiario() {
           consignado,
           fecha_consignacion: consignado ? today() : null,
           comprobante_url: cierre?.comprobante_url ?? null,
+          entregado_admin: cierre?.entregado_admin ?? false,
+          fecha_entrega_admin: cierre?.fecha_entrega_admin ?? null,
+        },
+        { onConflict: "sede_id,fecha" },
+      )
+      .select("*")
+      .single()
+      .then(({ data }) => setCierre((data as CierreDiarioRow) ?? null));
+  }
+
+  async function marcarEntregadoAdmin(entregado: boolean) {
+    // A diferencia de "Día consignado", esta opción no exige comprobante —
+    // es para cuando el efectivo se entrega en mano a la administración.
+    await supabase
+      .from("cierres_diarios")
+      .upsert(
+        {
+          sede_id: sedeActiva.id,
+          fecha,
+          gasto: Number(gasto) || 0,
+          consignado: cierre?.consignado ?? false,
+          comprobante_url: cierre?.comprobante_url ?? null,
+          fecha_consignacion: cierre?.fecha_consignacion ?? null,
+          entregado_admin: entregado,
+          fecha_entrega_admin: entregado ? today() : null,
         },
         { onConflict: "sede_id,fecha" },
       )
@@ -183,6 +210,9 @@ export function CierreDiario() {
           gasto: Number(gasto) || 0,
           consignado: cierre?.consignado ?? false,
           comprobante_url: path,
+          fecha_consignacion: cierre?.fecha_consignacion ?? null,
+          entregado_admin: cierre?.entregado_admin ?? false,
+          fecha_entrega_admin: cierre?.fecha_entrega_admin ?? null,
         },
         { onConflict: "sede_id,fecha" },
       )
@@ -265,6 +295,7 @@ export function CierreDiario() {
             <p>Gasto del día: ${fmtCOP(Number(gasto) || 0)}</p>
             <p><strong>Total efectivo (Cierre): ${fmtCOP(totalEfectivoCierre)}</strong></p>
             <p>Día consignado: ${cierre?.consignado ? "Sí" : "No"}</p>
+            <p>Entregado a la administración: ${cierre?.entregado_admin ? "Sí" : "No"}</p>
           </div>
           <div class="vouchers">Adjuntar aquí los vouchers del datafono y demás soportes físicos del día.</div>
           <div class="firma">
@@ -402,29 +433,42 @@ export function CierreDiario() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-center justify-between">
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={cierre?.consignado ?? false} onChange={(e) => marcarConsignado(e.target.checked)} />
-          Día consignado
-        </label>
-        <div className="flex items-center gap-3">
-          {cierre?.comprobante_url && (
-            <button
-              onClick={() => verComprobante(cierre.comprobante_url!)}
-              className="text-sm text-[var(--acento)] font-medium underline"
-            >
-              Ver comprobante
-            </button>
-          )}
-          <label className="flex items-center gap-2 text-sm text-[var(--acento)] font-medium cursor-pointer">
-            <Paperclip size={14} />
-            {subiendo ? "Subiendo…" : cierre?.comprobante_url ? "Reemplazar" : "Adjuntar comprobante"}
-            <input
-              type="file"
-              className="hidden"
-              onChange={(e) => e.target.files?.[0] && subirComprobante(e.target.files[0])}
-            />
+      <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={cierre?.consignado ?? false} onChange={(e) => marcarConsignado(e.target.checked)} />
+            Día consignado
           </label>
+          <div className="flex items-center gap-3">
+            {cierre?.comprobante_url && (
+              <button
+                onClick={() => verComprobante(cierre.comprobante_url!)}
+                className="text-sm text-[var(--acento)] font-medium underline"
+              >
+                Ver comprobante
+              </button>
+            )}
+            <label className="flex items-center gap-2 text-sm text-[var(--acento)] font-medium cursor-pointer">
+              <Paperclip size={14} />
+              {subiendo ? "Subiendo…" : cierre?.comprobante_url ? "Reemplazar" : "Adjuntar comprobante"}
+              <input
+                type="file"
+                className="hidden"
+                onChange={(e) => e.target.files?.[0] && subirComprobante(e.target.files[0])}
+              />
+            </label>
+          </div>
+        </div>
+        <div className="flex items-center justify-between pt-3 border-t border-gray-100">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={cierre?.entregado_admin ?? false}
+              onChange={(e) => marcarEntregadoAdmin(e.target.checked)}
+            />
+            Entregado a la administración
+          </label>
+          <span className="text-xs text-gray-400">No necesita comprobante adjunto</span>
         </div>
       </div>
     </div>
