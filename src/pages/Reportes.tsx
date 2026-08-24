@@ -241,6 +241,9 @@ export function Reportes() {
   const barrasPacientes: BarraItem[] = filas
     .map((f) => ({ id: `${f.sedeId}-${f.doctora}`, label: f.doctora, valor: f.pacientes, color: sedeColor[f.sedeId] ?? "#2E253A" }))
     .sort((a, b) => b.valor - a.valor);
+  const barrasPromedio: BarraItem[] = filas
+    .map((f) => ({ id: `${f.sedeId}-${f.doctora}`, label: f.doctora, valor: f.promedio, color: sedeColor[f.sedeId] ?? "#2E253A" }))
+    .sort((a, b) => b.valor - a.valor);
 
   function setPreset(dias: number) {
     const hoy = new Date();
@@ -332,6 +335,12 @@ export function Reportes() {
         ) : (
           <BarrasHorizontales datos={barrasPacientes} formatear={(n) => `${n}`} />
         )}
+      </section>
+
+      <section className="bg-white rounded-xl border border-gray-200 p-4">
+        <h2 className="font-semibold text-tinta mb-1">Facturación promedio por doctora</h2>
+        <p className="text-xs text-gray-400 mb-3">Facturación total de la doctora dividida entre sus pacientes atendidos (ticket promedio).</p>
+        {cargando ? <p className="text-sm text-gray-400">Cargando…</p> : <BarrasHorizontales datos={barrasPromedio} formatear={fmtCOP} />}
       </section>
 
       {!sedeFiltro && sedes.length > 1 && (
