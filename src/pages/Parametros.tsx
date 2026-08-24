@@ -16,6 +16,8 @@ const ETIQUETAS_PRECIOS: Record<string, string> = {
   traccion_extraoral: "Tracción extra oral",
   rx: "RX",
   gum: "GUM",
+  caja_aparato: "Caja aparato",
+  llave_aparato: "Llave de aparato",
   porcentaje_honorario: "% honorario doctora (Odontopediatra)",
 };
 

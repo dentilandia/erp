@@ -15,7 +15,11 @@ import {
 } from "../../lib/types";
 import { PacienteAutocomplete } from "../../components/PacienteAutocomplete";
 
-const CONCEPTO_PRECIO_CLAVE: Record<string, string> = { GUM: "gum" };
+const CONCEPTO_PRECIO_CLAVE: Record<string, string> = {
+  GUM: "gum",
+  "Caja aparato": "caja_aparato",
+  "Llave de aparato": "llave_aparato",
+};
 
 interface VisitaRow {
   id: string;
