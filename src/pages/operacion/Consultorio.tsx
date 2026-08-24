@@ -112,7 +112,9 @@ export function Consultorio() {
     const t = setTimeout(async () => {
       const { data } = await supabase
         .from("lab_ordenes")
-        .select("id, paciente_id, doctora_id, tipo_servicio, pacientes!inner(nombre), laboratorios(nombre), doctoras(nombre, color_pastel)")
+        .select(
+          "id, paciente_id, doctora_id, tipo_servicio, pacientes!inner(nombre), laboratorios(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre, color_pastel)",
+        )
         .eq("sede_id", sedeActiva.id)
         .eq("estado", "recibido")
         .ilike("pacientes.nombre", `%${buscarInstalar.trim()}%`);

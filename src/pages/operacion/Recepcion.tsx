@@ -420,6 +420,7 @@ function ModalCobro({
   const [visitaFecha, setVisitaFecha] = useState(today());
   const [tratamiento, setTratamiento] = useState("");
   const [proximaCita, setProximaCita] = useState("");
+  const [observacion, setObservacion] = useState("");
   const [insumos, setInsumos] = useState<Record<string, boolean>>({});
   const [insumosOriginales, setInsumosOriginales] = useState<string[]>([]);
   const [cargos, setCargos] = useState<CargoEdit[]>([]);
@@ -440,7 +441,7 @@ function ModalCobro({
     (async () => {
       const { data: visita } = await supabase
         .from("visitas")
-        .select("id, estado, fecha, paciente_id, motivo_valor_cero, tratamiento, proxima_cita, pacientes(nombre)")
+        .select("id, estado, fecha, paciente_id, motivo_valor_cero, tratamiento, proxima_cita, observacion, pacientes(nombre)")
         .eq("id", visitaId)
         .single();
       if (!visita) return;
@@ -452,6 +453,7 @@ function ModalCobro({
         motivo_valor_cero: string | null;
         tratamiento: string | null;
         proxima_cita: string | null;
+        observacion: string | null;
         pacientes: { nombre: string };
       };
       setPacienteId(v.paciente_id);
@@ -460,6 +462,7 @@ function ModalCobro({
       setVisitaFecha(v.fecha);
       setTratamiento(v.tratamiento ?? "");
       setProximaCita(v.proxima_cita ?? "");
+      setObservacion(v.observacion ?? "");
       setMotivoCero(v.motivo_valor_cero ?? "");
 
       const { data: cargosData } = await supabase
@@ -678,6 +681,7 @@ function ModalCobro({
           estado: "cobrado",
           motivo_valor_cero: cargos.length === 0 ? motivoCero.trim() : null,
           proxima_cita: proximaCita || null,
+          observacion: observacion.trim() || null,
           updated_at: new Date().toISOString(),
         })
         .eq("id", visitaId);
@@ -739,6 +743,16 @@ function ModalCobro({
                 value={proximaCita}
                 onChange={(e) => setProximaCita(e.target.value)}
                 placeholder="Nota de consultorio, o la fecha ya agendada"
+                className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+              />
+            </div>
+
+            <div className="mb-3">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Observación</label>
+              <input
+                value={observacion}
+                onChange={(e) => setObservacion(e.target.value)}
+                placeholder="Ej: no agendó cita, quedó pendiente de llamar…"
                 className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
               />
             </div>

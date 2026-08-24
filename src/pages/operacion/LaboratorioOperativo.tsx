@@ -79,7 +79,7 @@ export function LaboratorioOperativo() {
     let q = supabase
       .from("lab_ordenes")
       .select(
-        "id, estado, fecha_envio, factura_numero, consecutivo, valor_factura, fecha_emision_factura, fecha_recibido, mes_liquidacion, doctora_id, laboratorio_id, paciente_id, tipo_servicio, pacientes(nombre), doctoras(nombre), laboratorios(nombre)",
+        "id, estado, fecha_envio, factura_numero, consecutivo, valor_factura, fecha_emision_factura, fecha_recibido, mes_liquidacion, doctora_id, laboratorio_id, paciente_id, tipo_servicio, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), laboratorios(nombre)",
       )
       .eq("sede_id", sedeActiva.id)
       .order("fecha_envio", { ascending: false });

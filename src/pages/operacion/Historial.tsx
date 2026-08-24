@@ -11,6 +11,7 @@ interface VisitaRow {
   tratamiento: string | null;
   doctora_id: string;
   remision_especialidad: string | null;
+  observacion: string | null;
   pacientes: { nombre: string };
   doctoras: { nombre: string; color_pastel: string };
   cargos: { categoria: string; valor: number; cargo_pagos: { valor: number }[] }[];
@@ -39,7 +40,7 @@ export function Historial() {
       let q = supabase
         .from("visitas")
         .select(
-          `id, fecha, estado, tratamiento, doctora_id, remision_especialidad, ${pacientesSelect}, doctoras(nombre, color_pastel), cargos(categoria, valor, cargo_pagos(valor)), ${insumosSelect}`,
+          `id, fecha, estado, tratamiento, doctora_id, remision_especialidad, observacion, ${pacientesSelect}, doctoras(nombre, color_pastel), cargos(categoria, valor, cargo_pagos(valor)), ${insumosSelect}`,
         )
         .eq("sede_id", sedeActiva.id)
         .gte("fecha", desde)
@@ -118,6 +119,11 @@ export function Historial() {
                 {v.remision_especialidad && (
                   <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
                     Remitido: {v.remision_especialidad}
+                  </span>
+                )}
+                {v.observacion && (
+                  <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                    {v.observacion}
                   </span>
                 )}
                 {v.insumos_consulta?.map((i, idx) => (
