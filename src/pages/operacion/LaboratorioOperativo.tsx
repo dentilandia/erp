@@ -48,6 +48,9 @@ export function LaboratorioOperativo() {
   const [editDoctoraId, setEditDoctoraId] = useState("");
   const [editLaboratorioId, setEditLaboratorioId] = useState("");
   const [editTipoServicio, setEditTipoServicio] = useState("");
+  const [editFacturaNumero, setEditFacturaNumero] = useState("");
+  const [editValorFactura, setEditValorFactura] = useState("");
+  const [editFechaEmision, setEditFechaEmision] = useState("");
   const [guardandoEdit, setGuardandoEdit] = useState(false);
 
   const [mostrarForm, setMostrarForm] = useState(false);
@@ -125,14 +128,25 @@ export function LaboratorioOperativo() {
     setEditDoctoraId(o.doctora_id);
     setEditLaboratorioId(o.laboratorio_id);
     setEditTipoServicio(o.tipo_servicio);
+    setEditFacturaNumero(o.factura_numero ?? o.consecutivo ?? "");
+    setEditValorFactura(o.valor_factura === null ? "" : String(o.valor_factura));
+    setEditFechaEmision(o.fecha_emision_factura ?? "");
   }
 
-  async function guardarEdicion(id: string) {
+  async function guardarEdicion(id: string, tieneFactura: boolean) {
     setGuardandoEdit(true);
-    await supabase
-      .from("lab_ordenes")
-      .update({ doctora_id: editDoctoraId, laboratorio_id: editLaboratorioId, tipo_servicio: editTipoServicio })
-      .eq("id", id);
+    const cambios: Record<string, unknown> = {
+      doctora_id: editDoctoraId,
+      laboratorio_id: editLaboratorioId,
+      tipo_servicio: editTipoServicio,
+    };
+    if (tieneFactura) {
+      cambios.factura_numero = editFacturaNumero.trim() || null;
+      cambios.consecutivo = editFacturaNumero.trim() || null;
+      cambios.valor_factura = editValorFactura === "" ? null : Number(editValorFactura);
+      cambios.fecha_emision_factura = editFechaEmision || null;
+    }
+    await supabase.from("lab_ordenes").update(cambios).eq("id", id);
     setGuardandoEdit(false);
     setEditandoId(null);
     cargarOrdenes();
@@ -354,8 +368,33 @@ export function LaboratorioOperativo() {
                             </option>
                           ))}
                         </select>
+                      </div>
+                      {o.estado !== "enviado" && (
+                        <div className="flex gap-2 flex-wrap">
+                          <input
+                            value={editFacturaNumero}
+                            onChange={(e) => setEditFacturaNumero(e.target.value)}
+                            placeholder="Consecutivo de la factura"
+                            className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                          />
+                          <input
+                            type="number"
+                            value={editValorFactura}
+                            onChange={(e) => setEditValorFactura(e.target.value)}
+                            placeholder="Valor de la factura"
+                            className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                          />
+                          <input
+                            type="date"
+                            value={editFechaEmision}
+                            onChange={(e) => setEditFechaEmision(e.target.value)}
+                            className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                          />
+                        </div>
+                      )}
+                      <div className="flex gap-2">
                         <button
-                          onClick={() => guardarEdicion(o.id)}
+                          onClick={() => guardarEdicion(o.id, o.estado !== "enviado")}
                           disabled={guardandoEdit}
                           className="flex items-center gap-1 rounded-md bg-[var(--acento)] text-white px-3 text-sm font-medium disabled:opacity-40"
                         >
