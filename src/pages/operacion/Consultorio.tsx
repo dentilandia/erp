@@ -37,9 +37,43 @@ export function Consultorio() {
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
   const [filtroDoctora, setFiltroDoctora] = useState("");
 
+  const [mostrarReporteDoctora, setMostrarReporteDoctora] = useState(false);
+  const [doctoraReporteId, setDoctoraReporteId] = useState("");
+  const [reporteDesde, setReporteDesde] = useState(() => today().slice(0, 8) + "01");
+  const [reporteHasta, setReporteHasta] = useState(today());
+  const [filasReporte, setFilasReporte] = useState<{ fecha: string; total: number }[]>([]);
+  const [cargandoReporte, setCargandoReporte] = useState(false);
+
   useEffect(() => {
     supabase.from("doctoras").select("*").order("nombre").then(({ data }) => setDoctoras((data as Doctora[]) ?? []));
   }, []);
+
+  useEffect(() => {
+    if (!mostrarReporteDoctora || !doctoraReporteId) {
+      setFilasReporte([]);
+      return;
+    }
+    (async () => {
+      setCargandoReporte(true);
+      const { data } = await supabase
+        .from("cargo_pagos")
+        .select("valor, cargos!inner(categoria, doctora_id, sede_id, fecha)")
+        .eq("cargos.sede_id", sedeActiva.id)
+        .eq("cargos.doctora_id", doctoraReporteId)
+        .eq("cargos.categoria", "procedimiento")
+        .gte("cargos.fecha", reporteDesde)
+        .lte("cargos.fecha", reporteHasta);
+      const filas = (data as unknown as { valor: number; cargos: { fecha: string } }[]) ?? [];
+      const porFecha: Record<string, number> = {};
+      for (const f of filas) porFecha[f.cargos.fecha] = (porFecha[f.cargos.fecha] ?? 0) + Number(f.valor);
+      setFilasReporte(
+        Object.entries(porFecha)
+          .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+          .map(([fecha, total]) => ({ fecha, total })),
+      );
+      setCargandoReporte(false);
+    })();
+  }, [mostrarReporteDoctora, doctoraReporteId, reporteDesde, reporteHasta, sedeActiva.id]);
 
   async function cargarEnEspera() {
     const { data } = await supabase
@@ -174,6 +208,78 @@ export function Consultorio() {
         <p className="text-xs text-gray-400 mt-2">
           Diseño provisional — Tomás la va a revisar y ajustar antes del piloto.
         </p>
+      </section>
+
+      <section className="bg-white rounded-xl border border-gray-200 p-4">
+        {!mostrarReporteDoctora ? (
+          <button
+            onClick={() => setMostrarReporteDoctora(true)}
+            className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]"
+          >
+            <Plus size={16} /> Reporte de facturación por doctora
+          </button>
+        ) : (
+          <>
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <h3 className="font-semibold text-tinta">Reporte de facturación por doctora</h3>
+              <button onClick={() => setMostrarReporteDoctora(false)}>
+                <X size={16} className="text-gray-400" />
+              </button>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap mb-3">
+              <select
+                value={doctoraReporteId}
+                onChange={(e) => setDoctoraReporteId(e.target.value)}
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              >
+                <option value="">Selecciona una doctora</option>
+                {doctoras.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.nombre}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="date"
+                value={reporteDesde}
+                onChange={(e) => setReporteDesde(e.target.value)}
+                className="rounded-lg border border-gray-300 px-2 py-2 text-sm"
+              />
+              <span className="text-xs text-gray-400">a</span>
+              <input
+                type="date"
+                value={reporteHasta}
+                onChange={(e) => setReporteHasta(e.target.value)}
+                className="rounded-lg border border-gray-300 px-2 py-2 text-sm"
+              />
+            </div>
+            <p className="text-xs text-gray-400 mb-2">
+              Solo cuenta el procedimiento/tratamiento (no RX ni conceptos administrativos), incluyendo lo pagado con
+              saldo a favor, Addi, Sistecrédito y cualquier otro medio.
+            </p>
+            {cargandoReporte ? (
+              <p className="text-sm text-gray-400">Cargando…</p>
+            ) : !doctoraReporteId ? (
+              <p className="text-sm text-gray-400">Selecciona una doctora para ver su facturación día por día.</p>
+            ) : (
+              <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">
+                {filasReporte.map((f) => (
+                  <div key={f.fecha} className="flex items-center justify-between px-3 py-2 text-sm">
+                    <span>{f.fecha}</span>
+                    <span className="font-medium">{fmtCOP(f.total)}</span>
+                  </div>
+                ))}
+                {filasReporte.length === 0 && <p className="px-3 py-3 text-sm text-gray-400">Sin facturación en este rango.</p>}
+                {filasReporte.length > 0 && (
+                  <div className="flex items-center justify-between px-3 py-2 text-sm font-semibold bg-gray-50">
+                    <span>Total del rango</span>
+                    <span>{fmtCOP(filasReporte.reduce((a, f) => a + f.total, 0))}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
       </section>
 
       {atendiendoId && (

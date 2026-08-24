@@ -13,6 +13,8 @@ import {
   Settings,
   Paperclip,
   Landmark,
+  Building2,
+  BarChart3,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -29,10 +31,15 @@ const TABS = [
 
 const SECCIONES = [
   { to: "/operacion/recepcion", match: "/operacion", label: "Operación Diaria", icon: LayoutGrid },
-  { to: "/liquidaciones", match: "/liquidaciones", label: "Liquidaciones", icon: Receipt },
-  { to: "/financiacion", match: "/financiacion", label: "Financiación", icon: CreditCard },
-  { to: "/cierre-caja", match: "/cierre-caja", label: "Cierre de Caja", icon: Landmark },
+  { to: "/administracion/liquidaciones", match: "/administracion", label: "Administración", icon: Building2 },
   { to: "/parametros", match: "/parametros", label: "Parámetros", icon: Settings },
+];
+
+const ADMIN_TABS = [
+  { to: "/administracion/liquidaciones", label: "Liquidaciones", icon: Receipt },
+  { to: "/administracion/financiacion", label: "Financiación", icon: CreditCard },
+  { to: "/administracion/cierre-caja", label: "Cierre de Caja", icon: Landmark },
+  { to: "/administracion/reportes", label: "Reportes", icon: BarChart3 },
 ];
 
 /** Sede sobre la que trabaja la pantalla: fija si el perfil es de operación,
@@ -72,6 +79,7 @@ export function Layout() {
   const { sedeActiva, sedes, setSedeAdminId, esAdmin, errorSedes } = useSedeActiva();
   const location = useLocation();
   const enOperacion = location.pathname.startsWith("/operacion");
+  const enAdministracion = location.pathname.startsWith("/administracion");
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -151,6 +159,26 @@ export function Layout() {
       {enOperacion && (
         <nav className="flex gap-1 px-4 py-2 bg-white border-b border-gray-200 overflow-x-auto">
           {TABS.map((t) => (
+            <NavLink
+              key={t.to}
+              to={t.to}
+              className={({ isActive }) =>
+                `flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${
+                  isActive ? "text-white" : "text-gray-500 hover:bg-gray-100"
+                }`
+              }
+              style={({ isActive }) => (isActive ? { background: "#2E253A" } : {})}
+            >
+              <t.icon size={16} />
+              {t.label}
+            </NavLink>
+          ))}
+        </nav>
+      )}
+
+      {enAdministracion && (
+        <nav className="flex gap-1 px-4 py-2 bg-white border-b border-gray-200 overflow-x-auto">
+          {ADMIN_TABS.map((t) => (
             <NavLink
               key={t.to}
               to={t.to}
