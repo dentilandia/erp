@@ -34,8 +34,24 @@ export function PacienteAutocomplete({ onSelect, placeholder }: Props) {
 
   async function crearPaciente() {
     const nombre = query.trim();
-    if (!nombre || coincidenciaExacta) return;
+    if (!nombre) return;
     setCreando(true);
+    // Verificación al momento de crear (no solo contra la búsqueda ya mostrada):
+    // si se escribe el nombre completo rápido, la búsqueda con debounce puede no
+    // haber alcanzado a traer el resultado todavía y coincidenciaExacta da falso
+    // negativo — esto evita crear un duplicado en esa carrera.
+    const { data: existente } = await supabase
+      .from("pacientes")
+      .select("id, nombre, telefono")
+      .ilike("nombre", nombre)
+      .limit(1)
+      .maybeSingle();
+    if (existente) {
+      window.alert(`Ya existe un paciente con el nombre exacto "${existente.nombre}" — selecciónalo de la lista en vez de crear uno nuevo.`);
+      setResultados([existente as Paciente]);
+      setCreando(false);
+      return;
+    }
     const { data, error } = await supabase
       .from("pacientes")
       .insert({ nombre })
