@@ -119,7 +119,7 @@ function LiquidacionDoctoras({ mes, sedeId }: { mes: string; sedeId: string }) {
 
       let qLabs = supabase
         .from("lab_ordenes")
-        .select("doctora_id, sede_id, valor_factura, mes_liquidacion, fecha_emision_factura, fecha_recibido")
+        .select("doctora_id, doctora_instala_id, tipo_servicio, sede_id, valor_factura, mes_liquidacion, fecha_emision_factura, fecha_recibido")
         .not("valor_factura", "is", null);
       if (sedeId) qLabs = qLabs.eq("sede_id", sedeId);
       const { data: labsData } = await qLabs;
@@ -127,7 +127,15 @@ function LiquidacionDoctoras({ mes, sedeId }: { mes: string; sedeId: string }) {
       for (const l of labsData ?? []) {
         const fechaComparar = l.mes_liquidacion ?? l.fecha_emision_factura ?? l.fecha_recibido;
         if (!fechaComparar || fechaComparar < periodo.inicio || fechaComparar > periodo.fin) continue;
-        labsPorDoctora[l.doctora_id] = (labsPorDoctora[l.doctora_id] ?? 0) + Number(l.valor_factura);
+        const valor = Number(l.valor_factura);
+        // Fabricación con doctora de instalación distinta a quien tomó la impresión
+        // se reparte 50/50; en reparación (o sin doctora_instala_id) va completo a doctora_id.
+        if (l.tipo_servicio === "fabricacion" && l.doctora_instala_id && l.doctora_instala_id !== l.doctora_id) {
+          labsPorDoctora[l.doctora_id] = (labsPorDoctora[l.doctora_id] ?? 0) + valor / 2;
+          labsPorDoctora[l.doctora_instala_id] = (labsPorDoctora[l.doctora_instala_id] ?? 0) + valor / 2;
+        } else {
+          labsPorDoctora[l.doctora_id] = (labsPorDoctora[l.doctora_id] ?? 0) + valor;
+        }
       }
 
       const nuevasFilas: FilaDoctora[] = ((doctoras as Doctora[]) ?? [])
@@ -279,6 +287,7 @@ interface FilaLab {
   fecha: string | null;
   paciente: string;
   doctora: string;
+  doctoraInstala: string | null;
   laboratorio: string;
   tipo_servicio: string;
   factura_numero: string | null;
@@ -296,7 +305,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
       let q = supabase
         .from("lab_ordenes")
         .select(
-          "id, sede_id, mes_liquidacion, fecha_emision_factura, fecha_recibido, valor_factura, factura_numero, tipo_servicio, pacientes(nombre), doctoras(nombre), laboratorios(nombre)",
+          "id, sede_id, mes_liquidacion, fecha_emision_factura, fecha_recibido, valor_factura, factura_numero, tipo_servicio, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), doctora_instala:doctoras!lab_ordenes_doctora_instala_id_fkey(nombre), laboratorios(nombre)",
         )
         .not("valor_factura", "is", null);
       if (sedeId) q = q.eq("sede_id", sedeId);
@@ -304,7 +313,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
       const filtradas = ((data as unknown as {
         id: string; mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; valor_factura: number;
         factura_numero: string | null; tipo_servicio: string;
-        pacientes: { nombre: string } | null; doctoras: { nombre: string } | null; laboratorios: { nombre: string } | null;
+        pacientes: { nombre: string } | null; doctoras: { nombre: string } | null; doctora_instala: { nombre: string } | null; laboratorios: { nombre: string } | null;
       }[]) ?? []).filter((r) => {
         const f = r.mes_liquidacion ?? r.fecha_emision_factura ?? r.fecha_recibido;
         return f && f >= periodo.inicio && f <= periodo.fin;
@@ -315,6 +324,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
           fecha: r.mes_liquidacion ?? r.fecha_emision_factura ?? r.fecha_recibido,
           paciente: r.pacientes?.nombre ?? "—",
           doctora: r.doctoras?.nombre ?? "—",
+          doctoraInstala: r.doctora_instala?.nombre ?? null,
           laboratorio: r.laboratorios?.nombre ?? "—",
           tipo_servicio: r.tipo_servicio,
           factura_numero: r.factura_numero,
@@ -336,8 +346,17 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
   function exportar() {
     descargarCSV(
       `liquidacion-laboratorios-${mes}.csv`,
-      ["Fecha", "Paciente", "Doctora", "Laboratorio", "Tipo servicio", "Factura", "Valor"],
-      filas.map((f) => [f.fecha ?? "", f.paciente, f.doctora, f.laboratorio, f.tipo_servicio, f.factura_numero ?? "", f.valor_factura]),
+      ["Fecha", "Paciente", "Doctora", "Doctora instala (50/50)", "Laboratorio", "Tipo servicio", "Factura", "Valor"],
+      filas.map((f) => [
+        f.fecha ?? "",
+        f.paciente,
+        f.doctora,
+        f.doctoraInstala ?? "",
+        f.laboratorio,
+        f.tipo_servicio,
+        f.factura_numero ?? "",
+        f.valor_factura,
+      ]),
     );
   }
 
@@ -369,7 +388,10 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
               <tr key={f.id} className="border-t border-gray-100">
                 <td className="px-3 py-2">{f.fecha}</td>
                 <td className="px-3 py-2">{f.paciente}</td>
-                <td className="px-3 py-2">{f.doctora}</td>
+                <td className="px-3 py-2">
+                  {f.doctora}
+                  {f.doctoraInstala && <span className="text-gray-400"> + {f.doctoraInstala} (50/50)</span>}
+                </td>
                 <td className="px-3 py-2">{f.laboratorio}</td>
                 <td className="px-3 py-2">{f.tipo_servicio}</td>
                 <td className="px-3 py-2">{f.factura_numero ?? "—"}</td>

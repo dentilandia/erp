@@ -143,6 +143,7 @@ export interface LabOrden {
   visita_id: string | null;
   sede_id: string;
   doctora_id: string;
+  doctora_instala_id: string | null;
   paciente_id: string;
   laboratorio_id: string;
   tipo_servicio: string;

@@ -15,6 +15,7 @@ interface VisitaRow {
 interface LabPendienteInstalar {
   id: string;
   paciente_id: string;
+  doctora_id: string;
   pacientes: { nombre: string };
   laboratorios: { nombre: string };
   doctoras: { nombre: string; color_pastel: string };
@@ -25,6 +26,8 @@ interface EnvioLab {
   laboratorioId: string;
   laboratorioNombre: string;
   tipoServicio: string;
+  doctoraId: string;
+  doctoraNombre: string;
 }
 
 export function Consultorio() {
@@ -36,6 +39,7 @@ export function Consultorio() {
   const [pendientesInstalar, setPendientesInstalar] = useState<LabPendienteInstalar[]>([]);
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
   const [filtroDoctora, setFiltroDoctora] = useState("");
+  const [doctoraInstalaPorOrden, setDoctoraInstalaPorOrden] = useState<Record<string, string>>({});
 
   const [mostrarReporteDoctora, setMostrarReporteDoctora] = useState(false);
   const [doctoraReporteId, setDoctoraReporteId] = useState("");
@@ -108,7 +112,7 @@ export function Consultorio() {
     const t = setTimeout(async () => {
       const { data } = await supabase
         .from("lab_ordenes")
-        .select("id, paciente_id, tipo_servicio, pacientes!inner(nombre), laboratorios(nombre), doctoras(nombre, color_pastel)")
+        .select("id, paciente_id, doctora_id, tipo_servicio, pacientes!inner(nombre), laboratorios(nombre), doctoras(nombre, color_pastel)")
         .eq("sede_id", sedeActiva.id)
         .eq("estado", "recibido")
         .ilike("pacientes.nombre", `%${buscarInstalar.trim()}%`);
@@ -117,9 +121,21 @@ export function Consultorio() {
     return () => clearTimeout(t);
   }, [buscarInstalar, sedeActiva.id]);
 
-  async function marcarInstalado(id: string) {
-    await supabase.from("lab_ordenes").update({ estado: "instalado", fecha_instalado: today() }).eq("id", id);
-    setPendientesInstalar((prev) => prev.filter((p) => p.id !== id));
+  async function marcarInstalado(p: LabPendienteInstalar) {
+    const doctoraInstala = doctoraInstalaPorOrden[p.id] ?? p.doctora_id;
+    const cambios: Record<string, unknown> = { estado: "instalado", fecha_instalado: today() };
+    if (doctoraInstala !== p.doctora_id) {
+      if (p.tipo_servicio === "reparacion") {
+        // En reparación no se divide: el pago es completo para quien instala.
+        cambios.doctora_id = doctoraInstala;
+      } else {
+        // En fabricación, si quien instala es distinta de quien tomó la impresión
+        // (doctora_id), el laboratorio se divide 50/50 entre las dos.
+        cambios.doctora_instala_id = doctoraInstala;
+      }
+    }
+    await supabase.from("lab_ordenes").update(cambios).eq("id", p.id);
+    setPendientesInstalar((prev) => prev.filter((x) => x.id !== p.id));
   }
 
   return (
@@ -179,7 +195,7 @@ export function Consultorio() {
         </div>
         <div className="space-y-1.5">
           {pendientesInstalar.map((p) => (
-            <div key={p.id} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm">
+            <div key={p.id} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm flex-wrap gap-2">
               <span className="flex items-center gap-2">
                 <span>
                   {p.pacientes?.nombre} <span className="text-gray-400">· {p.laboratorios?.nombre} · {p.tipo_servicio}</span>
@@ -193,12 +209,26 @@ export function Consultorio() {
                   </span>
                 )}
               </span>
-              <button
-                onClick={() => marcarInstalado(p.id)}
-                className="flex items-center gap-1 text-[var(--acento)] font-medium text-xs"
-              >
-                <CheckCircle2 size={14} /> Instalar
-              </button>
+              <div className="flex items-center gap-2">
+                <select
+                  value={doctoraInstalaPorOrden[p.id] ?? p.doctora_id}
+                  onChange={(e) => setDoctoraInstalaPorOrden((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                  title="Doctora que instala (si es distinta a quien lo envió)"
+                  className="rounded-md border border-gray-300 px-2 py-1 text-xs"
+                >
+                  {doctoras.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.nombre}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => marcarInstalado(p)}
+                  className="flex items-center gap-1 text-[var(--acento)] font-medium text-xs"
+                >
+                  <CheckCircle2 size={14} /> Instalar
+                </button>
+              </div>
             </div>
           ))}
           {buscarInstalar.trim().length >= 2 && pendientesInstalar.length === 0 && (
@@ -206,6 +236,11 @@ export function Consultorio() {
           )}
         </div>
         <p className="text-xs text-gray-400 mt-2">
+          El selector junto a "Instalar" ya trae la doctora que envió el aparato — cámbialo solo si quien instala es
+          otra. En fabricación, si cambias la doctora, el laboratorio se reparte 50/50 entre las dos; en reparación no
+          se reparte, el pago completo pasa a quien instala.
+        </p>
+        <p className="text-xs text-gray-400 mt-1">
           Diseño provisional — Tomás la va a revisar y ajustar antes del piloto.
         </p>
       </section>
@@ -286,6 +321,7 @@ export function Consultorio() {
         <ModalAtencion
           visitaId={atendiendoId}
           sedeId={sedeActiva.id}
+          doctoras={doctoras}
           onClose={() => setAtendiendoId(null)}
           onGuardado={() => {
             setAtendiendoId(null);
@@ -300,11 +336,13 @@ export function Consultorio() {
 function ModalAtencion({
   visitaId,
   sedeId,
+  doctoras,
   onClose,
   onGuardado,
 }: {
   visitaId: string;
   sedeId: string;
+  doctoras: Doctora[];
   onClose: () => void;
   onGuardado: () => void;
 }) {
@@ -320,6 +358,7 @@ function ModalAtencion({
   const [laboratorios, setLaboratorios] = useState<Laboratorio[]>([]);
   const [laboratorioId, setLaboratorioId] = useState("");
   const [tipoServicio, setTipoServicio] = useState(TIPOS_SERVICIO_LAB[0].value);
+  const [envioDoctoraId, setEnvioDoctoraId] = useState("");
   const [enviosLab, setEnviosLab] = useState<EnvioLab[]>([]);
   const [remitido, setRemitido] = useState(false);
   const [remisionEspecialidad, setRemisionEspecialidad] = useState("");
@@ -327,8 +366,10 @@ function ModalAtencion({
 
   useEffect(() => {
     (async () => {
-      const { data: v } = await supabase.from("visitas").select("pacientes(nombre)").eq("id", visitaId).single();
-      setPacienteNombre((v as unknown as { pacientes: { nombre: string } })?.pacientes?.nombre ?? "");
+      const { data: v } = await supabase.from("visitas").select("pacientes(nombre), doctora_id").eq("id", visitaId).single();
+      const visita = v as unknown as { pacientes: { nombre: string }; doctora_id: string } | null;
+      setPacienteNombre(visita?.pacientes?.nombre ?? "");
+      setEnvioDoctoraId(visita?.doctora_id ?? "");
       const { data: preciosData } = await supabase.from("precios_config").select("clave, valor");
       const map: Record<string, number> = {};
       (preciosData ?? []).forEach((p) => (map[p.clave] = Number(p.valor)));
@@ -343,8 +384,12 @@ function ModalAtencion({
 
   function agregarEnvioLab() {
     const lab = laboratorios.find((l) => l.id === laboratorioId);
-    if (!lab) return;
-    setEnviosLab((prev) => [...prev, { laboratorioId, laboratorioNombre: lab.nombre, tipoServicio }]);
+    const doctora = doctoras.find((d) => d.id === envioDoctoraId);
+    if (!lab || !doctora) return;
+    setEnviosLab((prev) => [
+      ...prev,
+      { laboratorioId, laboratorioNombre: lab.nombre, tipoServicio, doctoraId: doctora.id, doctoraNombre: doctora.nombre },
+    ]);
   }
 
   function quitarEnvioLab(idx: number) {
@@ -389,7 +434,7 @@ function ModalAtencion({
       await supabase.from("lab_ordenes").insert({
         visita_id: visitaId,
         sede_id: sedeId,
-        doctora_id: visita.doctora_id,
+        doctora_id: envio.doctoraId,
         paciente_id: visita.paciente_id,
         laboratorio_id: envio.laboratorioId,
         tipo_servicio: envio.tipoServicio,
@@ -512,7 +557,7 @@ function ModalAtencion({
                   {enviosLab.map((e, idx) => (
                     <div key={idx} className="flex items-center justify-between rounded-md bg-gray-50 px-2 py-1.5 text-sm">
                       <span>
-                        {e.laboratorioNombre} · {TIPOS_SERVICIO_LAB.find((t) => t.value === e.tipoServicio)?.label}
+                        {e.laboratorioNombre} · {TIPOS_SERVICIO_LAB.find((t) => t.value === e.tipoServicio)?.label} · {e.doctoraNombre}
                       </span>
                       <button onClick={() => quitarEnvioLab(idx)}>
                         <X size={14} className="text-gray-400" />
@@ -521,11 +566,11 @@ function ModalAtencion({
                   ))}
                 </div>
               )}
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <select
                   value={laboratorioId}
                   onChange={(e) => setLaboratorioId(e.target.value)}
-                  className="flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                  className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1 text-sm"
                 >
                   {laboratorios.map((l) => (
                     <option key={l.id} value={l.id}>
@@ -536,11 +581,23 @@ function ModalAtencion({
                 <select
                   value={tipoServicio}
                   onChange={(e) => setTipoServicio(e.target.value)}
-                  className="flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                  className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1 text-sm"
                 >
                   {TIPOS_SERVICIO_LAB.map((t) => (
                     <option key={t.value} value={t.value}>
                       {t.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={envioDoctoraId}
+                  onChange={(e) => setEnvioDoctoraId(e.target.value)}
+                  title="Doctora que envía (puede ser distinta a quien atiende hoy)"
+                  className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1 text-sm"
+                >
+                  {doctoras.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.nombre}
                     </option>
                   ))}
                 </select>
@@ -549,7 +606,8 @@ function ModalAtencion({
                 </button>
               </div>
               <p className="text-xs text-gray-400">
-                Agrega uno por cada aparato (ej. si va superior e inferior, agrega los dos).
+                Agrega uno por cada aparato (ej. si va superior e inferior, agrega los dos). La doctora puede ser
+                distinta a quien atiende hoy — por defecto trae la de la visita.
               </p>
             </div>
           )}
