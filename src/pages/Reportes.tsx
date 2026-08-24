@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { fmtCOP } from "../lib/format";
+import { fmtCOP, today } from "../lib/format";
+import type { Sede } from "../lib/types";
 
 interface FilaProductividad {
   sedeId: string;
@@ -18,33 +19,178 @@ interface FilaSaldoFavor {
   fecha: string;
 }
 
+interface BarraItem {
+  id: string;
+  label: string;
+  valor: number;
+  color: string;
+}
+
+function inicioDeMes() {
+  return new Date().toISOString().slice(0, 8) + "01";
+}
+
+/** Barras horizontales — para comparar pocas categorías (doctoras, sedes) con
+ *  el valor exacto siempre visible al final de la barra. */
+function BarrasHorizontales({ datos, formatear }: { datos: BarraItem[]; formatear: (n: number) => string }) {
+  const max = Math.max(1, ...datos.map((d) => d.valor));
+  if (datos.length === 0) return <p className="text-sm text-gray-400">Sin datos en este rango.</p>;
+  return (
+    <div className="space-y-2">
+      {datos.map((d) => (
+        <div key={d.id} className="flex items-center gap-2">
+          <span className="w-28 sm:w-36 shrink-0 text-xs text-gray-500 truncate" title={d.label}>
+            {d.label}
+          </span>
+          <div className="flex-1 h-5 bg-gray-100 rounded-full overflow-hidden">
+            <div className="h-full rounded-full" style={{ width: `${(d.valor / max) * 100}%`, background: d.color }} />
+          </div>
+          <span className="w-24 sm:w-28 shrink-0 text-xs text-right font-semibold text-tinta">{formatear(d.valor)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Una sola barra horizontal apilada — para el reparto sede/Dentilandia
+ *  (part-to-whole de solo 2 categorías: más preciso que una torta). */
+function BarraApiladaSedes({ segmentos }: { segmentos: { id: string; nombre: string; valor: number; color: string }[] }) {
+  const total = segmentos.reduce((a, s) => a + s.valor, 0);
+  if (total <= 0) return <p className="text-sm text-gray-400">Sin datos.</p>;
+  return (
+    <div className="space-y-2">
+      <div className="flex w-full h-6 rounded-full overflow-hidden">
+        {segmentos.map((s, i) => {
+          const pct = (s.valor / total) * 100;
+          if (pct <= 0) return null;
+          return (
+            <div
+              key={s.id}
+              style={{
+                width: `${pct}%`,
+                background: s.color,
+                borderRight: i < segmentos.length - 1 ? "2px solid white" : undefined,
+              }}
+            />
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+        {segmentos.map((s) => (
+          <span key={s.id} className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full inline-block shrink-0" style={{ background: s.color }} />
+            {s.nombre}: <span className="font-semibold text-tinta">{fmtCOP(s.valor)}</span> ({((s.valor / total) * 100).toFixed(1)}%)
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Histograma de barras verticales con tooltip al pasar el mouse — para la
+ *  tendencia de facturación día a día (puede haber muchos días). */
+function Histograma({ datos, color }: { datos: { fecha: string; valor: number }[]; color: string }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const ancho = 600;
+  const alto = 160;
+  const margenInferior = 4;
+  const max = Math.max(1, ...datos.map((d) => d.valor));
+  const n = Math.max(1, datos.length);
+  const anchoSlot = ancho / n;
+  const anchoBarra = Math.max(1, Math.min(24, anchoSlot - 3));
+
+  if (datos.length === 0) return <p className="text-sm text-gray-400">Sin datos en este rango.</p>;
+
+  return (
+    <div className="relative">
+      <svg viewBox={`0 0 ${ancho} ${alto}`} className="w-full h-40" preserveAspectRatio="none">
+        <line x1={0} y1={alto - margenInferior} x2={ancho} y2={alto - margenInferior} stroke="#e5e7eb" strokeWidth={1} />
+        {datos.map((d, i) => {
+          const h = d.valor > 0 ? Math.max(2, (d.valor / max) * (alto - margenInferior - 6)) : 0;
+          const x = i * anchoSlot + (anchoSlot - anchoBarra) / 2;
+          const y = alto - margenInferior - h;
+          return (
+            <rect
+              key={d.fecha}
+              x={x}
+              y={y}
+              width={anchoBarra}
+              height={h}
+              rx={2}
+              fill={color}
+              opacity={hover === null || hover === i ? 1 : 0.55}
+              onMouseEnter={() => setHover(i)}
+              onMouseLeave={() => setHover((h2) => (h2 === i ? null : h2))}
+            />
+          );
+        })}
+      </svg>
+      {hover !== null && datos[hover] && (
+        <div
+          className="absolute -top-1 bg-tinta text-white text-xs rounded-md px-2 py-1 pointer-events-none whitespace-nowrap -translate-x-1/2"
+          style={{ left: `${Math.min(94, Math.max(6, ((hover + 0.5) / n) * 100))}%` }}
+        >
+          {datos[hover].fecha} · {fmtCOP(datos[hover].valor)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Reportes() {
-  const [desde, setDesde] = useState(() => new Date().toISOString().slice(0, 8) + "01");
-  const [hasta, setHasta] = useState(() => new Date().toISOString().slice(0, 10));
+  const [sedes, setSedes] = useState<Sede[]>([]);
+  const [sedeFiltro, setSedeFiltro] = useState("");
+  const [desde, setDesde] = useState(inicioDeMes);
+  const [hasta, setHasta] = useState(today);
   const [cargando, setCargando] = useState(true);
   const [filas, setFilas] = useState<FilaProductividad[]>([]);
+  const [serieDiaria, setSerieDiaria] = useState<{ fecha: string; valor: number }[]>([]);
 
   const [cargandoSaldos, setCargandoSaldos] = useState(true);
-  const [saldosPorSede, setSaldosPorSede] = useState<{ sede: string; total: number }[]>([]);
+  const [saldosPorSede, setSaldosPorSede] = useState<{ sedeId: string; sede: string; total: number }[]>([]);
   const [totalSaldoGeneral, setTotalSaldoGeneral] = useState(0);
   const [topSaldos, setTopSaldos] = useState<FilaSaldoFavor[]>([]);
 
   useEffect(() => {
+    supabase
+      .from("sedes")
+      .select("id, nombre, color_acento")
+      .order("nombre")
+      .then(({ data }) => setSedes((data as Sede[]) ?? []));
+  }, []);
+
+  const sedeColor: Record<string, string> = useMemo(() => Object.fromEntries(sedes.map((s) => [s.id, s.color_acento])), [sedes]);
+
+  useEffect(() => {
     (async () => {
       setCargando(true);
-      const [{ data: sedesData }, { data: doctorasData }, { data: visitasData }, { data: pagosData }] = await Promise.all([
-        supabase.from("sedes").select("id, nombre"),
+      let qVisitas = supabase.from("visitas").select("sede_id, doctora_id").eq("estado", "cobrado").gte("fecha", desde).lte("fecha", hasta);
+      let qPagos = supabase
+        .from("cargo_pagos")
+        .select("valor, cargos!inner(categoria, sede_id, doctora_id, fecha)")
+        .eq("cargos.categoria", "procedimiento")
+        .gte("cargos.fecha", desde)
+        .lte("cargos.fecha", hasta);
+      let qSerie = supabase
+        .from("cargo_pagos")
+        .select("valor, cargos!inner(categoria, sede_id, fecha)")
+        .eq("cargos.categoria", "procedimiento")
+        .gte("cargos.fecha", desde)
+        .lte("cargos.fecha", hasta);
+      if (sedeFiltro) {
+        qVisitas = qVisitas.eq("sede_id", sedeFiltro);
+        qPagos = qPagos.eq("cargos.sede_id", sedeFiltro);
+        qSerie = qSerie.eq("cargos.sede_id", sedeFiltro);
+      }
+
+      const [{ data: doctorasData }, { data: visitasData }, { data: pagosData }, { data: serieData }] = await Promise.all([
         supabase.from("doctoras").select("id, nombre"),
-        supabase.from("visitas").select("sede_id, doctora_id").eq("estado", "cobrado").gte("fecha", desde).lte("fecha", hasta),
-        supabase
-          .from("cargo_pagos")
-          .select("valor, cargos!inner(categoria, sede_id, doctora_id, fecha)")
-          .eq("cargos.categoria", "procedimiento")
-          .gte("cargos.fecha", desde)
-          .lte("cargos.fecha", hasta),
+        qVisitas,
+        qPagos,
+        qSerie,
       ]);
 
-      const sedeNombre: Record<string, string> = Object.fromEntries(((sedesData as { id: string; nombre: string }[]) ?? []).map((s) => [s.id, s.nombre]));
+      const sedeNombre: Record<string, string> = Object.fromEntries(sedes.map((s) => [s.id, s.nombre]));
       const doctoraNombre: Record<string, string> = Object.fromEntries(
         ((doctorasData as { id: string; nombre: string }[]) ?? []).map((d) => [d.id, d.nombre]),
       );
@@ -77,26 +223,43 @@ export function Reportes() {
       });
       filasCalc.sort((a, b) => a.sede.localeCompare(b.sede) || b.total - a.total);
       setFilas(filasCalc);
+
+      const porDia: Record<string, number> = {};
+      for (const p of (serieData as unknown as { valor: number; cargos: { fecha: string } }[]) ?? []) {
+        porDia[p.cargos.fecha] = (porDia[p.cargos.fecha] ?? 0) + Number(p.valor);
+      }
+      setSerieDiaria(
+        Object.entries(porDia)
+          .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+          .map(([fecha, valor]) => ({ fecha, valor })),
+      );
+
       setCargando(false);
     })();
-  }, [desde, hasta]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desde, hasta, sedeFiltro, sedes.length]);
 
   useEffect(() => {
     (async () => {
       setCargandoSaldos(true);
-      const { data } = await supabase
-        .from("saldos_favor")
-        .select("valor_disponible, fecha, sedes(nombre), pacientes(nombre)")
-        .gt("valor_disponible", 0);
+      let q = supabase.from("saldos_favor").select("valor_disponible, fecha, sede_origen_id, sedes(nombre), pacientes(nombre)").gt("valor_disponible", 0);
+      if (sedeFiltro) q = q.eq("sede_origen_id", sedeFiltro);
+      const { data } = await q;
       const saldosFilas =
-        (data as unknown as { valor_disponible: number; fecha: string; sedes: { nombre: string } | null; pacientes: { nombre: string } | null }[]) ?? [];
+        (data as unknown as {
+          valor_disponible: number;
+          fecha: string;
+          sede_origen_id: string;
+          sedes: { nombre: string } | null;
+          pacientes: { nombre: string } | null;
+        }[]) ?? [];
 
-      const porSede: Record<string, number> = {};
+      const porSede: Record<string, { sede: string; total: number }> = {};
       for (const s of saldosFilas) {
-        const sede = s.sedes?.nombre ?? "—";
-        porSede[sede] = (porSede[sede] ?? 0) + Number(s.valor_disponible);
+        porSede[s.sede_origen_id] = porSede[s.sede_origen_id] ?? { sede: s.sedes?.nombre ?? "—", total: 0 };
+        porSede[s.sede_origen_id].total += Number(s.valor_disponible);
       }
-      setSaldosPorSede(Object.entries(porSede).map(([sede, total]) => ({ sede, total })));
+      setSaldosPorSede(Object.entries(porSede).map(([sedeId, v]) => ({ sedeId, sede: v.sede, total: v.total })));
       setTotalSaldoGeneral(saldosFilas.reduce((a, s) => a + Number(s.valor_disponible), 0));
       setTopSaldos(
         [...saldosFilas]
@@ -106,7 +269,7 @@ export function Reportes() {
       );
       setCargandoSaldos(false);
     })();
-  }, []);
+  }, [sedeFiltro]);
 
   const gruposPorSede = useMemo(() => {
     const map: Record<string, FilaProductividad[]> = {};
@@ -120,22 +283,123 @@ export function Reportes() {
   const totalGeneralPacientes = filas.reduce((a, f) => a + f.pacientes, 0);
   const totalGeneralFacturado = filas.reduce((a, f) => a + f.total, 0);
 
+  const barrasFacturacion: BarraItem[] = filas
+    .map((f) => ({ id: `${f.sedeId}-${f.doctora}`, label: f.doctora, valor: f.total, color: sedeColor[f.sedeId] ?? "#2E253A" }))
+    .sort((a, b) => b.valor - a.valor);
+  const barrasPacientes: BarraItem[] = filas
+    .map((f) => ({ id: `${f.sedeId}-${f.doctora}`, label: f.doctora, valor: f.pacientes, color: sedeColor[f.sedeId] ?? "#2E253A" }))
+    .sort((a, b) => b.valor - a.valor);
+
+  function setPreset(dias: number) {
+    const hoy = new Date();
+    const inicio = new Date(hoy);
+    inicio.setDate(hoy.getDate() - (dias - 1));
+    setDesde(inicio.toISOString().slice(0, 10));
+    setHasta(hoy.toISOString().slice(0, 10));
+  }
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <section className="bg-white rounded-xl border border-gray-200 p-4">
-        <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
-          <h2 className="font-semibold text-tinta">Pacientes atendidos y facturación por sede y doctora</h2>
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              onClick={() => setSedeFiltro("")}
+              className="text-xs font-semibold px-3 py-1.5 rounded-full border-2 transition-colors"
+              style={{
+                background: sedeFiltro === "" ? "#2E253A" : "transparent",
+                borderColor: "#2E253A",
+                color: sedeFiltro === "" ? "#ffffff" : "#2E253A",
+              }}
+            >
+              Todas las sedes
+            </button>
+            {sedes.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setSedeFiltro(s.id)}
+                className="text-xs font-semibold px-3 py-1.5 rounded-full border-2 transition-colors"
+                style={{
+                  background: sedeFiltro === s.id ? s.color_acento : "transparent",
+                  borderColor: s.color_acento,
+                  color: sedeFiltro === s.id ? "#ffffff" : s.color_acento,
+                }}
+              >
+                {s.nombre}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button onClick={() => setPreset(7)} className="text-xs font-medium px-2.5 py-1 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200">
+              7 días
+            </button>
+            <button onClick={() => setPreset(30)} className="text-xs font-medium px-2.5 py-1 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200">
+              30 días
+            </button>
+            <button
+              onClick={() => {
+                setDesde(inicioDeMes());
+                setHasta(today());
+              }}
+              className="text-xs font-medium px-2.5 py-1 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200"
+            >
+              Este mes
+            </button>
             <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" />
             <span className="text-xs text-gray-400">a</span>
             <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" />
           </div>
         </div>
-        <p className="text-xs text-gray-400 mb-3">
-          Pacientes atendidos = visitas cobradas en el rango. Facturación = solo procedimiento/tratamiento (no RX ni
-          conceptos administrativos), incluye saldo a favor, Addi, Sistecrédito y cualquier otro medio.
-        </p>
+      </section>
 
+      <section className="bg-white rounded-xl border border-gray-200 p-4">
+        <h2 className="font-semibold text-tinta mb-1">Facturación por doctora</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Solo procedimiento/tratamiento (no RX ni conceptos administrativos); incluye saldo a favor, Addi, Sistecrédito
+          y cualquier otro medio.
+        </p>
+        {cargando ? <p className="text-sm text-gray-400">Cargando…</p> : <BarrasHorizontales datos={barrasFacturacion} formatear={fmtCOP} />}
+      </section>
+
+      <section className="bg-white rounded-xl border border-gray-200 p-4">
+        <h2 className="font-semibold text-tinta mb-3">Pacientes atendidos por doctora</h2>
+        {cargando ? (
+          <p className="text-sm text-gray-400">Cargando…</p>
+        ) : (
+          <BarrasHorizontales datos={barrasPacientes} formatear={(n) => `${n}`} />
+        )}
+      </section>
+
+      {!sedeFiltro && sedes.length > 1 && (
+        <section className="bg-white rounded-xl border border-gray-200 p-4">
+          <h2 className="font-semibold text-tinta mb-3">Peso de cada sede en el consolidado Dentilandia</h2>
+          {cargando ? (
+            <p className="text-sm text-gray-400">Cargando…</p>
+          ) : (
+            <BarraApiladaSedes
+              segmentos={Object.entries(gruposPorSede).map(([sede, filasSede]) => ({
+                id: sede,
+                nombre: sede,
+                valor: filasSede.reduce((a, f) => a + f.total, 0),
+                color: sedeColor[filasSede[0]?.sedeId] ?? "#2E253A",
+              }))}
+            />
+          )}
+        </section>
+      )}
+
+      <section className="bg-white rounded-xl border border-gray-200 p-4">
+        <h2 className="font-semibold text-tinta mb-3">Facturación por día (tendencia)</h2>
+        {cargando ? (
+          <p className="text-sm text-gray-400">Cargando…</p>
+        ) : (
+          <Histograma datos={serieDiaria} color={sedeFiltro ? sedeColor[sedeFiltro] ?? "#2E253A" : "#2E253A"} />
+        )}
+      </section>
+
+      <section className="bg-white rounded-xl border border-gray-200 p-4">
+        <h2 className="font-semibold text-tinta mb-1">Detalle por sede y doctora</h2>
+        <p className="text-xs text-gray-400 mb-3">La tabla que sustenta las gráficas de arriba, con el peso porcentual de cada doctora.</p>
         {cargando ? (
           <p className="text-sm text-gray-400">Cargando…</p>
         ) : filas.length === 0 ? (
@@ -151,7 +415,8 @@ export function Reportes() {
                   <div className="flex items-center justify-between px-3 py-2 bg-gray-50 text-sm font-semibold flex-wrap gap-2">
                     <span>{sede}</span>
                     <span>
-                      {pacientesSede} pacientes · {fmtCOP(totalSede)} · {pctSedeDentilandia.toFixed(1)}% de Dentilandia
+                      {pacientesSede} pacientes · {fmtCOP(totalSede)}
+                      {!sedeFiltro && ` · ${pctSedeDentilandia.toFixed(1)}% de Dentilandia`}
                     </span>
                   </div>
                   <div className="divide-y divide-gray-100">
@@ -165,8 +430,10 @@ export function Reportes() {
                             <span>{f.pacientes} pacientes</span>
                             <span className="text-tinta font-semibold">{fmtCOP(f.total)}</span>
                             <span>prom. {fmtCOP(f.promedio)}</span>
-                            <span>{pctSede.toFixed(1)}% de {sede}</span>
-                            <span>{pctDentilandia.toFixed(1)}% de Dentilandia</span>
+                            <span>
+                              {pctSede.toFixed(1)}% de {sede}
+                            </span>
+                            {!sedeFiltro && <span>{pctDentilandia.toFixed(1)}% de Dentilandia</span>}
                           </div>
                         </div>
                       );
@@ -189,7 +456,7 @@ export function Reportes() {
         <h2 className="font-semibold text-tinta mb-1">Saldo a favor pendiente por usar</h2>
         <p className="text-xs text-gray-400 mb-3">
           Plata que los pacientes ya pagaron por adelantado y todavía no han usado — es una obligación pendiente de la
-          clínica, no un ingreso disponible.
+          clínica, no un ingreso disponible. No depende del rango de fechas de arriba (es el saldo vigente ahora).
         </p>
         {cargandoSaldos ? (
           <p className="text-sm text-gray-400">Cargando…</p>
@@ -199,14 +466,14 @@ export function Reportes() {
               <span>Total pendiente</span>
               <span>{fmtCOP(totalSaldoGeneral)}</span>
             </div>
-            <div className="grid grid-cols-2 gap-2 mb-3">
-              {saldosPorSede.map((s) => (
-                <div key={s.sede} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm">
-                  <span className="text-gray-500">{s.sede}</span>
-                  <span className="font-medium">{fmtCOP(s.total)}</span>
-                </div>
-              ))}
-            </div>
+            {!sedeFiltro && saldosPorSede.length > 0 && (
+              <div className="mb-3">
+                <BarrasHorizontales
+                  datos={saldosPorSede.map((s) => ({ id: s.sedeId, label: s.sede, valor: s.total, color: sedeColor[s.sedeId] ?? "#2E253A" }))}
+                  formatear={fmtCOP}
+                />
+              </div>
+            )}
             {topSaldos.length > 0 && (
               <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">
                 <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 bg-gray-50">Pacientes con mayor saldo pendiente</div>
