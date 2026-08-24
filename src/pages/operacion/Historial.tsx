@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
@@ -55,6 +55,20 @@ export function Historial() {
     })();
   }, [sedeActiva.id, desde, hasta, doctoraId, soloRemisiones, insumoFiltro, buscarPaciente]);
 
+  // Facturación por día para control de honorarios: solo procedimiento/tratamiento
+  // (no RX ni conceptos administrativos), sin importar el medio de pago —
+  // incluye lo pagado con saldo a favor, porque ya es venta hecha de la doctora.
+  const resumenHonorarios = useMemo(() => {
+    if (!doctoraId) return [];
+    const porFecha: Record<string, number> = {};
+    for (const v of visitas) {
+      const totalProcedimiento = v.cargos.filter((c) => c.categoria === "procedimiento").reduce((a, c) => a + Number(c.valor), 0);
+      if (totalProcedimiento > 0) porFecha[v.fecha] = (porFecha[v.fecha] ?? 0) + totalProcedimiento;
+    }
+    return Object.entries(porFecha).sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  }, [visitas, doctoraId]);
+  const totalHonorarios = resumenHonorarios.reduce((a, [, v]) => a + v, 0);
+
   return (
     <div className="max-w-4xl mx-auto space-y-4">
       <div className="flex gap-3 flex-wrap items-center">
@@ -104,6 +118,34 @@ export function Historial() {
           ))}
         </select>
       </div>
+
+      {doctoraId && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <h3 className="font-semibold text-tinta mb-1">
+            Facturación por día — {doctoras.find((d) => d.id === doctoraId)?.nombre}
+          </h3>
+          <p className="text-xs text-gray-400 mb-3">
+            Solo procedimiento/tratamiento (no RX ni conceptos administrativos), incluye lo pagado con saldo a favor —
+            para el control de honorarios.
+          </p>
+          <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">
+            {resumenHonorarios.map(([fecha, total]) => (
+              <div key={fecha} className="flex items-center justify-between px-3 py-2 text-sm">
+                <span>{fecha}</span>
+                <span className="font-medium">{fmtCOP(total)}</span>
+              </div>
+            ))}
+            {resumenHonorarios.length === 0 && <p className="px-3 py-3 text-sm text-gray-400">Sin facturación en este rango.</p>}
+            {resumenHonorarios.length > 0 && (
+              <div className="flex items-center justify-between px-3 py-2 text-sm font-semibold bg-gray-50">
+                <span>Total del rango</span>
+                <span>{fmtCOP(totalHonorarios)}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
         {visitas.map((v) => {
           const totalCargos = v.cargos.reduce((a, c) => a + Number(c.valor), 0);
