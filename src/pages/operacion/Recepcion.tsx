@@ -724,6 +724,21 @@ function ModalCobro({
             <div className="rounded-lg bg-gray-50 px-3 py-2 mb-3">
               <p className="text-xs text-gray-500 mb-1.5">Insumos de aparatología entregados</p>
               <div className="flex flex-col gap-1">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={cargos.some((c) => c.categoria === "rx")}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        agregarRx();
+                      } else {
+                        const idx = cargos.findIndex((c) => c.categoria === "rx");
+                        if (idx !== -1) quitarCargo(idx);
+                      }
+                    }}
+                  />
+                  RX tomada {precios["rx"] ? `(${fmtCOP(precios["rx"])})` : ""}
+                </label>
                 {TIPOS_INSUMO_CONSULTA.map((t) => (
                   <label key={t.value} className="flex items-center gap-2 text-sm">
                     <input
@@ -826,15 +841,6 @@ function ModalCobro({
                 </div>
               ))}
             </div>
-
-            {!cargos.some((c) => c.categoria === "rx") && (
-              <button
-                onClick={agregarRx}
-                className="w-full flex items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 py-2 text-sm font-medium text-gray-500 mb-4 hover:bg-gray-50"
-              >
-                <Plus size={14} /> Agregar RX {precios["rx"] ? `(${fmtCOP(precios["rx"])})` : ""}
-              </button>
-            )}
 
             <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-4">
               <p className="text-xs font-medium text-gray-500 mb-2">Agregar concepto administrativo</p>
