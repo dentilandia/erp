@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Download, Check } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { fmtCOP, mesActual, periodoCiclo2625, periodoMesCompleto } from "../lib/format";
-import type { Doctora, Sede } from "../lib/types";
+import { TIPOS_INSUMO_CONSULTA, type Doctora, type Sede } from "../lib/types";
+
+const TIPOS_INSUMO_LABEL: Record<string, string> = Object.fromEntries(TIPOS_INSUMO_CONSULTA.map((t) => [t.value, t.label]));
 
 const CONCEPTOS_SEDACION = [
   "Anticipo sedación intravenosa",
@@ -68,7 +70,7 @@ export function Liquidaciones() {
         </div>
       </div>
 
-      {tab === "doctoras" && <LiquidacionDoctoras mes={mes} sedeId={sedeId} />}
+      {tab === "doctoras" && <LiquidacionDoctoras mes={mes} sedeId={sedeId} sedes={sedes} />}
       {tab === "laboratorios" && <LiquidacionLaboratorios mes={mes} sedeId={sedeId} />}
       {tab === "sedacion" && <LiquidacionSedacion mes={mes} sedeId={sedeId} />}
     </div>
@@ -79,17 +81,26 @@ export function Liquidaciones() {
 // Odontopediatra (doctoras)
 // ============================================================
 
+interface FilaDoctoraSede {
+  sedeId: string;
+  sedeNombre: string;
+  ventas: number;
+  labsInsumos: number;
+}
+
 interface FilaDoctora {
   doctora: Doctora;
   totalVentas: number;
   totalLaboratorios: number;
+  totalInsumos: number;
+  porSede: FilaDoctoraSede[];
   retencionTipo: "" | "voluntaria" | "depuracion";
   retencionValor: string;
   guardando: boolean;
   guardado: boolean;
 }
 
-function LiquidacionDoctoras({ mes, sedeId }: { mes: string; sedeId: string }) {
+function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: string; sedes: Sede[] }) {
   const periodo = useMemo(() => periodoCiclo2625(mes), [mes]);
   const [pctHonorario, setPctHonorario] = useState(30);
   const [filas, setFilas] = useState<FilaDoctora[]>([]);
@@ -103,6 +114,7 @@ function LiquidacionDoctoras({ mes, sedeId }: { mes: string; sedeId: string }) {
       setPctHonorario(pct);
 
       const { data: doctoras } = await supabase.from("doctoras").select("*").order("nombre");
+      const sedeNombre: Record<string, string> = Object.fromEntries(sedes.map((s) => [s.id, s.nombre]));
 
       let qPagos = supabase
         .from("cargo_pagos")
@@ -113,8 +125,12 @@ function LiquidacionDoctoras({ mes, sedeId }: { mes: string; sedeId: string }) {
       if (sedeId) qPagos = qPagos.eq("cargos.sede_id", sedeId);
       const { data: pagosData } = await qPagos;
       const ventasPorDoctora: Record<string, number> = {};
-      for (const p of (pagosData as unknown as { valor: number; cargos: { doctora_id: string } }[]) ?? []) {
-        ventasPorDoctora[p.cargos.doctora_id] = (ventasPorDoctora[p.cargos.doctora_id] ?? 0) + Number(p.valor);
+      const ventasPorDoctoraSede: Record<string, Record<string, number>> = {};
+      for (const p of (pagosData as unknown as { valor: number; cargos: { doctora_id: string; sede_id: string } }[]) ?? []) {
+        const { doctora_id, sede_id } = p.cargos;
+        ventasPorDoctora[doctora_id] = (ventasPorDoctora[doctora_id] ?? 0) + Number(p.valor);
+        ventasPorDoctoraSede[doctora_id] = ventasPorDoctoraSede[doctora_id] ?? {};
+        ventasPorDoctoraSede[doctora_id][sede_id] = (ventasPorDoctoraSede[doctora_id][sede_id] ?? 0) + Number(p.valor);
       }
 
       let qLabs = supabase
@@ -124,6 +140,12 @@ function LiquidacionDoctoras({ mes, sedeId }: { mes: string; sedeId: string }) {
       if (sedeId) qLabs = qLabs.eq("sede_id", sedeId);
       const { data: labsData } = await qLabs;
       const labsPorDoctora: Record<string, number> = {};
+      const labsInsumosPorDoctoraSede: Record<string, Record<string, number>> = {};
+      const sumarLabsInsumo = (doctoraId: string, sedeIdItem: string, valor: number) => {
+        labsPorDoctora[doctoraId] = (labsPorDoctora[doctoraId] ?? 0) + valor;
+        labsInsumosPorDoctoraSede[doctoraId] = labsInsumosPorDoctoraSede[doctoraId] ?? {};
+        labsInsumosPorDoctoraSede[doctoraId][sedeIdItem] = (labsInsumosPorDoctoraSede[doctoraId][sedeIdItem] ?? 0) + valor;
+      };
       for (const l of labsData ?? []) {
         const fechaComparar = l.mes_liquidacion ?? l.fecha_emision_factura ?? l.fecha_recibido;
         if (!fechaComparar || fechaComparar < periodo.inicio || fechaComparar > periodo.fin) continue;
@@ -131,23 +153,53 @@ function LiquidacionDoctoras({ mes, sedeId }: { mes: string; sedeId: string }) {
         // Fabricación con doctora de instalación distinta a quien tomó la impresión
         // se reparte 50/50; en reparación (o sin doctora_instala_id) va completo a doctora_id.
         if (l.tipo_servicio === "fabricacion" && l.doctora_instala_id && l.doctora_instala_id !== l.doctora_id) {
-          labsPorDoctora[l.doctora_id] = (labsPorDoctora[l.doctora_id] ?? 0) + valor / 2;
-          labsPorDoctora[l.doctora_instala_id] = (labsPorDoctora[l.doctora_instala_id] ?? 0) + valor / 2;
+          sumarLabsInsumo(l.doctora_id, l.sede_id, valor / 2);
+          sumarLabsInsumo(l.doctora_instala_id, l.sede_id, valor / 2);
         } else {
-          labsPorDoctora[l.doctora_id] = (labsPorDoctora[l.doctora_id] ?? 0) + valor;
+          sumarLabsInsumo(l.doctora_id, l.sede_id, valor);
         }
       }
 
+      // Insumos de aparatología (elásticos intraoral, tracción extra oral, máscara
+      // facial) también los paga la doctora al mismo % que su honorario, igual que
+      // los laboratorios — se suman a la misma base antes de aplicar el %.
+      let qInsumos = supabase
+        .from("insumos_consulta")
+        .select("valor_costo, visitas!inner(doctora_id, sede_id, fecha)")
+        .gte("visitas.fecha", periodo.inicio)
+        .lte("visitas.fecha", periodo.fin);
+      if (sedeId) qInsumos = qInsumos.eq("visitas.sede_id", sedeId);
+      const { data: insumosData } = await qInsumos;
+      const insumosPorDoctora: Record<string, number> = {};
+      for (const i of (insumosData as unknown as { valor_costo: number; visitas: { doctora_id: string; sede_id: string } }[]) ?? []) {
+        const { doctora_id, sede_id } = i.visitas;
+        const valor = Number(i.valor_costo);
+        insumosPorDoctora[doctora_id] = (insumosPorDoctora[doctora_id] ?? 0) + valor;
+        labsInsumosPorDoctoraSede[doctora_id] = labsInsumosPorDoctoraSede[doctora_id] ?? {};
+        labsInsumosPorDoctoraSede[doctora_id][sede_id] = (labsInsumosPorDoctoraSede[doctora_id][sede_id] ?? 0) + valor;
+      }
+
       const nuevasFilas: FilaDoctora[] = ((doctoras as Doctora[]) ?? [])
-        .filter((d) => (ventasPorDoctora[d.id] ?? 0) > 0 || (labsPorDoctora[d.id] ?? 0) > 0)
+        .filter((d) => (ventasPorDoctora[d.id] ?? 0) > 0 || (labsPorDoctora[d.id] ?? 0) > 0 || (insumosPorDoctora[d.id] ?? 0) > 0)
         .map((d) => {
           const totalVentas = ventasPorDoctora[d.id] ?? 0;
+          const totalLaboratorios = labsPorDoctora[d.id] ?? 0;
+          const totalInsumos = insumosPorDoctora[d.id] ?? 0;
           const bruto = totalVentas * (pct / 100);
           const retencionAuto = d.retencion_voluntaria_activa ? bruto * (Number(d.retencion_voluntaria_pct) / 100) : 0;
+          const sedeIds = new Set([...Object.keys(ventasPorDoctoraSede[d.id] ?? {}), ...Object.keys(labsInsumosPorDoctoraSede[d.id] ?? {})]);
+          const porSede: FilaDoctoraSede[] = Array.from(sedeIds).map((sid) => ({
+            sedeId: sid,
+            sedeNombre: sedeNombre[sid] ?? "—",
+            ventas: ventasPorDoctoraSede[d.id]?.[sid] ?? 0,
+            labsInsumos: labsInsumosPorDoctoraSede[d.id]?.[sid] ?? 0,
+          }));
           return {
             doctora: d,
             totalVentas,
-            totalLaboratorios: labsPorDoctora[d.id] ?? 0,
+            totalLaboratorios,
+            totalInsumos,
+            porSede,
             retencionTipo: d.retencion_voluntaria_activa ? "voluntaria" : "",
             retencionValor: retencionAuto ? String(Math.round(retencionAuto)) : "",
             guardando: false,
@@ -157,7 +209,7 @@ function LiquidacionDoctoras({ mes, sedeId }: { mes: string; sedeId: string }) {
       setFilas(nuevasFilas);
       setCargando(false);
     })();
-  }, [periodo.inicio, periodo.fin, sedeId]);
+  }, [periodo.inicio, periodo.fin, sedeId, sedes]);
 
   function actualizarFila(idx: number, cambios: Partial<FilaDoctora>) {
     setFilas((prev) => prev.map((f, i) => (i === idx ? { ...f, ...cambios } : f)));
@@ -166,8 +218,9 @@ function LiquidacionDoctoras({ mes, sedeId }: { mes: string; sedeId: string }) {
   async function guardarFila(idx: number) {
     const f = filas[idx];
     const bruto = f.totalVentas * (pctHonorario / 100);
+    const deduccion = (f.totalLaboratorios + f.totalInsumos) * (pctHonorario / 100);
     const retencion = Number(f.retencionValor) || 0;
-    const totalPago = bruto - f.totalLaboratorios - retencion;
+    const totalPago = bruto - deduccion - retencion;
     actualizarFila(idx, { guardando: true });
     const { data, error } = await supabase
       .from("liquidaciones_doctora")
@@ -180,6 +233,8 @@ function LiquidacionDoctoras({ mes, sedeId }: { mes: string; sedeId: string }) {
           porcentaje: pctHonorario,
           valor_bruto: bruto,
           total_laboratorios: f.totalLaboratorios,
+          total_insumos: f.totalInsumos,
+          deduccion_labs_insumos: deduccion,
           total_pago: totalPago,
           retencion_valor: retencion || null,
           retencion_tipo: retencion > 0 ? f.retencionTipo || "depuracion" : null,
@@ -211,14 +266,34 @@ function LiquidacionDoctoras({ mes, sedeId }: { mes: string; sedeId: string }) {
       </p>
       {filas.map((f, idx) => {
         const bruto = f.totalVentas * (pctHonorario / 100);
+        const totalLaboratoriosInsumos = f.totalLaboratorios + f.totalInsumos;
+        const deduccion = totalLaboratoriosInsumos * (pctHonorario / 100);
         const retencion = Number(f.retencionValor) || 0;
-        const totalPago = bruto - f.totalLaboratorios - retencion;
+        const totalPago = bruto - deduccion - retencion;
         return (
           <div key={f.doctora.id} className="bg-white rounded-xl border border-gray-200 p-4">
             <div className="flex items-center gap-2 mb-3">
               <span className="w-3 h-3 rounded-full shrink-0" style={{ background: f.doctora.color_pastel }} />
               <span className="font-semibold text-tinta">{f.doctora.nombre}</span>
             </div>
+
+            {!sedeId && f.porSede.length > 1 && (
+              <div className="rounded-lg border border-gray-200 divide-y divide-gray-100 mb-3">
+                <div className="grid grid-cols-3 gap-2 px-3 py-1.5 text-xs font-semibold text-gray-500 bg-gray-50">
+                  <span>Sede</span>
+                  <span className="text-right">Ventas</span>
+                  <span className="text-right">Labs + insumos (100%)</span>
+                </div>
+                {f.porSede.map((s) => (
+                  <div key={s.sedeId} className="grid grid-cols-3 gap-2 px-3 py-1.5 text-sm">
+                    <span>{s.sedeNombre}</span>
+                    <span className="text-right">{fmtCOP(s.ventas)}</span>
+                    <span className="text-right">{fmtCOP(s.labsInsumos)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-3">
               <div>
                 <p className="text-xs text-gray-400">Total ventas</p>
@@ -233,10 +308,14 @@ function LiquidacionDoctoras({ mes, sedeId }: { mes: string; sedeId: string }) {
                 <p className="font-medium">{fmtCOP(bruto)}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-400">Laboratorios</p>
-                <p className="font-medium">{fmtCOP(f.totalLaboratorios)}</p>
+                <p className="text-xs text-gray-400">Laboratorios + insumos (100%)</p>
+                <p className="font-medium">{fmtCOP(totalLaboratoriosInsumos)}</p>
               </div>
             </div>
+            <p className="text-xs text-gray-400 -mt-2 mb-3">
+              Laboratorios: {fmtCOP(f.totalLaboratorios)} · Insumos (elásticos/tracción/máscara): {fmtCOP(f.totalInsumos)} · Se
+              descuenta el {pctHonorario}% de esa suma: <span className="font-medium text-tinta">{fmtCOP(deduccion)}</span>
+            </p>
             <div className="flex items-end gap-2 flex-wrap mb-3">
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Retención</label>
@@ -286,6 +365,7 @@ interface FilaLab {
   id: string;
   fecha: string | null;
   paciente: string;
+  doctoraId: string;
   doctora: string;
   doctoraInstala: string | null;
   laboratorio: string;
@@ -294,10 +374,27 @@ interface FilaLab {
   valor_factura: number;
 }
 
+interface FilaInsumo {
+  id: string;
+  fecha: string;
+  paciente: string;
+  doctoraId: string;
+  doctora: string;
+  tipo: string;
+  valor: number;
+}
+
 function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string }) {
   const periodo = useMemo(() => periodoCiclo2625(mes), [mes]);
+  const [doctoras, setDoctoras] = useState<Doctora[]>([]);
+  const [doctoraId, setDoctoraId] = useState("");
   const [filas, setFilas] = useState<FilaLab[]>([]);
+  const [insumos, setInsumos] = useState<FilaInsumo[]>([]);
   const [cargando, setCargando] = useState(true);
+
+  useEffect(() => {
+    supabase.from("doctoras").select("*").order("nombre").then(({ data }) => setDoctoras((data as Doctora[]) ?? []));
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -305,14 +402,15 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
       let q = supabase
         .from("lab_ordenes")
         .select(
-          "id, sede_id, mes_liquidacion, fecha_emision_factura, fecha_recibido, valor_factura, factura_numero, tipo_servicio, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), doctora_instala:doctoras!lab_ordenes_doctora_instala_id_fkey(nombre), laboratorios(nombre)",
+          "id, sede_id, mes_liquidacion, fecha_emision_factura, fecha_recibido, valor_factura, factura_numero, tipo_servicio, doctora_id, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), doctora_instala:doctoras!lab_ordenes_doctora_instala_id_fkey(nombre), laboratorios(nombre)",
         )
         .not("valor_factura", "is", null);
       if (sedeId) q = q.eq("sede_id", sedeId);
+      if (doctoraId) q = q.or(`doctora_id.eq.${doctoraId},doctora_instala_id.eq.${doctoraId}`);
       const { data } = await q;
       const filtradas = ((data as unknown as {
         id: string; mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; valor_factura: number;
-        factura_numero: string | null; tipo_servicio: string;
+        factura_numero: string | null; tipo_servicio: string; doctora_id: string;
         pacientes: { nombre: string } | null; doctoras: { nombre: string } | null; doctora_instala: { nombre: string } | null; laboratorios: { nombre: string } | null;
       }[]) ?? []).filter((r) => {
         const f = r.mes_liquidacion ?? r.fecha_emision_factura ?? r.fecha_recibido;
@@ -323,6 +421,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
           id: r.id,
           fecha: r.mes_liquidacion ?? r.fecha_emision_factura ?? r.fecha_recibido,
           paciente: r.pacientes?.nombre ?? "—",
+          doctoraId: r.doctora_id,
           doctora: r.doctoras?.nombre ?? "—",
           doctoraInstala: r.doctora_instala?.nombre ?? null,
           laboratorio: r.laboratorios?.nombre ?? "—",
@@ -331,9 +430,32 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
           valor_factura: Number(r.valor_factura),
         })),
       );
+
+      let qInsumos = supabase
+        .from("insumos_consulta")
+        .select("id, tipo, valor_costo, visitas!inner(fecha, sede_id, doctora_id, pacientes(nombre), doctoras(nombre))")
+        .gte("visitas.fecha", periodo.inicio)
+        .lte("visitas.fecha", periodo.fin);
+      if (sedeId) qInsumos = qInsumos.eq("visitas.sede_id", sedeId);
+      if (doctoraId) qInsumos = qInsumos.eq("visitas.doctora_id", doctoraId);
+      const { data: insumosData } = await qInsumos;
+      setInsumos(
+        ((insumosData as unknown as {
+          id: string; tipo: string; valor_costo: number;
+          visitas: { fecha: string; doctora_id: string; pacientes: { nombre: string } | null; doctoras: { nombre: string } | null };
+        }[]) ?? []).map((r) => ({
+          id: r.id,
+          fecha: r.visitas.fecha,
+          paciente: r.visitas.pacientes?.nombre ?? "—",
+          doctoraId: r.visitas.doctora_id,
+          doctora: r.visitas.doctoras?.nombre ?? "—",
+          tipo: TIPOS_INSUMO_LABEL[r.tipo] ?? r.tipo,
+          valor: Number(r.valor_costo),
+        })),
+      );
       setCargando(false);
     })();
-  }, [periodo.inicio, periodo.fin, sedeId]);
+  }, [periodo.inicio, periodo.fin, sedeId, doctoraId]);
 
   const totalesPorLab = useMemo(() => {
     const t: Record<string, number> = {};
@@ -342,6 +464,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
   }, [filas]);
 
   const total = filas.reduce((a, f) => a + f.valor_factura, 0);
+  const totalInsumos = insumos.reduce((a, i) => a + i.valor, 0);
 
   function exportar() {
     descargarCSV(
@@ -360,12 +483,35 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
     );
   }
 
+  function exportarInsumos() {
+    descargarCSV(
+      `liquidacion-insumos-${mes}.csv`,
+      ["Fecha", "Paciente", "Doctora", "Insumo", "Valor"],
+      insumos.map((i) => [i.fecha, i.paciente, i.doctora, i.tipo, i.valor]),
+    );
+  }
+
   if (cargando) return <p className="text-sm text-gray-400">Cargando…</p>;
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-xs text-gray-400">Período {periodo.inicio} a {periodo.fin}.</p>
+        <select value={doctoraId} onChange={(e) => setDoctoraId(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm">
+          <option value="">Todas las doctoras</option>
+          {doctoras.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.nombre}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="text-xs text-gray-400 -mt-2">
+        Para enviarle a cada doctora el respaldo de lo que se le está descontando: filtra por su nombre y exporta las
+        dos tablas (facturas de laboratorio e insumos de aparatología).
+      </p>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-gray-500">Facturas de laboratorio</h3>
         <button onClick={exportar} className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]">
           <Download size={16} /> Exportar
         </button>
@@ -422,6 +568,51 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
           </div>
         </div>
       )}
+
+      <div className="flex items-center justify-between pt-2">
+        <h3 className="text-sm font-semibold text-gray-500">Insumos de aparatología</h3>
+        <button onClick={exportarInsumos} className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]">
+          <Download size={16} /> Exportar
+        </button>
+      </div>
+      <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-gray-50 text-left text-gray-500">
+              <th className="px-3 py-2">Fecha</th>
+              <th className="px-3 py-2">Paciente</th>
+              <th className="px-3 py-2">Doctora</th>
+              <th className="px-3 py-2">Insumo</th>
+              <th className="px-3 py-2 text-right">Valor</th>
+            </tr>
+          </thead>
+          <tbody>
+            {insumos.map((i) => (
+              <tr key={i.id} className="border-t border-gray-100">
+                <td className="px-3 py-2">{i.fecha}</td>
+                <td className="px-3 py-2">{i.paciente}</td>
+                <td className="px-3 py-2">{i.doctora}</td>
+                <td className="px-3 py-2">{i.tipo}</td>
+                <td className="px-3 py-2 text-right">{fmtCOP(i.valor)}</td>
+              </tr>
+            ))}
+            {insumos.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-3 py-4 text-center text-gray-400">
+                  Sin insumos de aparatología en este período.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {insumos.length > 0 && (
+        <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-white border border-gray-200 text-sm font-semibold">
+          <span>Total insumos</span>
+          <span>{fmtCOP(totalInsumos)}</span>
+        </div>
+      )}
+
       <p className="text-xs text-gray-400">
         Formato provisional — lo ajustamos apenas confirmes cómo se ve la planilla que ya manejan con los laboratorios.
       </p>
