@@ -3,7 +3,8 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
 import { TIPOS_INSUMO_CONSULTA, type Sede, type Doctora } from "../../lib/types";
-import { Histograma } from "../../components/Histograma";
+import { CalendarioCalor } from "../../components/CalendarioCalor";
+import { StatTile } from "../../components/StatTile";
 
 interface VisitaRow {
   id: string;
@@ -69,7 +70,7 @@ export function Historial() {
     return Object.entries(porFecha).sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }, [visitas, doctoraId]);
   const totalHonorarios = resumenHonorarios.reduce((a, [, v]) => a + v, 0);
-  const histogramaDatos = [...resumenHonorarios].reverse().map(([fecha, valor]) => ({ fecha, valor }));
+  const calorDatos = [...resumenHonorarios].reverse().map(([fecha, valor]) => ({ fecha, valor }));
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
@@ -131,8 +132,15 @@ export function Historial() {
             para el control de honorarios.
           </p>
           {resumenHonorarios.length > 0 && (
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              <StatTile label="Total del rango" value={fmtCOP(totalHonorarios)} color={sedeActiva.color_acento} />
+              <StatTile label="Días con facturación" value={`${resumenHonorarios.length}`} color={sedeActiva.color_acento} />
+              <StatTile label="Promedio por día" value={fmtCOP(totalHonorarios / resumenHonorarios.length)} color={sedeActiva.color_acento} />
+            </div>
+          )}
+          {resumenHonorarios.length > 0 && (
             <div className="mb-3">
-              <Histograma datos={histogramaDatos} color={sedeActiva.color_acento} />
+              <CalendarioCalor datos={calorDatos} color={sedeActiva.color_acento} />
             </div>
           )}
           <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">

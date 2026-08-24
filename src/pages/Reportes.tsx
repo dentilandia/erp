@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { fmtCOP, today } from "../lib/format";
 import type { Sede } from "../lib/types";
-import { Histograma } from "../components/Histograma";
+import { CalendarioCalor } from "../components/CalendarioCalor";
+import { StatTile } from "../components/StatTile";
 
 interface FilaProductividad {
   sedeId: string;
@@ -303,6 +304,18 @@ export function Reportes() {
         </div>
       </section>
 
+      {!cargando && (
+        <div className="grid grid-cols-3 gap-2">
+          <StatTile label="Total facturado" value={fmtCOP(totalGeneralFacturado)} color={sedeFiltro ? sedeColor[sedeFiltro] : "#2E253A"} />
+          <StatTile label="Pacientes atendidos" value={`${totalGeneralPacientes}`} color={sedeFiltro ? sedeColor[sedeFiltro] : "#2E253A"} />
+          <StatTile
+            label="Promedio por paciente"
+            value={fmtCOP(totalGeneralPacientes > 0 ? totalGeneralFacturado / totalGeneralPacientes : 0)}
+            color={sedeFiltro ? sedeColor[sedeFiltro] : "#2E253A"}
+          />
+        </div>
+      )}
+
       <section className="bg-white rounded-xl border border-gray-200 p-4">
         <h2 className="font-semibold text-tinta mb-1">Facturación por doctora</h2>
         <p className="text-xs text-gray-400 mb-3">
@@ -340,11 +353,11 @@ export function Reportes() {
       )}
 
       <section className="bg-white rounded-xl border border-gray-200 p-4">
-        <h2 className="font-semibold text-tinta mb-3">Facturación por día (tendencia)</h2>
+        <h2 className="font-semibold text-tinta mb-3">Facturación por día</h2>
         {cargando ? (
           <p className="text-sm text-gray-400">Cargando…</p>
         ) : (
-          <Histograma datos={serieDiaria} color={sedeFiltro ? sedeColor[sedeFiltro] ?? "#2E253A" : "#2E253A"} />
+          <CalendarioCalor datos={serieDiaria} color={sedeFiltro ? sedeColor[sedeFiltro] ?? "#2E253A" : "#2E253A"} />
         )}
       </section>
 
