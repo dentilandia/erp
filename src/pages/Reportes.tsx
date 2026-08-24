@@ -145,25 +145,32 @@ export function Reportes() {
             {Object.entries(gruposPorSede).map(([sede, filasSede]) => {
               const totalSede = filasSede.reduce((a, f) => a + f.total, 0);
               const pacientesSede = filasSede.reduce((a, f) => a + f.pacientes, 0);
+              const pctSedeDentilandia = totalGeneralFacturado > 0 ? (totalSede / totalGeneralFacturado) * 100 : 0;
               return (
                 <div key={sede} className="rounded-lg border border-gray-200 overflow-hidden">
-                  <div className="flex items-center justify-between px-3 py-2 bg-gray-50 text-sm font-semibold">
+                  <div className="flex items-center justify-between px-3 py-2 bg-gray-50 text-sm font-semibold flex-wrap gap-2">
                     <span>{sede}</span>
                     <span>
-                      {pacientesSede} pacientes · {fmtCOP(totalSede)}
+                      {pacientesSede} pacientes · {fmtCOP(totalSede)} · {pctSedeDentilandia.toFixed(1)}% de Dentilandia
                     </span>
                   </div>
                   <div className="divide-y divide-gray-100">
-                    {filasSede.map((f) => (
-                      <div key={`${f.sedeId}-${f.doctora}`} className="flex items-center justify-between px-3 py-2 text-sm flex-wrap gap-2">
-                        <span className="font-medium">{f.doctora}</span>
-                        <div className="flex items-center gap-4 text-gray-500">
-                          <span>{f.pacientes} pacientes</span>
-                          <span className="text-tinta font-semibold">{fmtCOP(f.total)}</span>
-                          <span>prom. {fmtCOP(f.promedio)}</span>
+                    {filasSede.map((f) => {
+                      const pctSede = totalSede > 0 ? (f.total / totalSede) * 100 : 0;
+                      const pctDentilandia = totalGeneralFacturado > 0 ? (f.total / totalGeneralFacturado) * 100 : 0;
+                      return (
+                        <div key={`${f.sedeId}-${f.doctora}`} className="flex items-center justify-between px-3 py-2 text-sm flex-wrap gap-2">
+                          <span className="font-medium">{f.doctora}</span>
+                          <div className="flex items-center gap-4 text-gray-500">
+                            <span>{f.pacientes} pacientes</span>
+                            <span className="text-tinta font-semibold">{fmtCOP(f.total)}</span>
+                            <span>prom. {fmtCOP(f.promedio)}</span>
+                            <span>{pctSede.toFixed(1)}% de {sede}</span>
+                            <span>{pctDentilandia.toFixed(1)}% de Dentilandia</span>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               );
