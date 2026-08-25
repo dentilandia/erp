@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Check, X } from "lucide-react";
+import { Plus, Check, X, Trash2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
 import type { Doctora, Sede, Paciente, SaldoFavor } from "../lib/types";
@@ -124,6 +124,12 @@ export function Parametros() {
       .eq("id", id);
     setSaldoGuardadoId(id);
     setTimeout(() => setSaldoGuardadoId((prev) => (prev === id ? null : prev)), 1500);
+  }
+
+  async function eliminarSaldoPaciente(id: string) {
+    if (!window.confirm("¿Eliminar este saldo a favor? Esta acción no se puede deshacer.")) return;
+    await supabase.from("saldos_favor").delete().eq("id", id);
+    setSaldosPaciente((prev) => prev.filter((s) => s.id !== id));
   }
 
   return (
@@ -333,6 +339,13 @@ export function Parametros() {
                   className="flex items-center gap-1 rounded-md bg-[var(--acento)] text-white px-3 py-1.5 text-xs font-medium"
                 >
                   {saldoGuardadoId === s.id ? <Check size={14} /> : "Guardar"}
+                </button>
+                <button
+                  onClick={() => eliminarSaldoPaciente(s.id)}
+                  title="Eliminar este saldo a favor"
+                  className="flex items-center gap-1 rounded-md border border-red-200 text-red-500 px-3 py-1.5 text-xs font-medium hover:bg-red-50"
+                >
+                  <Trash2 size={14} />
                 </button>
               </div>
             ))}
