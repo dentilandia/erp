@@ -464,31 +464,34 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                     <span className="text-right">{fmtCOP(s.insumos)}</span>
                   </div>
                 ))}
+                <div className="grid grid-cols-4 gap-2 px-3 py-1.5 text-sm font-semibold bg-gray-50">
+                  <span>Total</span>
+                  <span className="text-right">{fmtCOP(f.totalVentas)}</span>
+                  <span className="text-right">{fmtCOP(f.totalLaboratorios)}</span>
+                  <span className="text-right">{fmtCOP(f.totalInsumos)}</span>
+                </div>
               </div>
             )}
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-3">
-              <div>
-                <p className="text-xs text-gray-400">Total ventas</p>
-                <p className="font-medium">{fmtCOP(f.totalVentas)}</p>
+            <div className="rounded-lg bg-gray-50 border border-gray-200 p-3 space-y-1.5 text-sm mb-3">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">
+                  Honorarios — {pctHonorario}% de {fmtCOP(f.totalVentas)} en ventas
+                </span>
+                <span className="font-medium text-emerald-700">+{fmtCOP(bruto)}</span>
               </div>
-              <div>
-                <p className="text-xs text-gray-400">% honorario</p>
-                <p className="font-medium">{pctHonorario}%</p>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">
+                  Laboratorios + otros aparatología — {pctHonorario}% de {fmtCOP(totalLaboratoriosInsumos)}{" "}
+                  (labs {fmtCOP(f.totalLaboratorios)} + otros {fmtCOP(f.totalInsumos)})
+                </span>
+                <span className="font-medium text-red-600">-{fmtCOP(deduccion)}</span>
               </div>
-              <div>
-                <p className="text-xs text-gray-400">Valor bruto</p>
-                <p className="font-medium">{fmtCOP(bruto)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-400">Laboratorios + otros aparatología (100%)</p>
-                <p className="font-medium">{fmtCOP(totalLaboratoriosInsumos)}</p>
+              <div className="flex items-center justify-between pt-1.5 border-t border-gray-200 font-semibold">
+                <span>Subtotal (antes de retenciones)</span>
+                <span>{fmtCOP(bruto - deduccion)}</span>
               </div>
             </div>
-            <p className="text-xs text-gray-400 -mt-2 mb-3">
-              Laboratorios: {fmtCOP(f.totalLaboratorios)} · Otros aparatología (elásticos/tracción/máscara): {fmtCOP(f.totalInsumos)} · Se
-              descuenta el {pctHonorario}% de esa suma: <span className="font-medium text-tinta">{fmtCOP(deduccion)}</span>
-            </p>
             <div className="flex items-end gap-4 flex-wrap mb-3">
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Retención voluntaria</label>
