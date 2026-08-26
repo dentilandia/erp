@@ -43,6 +43,7 @@ export function LaboratorioOperativo() {
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
   const [laboratorios, setLaboratorios] = useState<Laboratorio[]>([]);
   const [filtroDoctora, setFiltroDoctora] = useState("");
+  const [filtroPaciente, setFiltroPaciente] = useState("");
   const [abierto, setAbierto] = useState<EstadoLab>("enviado");
   const [editandoId, setEditandoId] = useState<string | null>(null);
   const [editDoctoraId, setEditDoctoraId] = useState("");
@@ -211,18 +212,26 @@ export function LaboratorioOperativo() {
   return (
     <div className="max-w-4xl mx-auto space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <select
-          value={filtroDoctora}
-          onChange={(e) => setFiltroDoctora(e.target.value)}
-          className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-        >
-          <option value="">Todas las doctoras</option>
-          {doctoras.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.nombre}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            value={filtroPaciente}
+            onChange={(e) => setFiltroPaciente(e.target.value)}
+            placeholder="Buscar paciente… ¿ya se le registró un aparato?"
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm min-w-[220px]"
+          />
+          <select
+            value={filtroDoctora}
+            onChange={(e) => setFiltroDoctora(e.target.value)}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          >
+            <option value="">Todas las doctoras</option>
+            {doctoras.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.nombre}
+              </option>
+            ))}
+          </select>
+        </div>
         <button
           onClick={() => setMostrarForm((v) => !v)}
           className="flex items-center gap-2 rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium"
@@ -319,8 +328,16 @@ export function LaboratorioOperativo() {
         </div>
       )}
 
+      {filtroPaciente.trim() && (
+        <p className="text-xs text-gray-400 -mb-2">
+          Buscando "{filtroPaciente.trim()}" en las tres listas de abajo (por recibir, por instalar, instalados).
+        </p>
+      )}
       {ESTADOS.map((e) => {
-        const items = ordenes.filter((o) => o.estado === e.value);
+        const items = ordenes.filter(
+          (o) => o.estado === e.value && (!filtroPaciente.trim() || o.pacientes?.nombre?.toLowerCase().includes(filtroPaciente.trim().toLowerCase())),
+        );
+        const expandido = abierto === e.value || filtroPaciente.trim() !== "";
         return (
           <div key={e.value} className="bg-white rounded-xl border border-gray-200">
             <button
@@ -329,7 +346,7 @@ export function LaboratorioOperativo() {
             >
               {e.label} ({items.length})
             </button>
-            {abierto === e.value && (
+            {expandido && (
               <div className="border-t border-gray-100 divide-y divide-gray-100">
                 {items.map((o) =>
                   editandoId === o.id ? (
