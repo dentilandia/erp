@@ -216,6 +216,8 @@ export function Recepcion() {
         </div>
       </section>
 
+      <ResumenOperacionDia sedeId={sedeActiva.id} fecha={fecha} />
+
       <section className="bg-white rounded-xl border border-dashed border-gray-300 p-4">
         {!mostrarSaldoExterno ? (
           <button
@@ -285,6 +287,8 @@ export function Recepcion() {
           </>
         )}
       </section>
+
+      <PanelInterconsultas sedeId={sedeActiva.id} />
 
       <section>
         <h3 className="text-sm font-semibold text-gray-500 mb-2">En espera ({enEspera.length})</h3>
@@ -404,6 +408,207 @@ function VisitaCard({
         </button>
       )}
     </div>
+  );
+}
+
+interface ResumenLabRow {
+  id: string;
+  paciente: string;
+  doctora: string;
+  laboratorio: string;
+  tipo_servicio: string;
+}
+
+/** Informativo: qué se envió y qué se instaló hoy, para verificación rápida de operación. */
+function ResumenOperacionDia({ sedeId, fecha }: { sedeId: string; fecha: string }) {
+  const [enviados, setEnviados] = useState<ResumenLabRow[]>([]);
+  const [instalados, setInstalados] = useState<ResumenLabRow[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      const select = "id, tipo_servicio, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), laboratorios(nombre)";
+      type Fila = {
+        id: string; tipo_servicio: string;
+        pacientes: { nombre: string } | null; doctoras: { nombre: string } | null; laboratorios: { nombre: string } | null;
+      };
+      const mapear = (rows: Fila[]): ResumenLabRow[] =>
+        rows.map((r) => ({
+          id: r.id,
+          paciente: r.pacientes?.nombre ?? "—",
+          doctora: r.doctoras?.nombre ?? "—",
+          laboratorio: r.laboratorios?.nombre ?? "—",
+          tipo_servicio: r.tipo_servicio,
+        }));
+      const { data: env } = await supabase.from("lab_ordenes").select(select).eq("sede_id", sedeId).eq("fecha_envio", fecha);
+      setEnviados(mapear((env as unknown as Fila[]) ?? []));
+      const { data: inst } = await supabase.from("lab_ordenes").select(select).eq("sede_id", sedeId).eq("fecha_instalado", fecha);
+      setInstalados(mapear((inst as unknown as Fila[]) ?? []));
+    })();
+  }, [sedeId, fecha]);
+
+  return (
+    <section className="bg-white rounded-xl border border-gray-200 p-4">
+      <h3 className="text-sm font-semibold text-gray-500 mb-3">Resumen del día — laboratorio</h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+        <div>
+          <p className="text-xs font-medium text-gray-400 mb-1">Enviados hoy ({enviados.length})</p>
+          <div className="space-y-1">
+            {enviados.map((r) => (
+              <div key={r.id} className="rounded-md bg-gray-50 px-2 py-1.5">
+                {r.paciente} <span className="text-gray-400">· {r.doctora} · {r.laboratorio}</span>
+              </div>
+            ))}
+            {enviados.length === 0 && <p className="text-xs text-gray-400">Ninguno.</p>}
+          </div>
+        </div>
+        <div>
+          <p className="text-xs font-medium text-gray-400 mb-1">Instalados hoy ({instalados.length})</p>
+          <div className="space-y-1">
+            {instalados.map((r) => (
+              <div key={r.id} className="rounded-md bg-gray-50 px-2 py-1.5">
+                {r.paciente} <span className="text-gray-400">· {r.doctora}</span>
+              </div>
+            ))}
+            {instalados.length === 0 && <p className="text-xs text-gray-400">Ninguno.</p>}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+interface InterconsultaFila {
+  id: string;
+  fecha: string;
+  paciente: string;
+  doctora: string;
+  especialidad: string;
+  respuesta: string;
+  evolucion_doctora: boolean;
+  fin_interconsulta: boolean;
+}
+
+/** Reporte histórico de interconsultas — se administra desde Recepción hasta que se cierran. */
+function PanelInterconsultas({ sedeId }: { sedeId: string }) {
+  const [abierto, setAbierto] = useState(false);
+  const [filas, setFilas] = useState<InterconsultaFila[]>([]);
+  const [soloPendientes, setSoloPendientes] = useState(true);
+  const [guardandoId, setGuardandoId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!abierto) return;
+    cargar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abierto, sedeId, soloPendientes]);
+
+  async function cargar() {
+    let q = supabase
+      .from("interconsultas")
+      .select("id, fecha, especialidad, respuesta, evolucion_doctora, fin_interconsulta, pacientes(nombre), doctoras(nombre)")
+      .eq("sede_id", sedeId)
+      .order("fecha", { ascending: false });
+    if (soloPendientes) q = q.eq("fin_interconsulta", false);
+    const { data } = await q;
+    setFilas(
+      ((data as unknown as {
+        id: string; fecha: string; especialidad: string; respuesta: string | null;
+        evolucion_doctora: boolean; fin_interconsulta: boolean;
+        pacientes: { nombre: string } | null; doctoras: { nombre: string } | null;
+      }[]) ?? []).map((r) => ({
+        id: r.id,
+        fecha: r.fecha,
+        paciente: r.pacientes?.nombre ?? "—",
+        doctora: r.doctoras?.nombre ?? "—",
+        especialidad: r.especialidad,
+        respuesta: r.respuesta ?? "",
+        evolucion_doctora: r.evolucion_doctora,
+        fin_interconsulta: r.fin_interconsulta,
+      })),
+    );
+  }
+
+  function actualizarFila(id: string, cambios: Partial<InterconsultaFila>) {
+    setFilas((prev) => prev.map((f) => (f.id === id ? { ...f, ...cambios } : f)));
+  }
+
+  async function guardarFila(id: string) {
+    const f = filas.find((x) => x.id === id);
+    if (!f) return;
+    setGuardandoId(id);
+    await supabase
+      .from("interconsultas")
+      .update({
+        respuesta: f.respuesta.trim() || null,
+        evolucion_doctora: f.evolucion_doctora,
+        fin_interconsulta: f.fin_interconsulta,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id);
+    setGuardandoId(null);
+    if (soloPendientes && f.fin_interconsulta) {
+      setFilas((prev) => prev.filter((x) => x.id !== id));
+    }
+  }
+
+  return (
+    <section className="bg-white rounded-xl border border-dashed border-gray-300 p-4">
+      <button onClick={() => setAbierto((v) => !v)} className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]">
+        {abierto ? "Ocultar interconsultas" : "Ver interconsultas"}
+      </button>
+      {abierto && (
+        <div className="mt-3 space-y-3">
+          <label className="flex items-center gap-2 text-xs text-gray-500">
+            <input type="checkbox" checked={soloPendientes} onChange={(e) => setSoloPendientes(e.target.checked)} />
+            Solo pendientes (sin cerrar)
+          </label>
+          <div className="space-y-2">
+            {filas.map((f) => (
+              <div key={f.id} className="rounded-lg border border-gray-200 p-3 space-y-2">
+                <div className="flex items-center justify-between text-sm flex-wrap gap-1">
+                  <span className="font-medium">{f.paciente}</span>
+                  <span className="text-xs text-gray-400">
+                    {f.fecha} · {f.doctora} · remitido a {f.especialidad}
+                  </span>
+                </div>
+                <textarea
+                  value={f.respuesta}
+                  onChange={(e) => actualizarFila(f.id, { respuesta: e.target.value })}
+                  placeholder="Respuesta de la interconsulta…"
+                  rows={2}
+                  className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+                <div className="flex items-center gap-4 flex-wrap">
+                  <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                    <input
+                      type="checkbox"
+                      checked={f.evolucion_doctora}
+                      onChange={(e) => actualizarFila(f.id, { evolucion_doctora: e.target.checked })}
+                    />
+                    Evolución doctora en el sistema
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                    <input
+                      type="checkbox"
+                      checked={f.fin_interconsulta}
+                      onChange={(e) => actualizarFila(f.id, { fin_interconsulta: e.target.checked })}
+                    />
+                    Fin interconsulta
+                  </label>
+                  <button
+                    onClick={() => guardarFila(f.id)}
+                    disabled={guardandoId === f.id}
+                    className="ml-auto rounded-md bg-[var(--acento)] text-white px-3 py-1 text-xs font-medium disabled:opacity-40"
+                  >
+                    {guardandoId === f.id ? "Guardando…" : "Guardar"}
+                  </button>
+                </div>
+              </div>
+            ))}
+            {filas.length === 0 && <p className="text-sm text-gray-400">Sin interconsultas{soloPendientes ? " pendientes" : ""}.</p>}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

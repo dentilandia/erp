@@ -158,6 +158,19 @@ export interface LabOrden {
   mes_liquidacion: string | null;
 }
 
+export interface Interconsulta {
+  id: string;
+  visita_id: string | null;
+  sede_id: string;
+  paciente_id: string;
+  doctora_id: string;
+  especialidad: string;
+  fecha: string;
+  respuesta: string | null;
+  evolucion_doctora: boolean;
+  fin_interconsulta: boolean;
+}
+
 export interface CierreDiario {
   id: string;
   sede_id: string;

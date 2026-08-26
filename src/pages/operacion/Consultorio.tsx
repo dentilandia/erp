@@ -364,6 +364,8 @@ function ModalAtencion({
   const [enviosLab, setEnviosLab] = useState<EnvioLab[]>([]);
   const [remitido, setRemitido] = useState(false);
   const [remisionEspecialidad, setRemisionEspecialidad] = useState("");
+  const [interconsulta, setInterconsulta] = useState(false);
+  const [interconsultaEspecialidad, setInterconsultaEspecialidad] = useState("");
   const [guardando, setGuardando] = useState(false);
 
   useEffect(() => {
@@ -442,6 +444,16 @@ function ModalAtencion({
         tipo_servicio: envio.tipoServicio,
         estado: "enviado",
         fecha_envio: today(),
+      });
+    }
+    if (interconsulta && interconsultaEspecialidad.trim()) {
+      await supabase.from("interconsultas").insert({
+        visita_id: visitaId,
+        sede_id: sedeId,
+        paciente_id: visita.paciente_id,
+        doctora_id: visita.doctora_id,
+        especialidad: interconsultaEspecialidad.trim(),
+        fecha: today(),
       });
     }
 
@@ -529,6 +541,24 @@ function ModalAtencion({
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
             />
           )}
+        </div>
+
+        <div>
+          <label className="flex items-center gap-2 text-sm mb-2">
+            <input type="checkbox" checked={interconsulta} onChange={(e) => setInterconsulta(e.target.checked)} />
+            Interconsulta con otra especialidad
+          </label>
+          {interconsulta && (
+            <input
+              value={interconsultaEspecialidad}
+              onChange={(e) => setInterconsultaEspecialidad(e.target.value)}
+              placeholder="Especialidad a la que se remite"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          )}
+          <p className="text-xs text-gray-400 mt-1">
+            Queda registrada en Recepción para hacerle seguimiento hasta que llegue la respuesta.
+          </p>
         </div>
 
         <div>
