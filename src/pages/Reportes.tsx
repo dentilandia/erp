@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { fmtCOP, today } from "../lib/format";
+import { fetchTodasLasFilas } from "../lib/db";
 import type { Sede } from "../lib/types";
 import { CalendarioCalor } from "../components/CalendarioCalor";
 import { StatTile } from "../components/StatTile";
@@ -116,30 +117,41 @@ export function Reportes() {
   useEffect(() => {
     (async () => {
       setCargando(true);
-      let qVisitas = supabase.from("visitas").select("sede_id, doctora_id").eq("estado", "cobrado").gte("fecha", desde).lte("fecha", hasta);
-      let qPagos = supabase
-        .from("cargo_pagos")
-        .select("valor, cargos!inner(categoria, sede_id, doctora_id, fecha)")
-        .eq("cargos.categoria", "procedimiento")
-        .gte("cargos.fecha", desde)
-        .lte("cargos.fecha", hasta);
-      let qSerie = supabase
-        .from("cargo_pagos")
-        .select("valor, cargos!inner(categoria, sede_id, fecha)")
-        .eq("cargos.categoria", "procedimiento")
-        .gte("cargos.fecha", desde)
-        .lte("cargos.fecha", hasta);
-      if (sedeFiltro) {
-        qVisitas = qVisitas.eq("sede_id", sedeFiltro);
-        qPagos = qPagos.eq("cargos.sede_id", sedeFiltro);
-        qSerie = qSerie.eq("cargos.sede_id", sedeFiltro);
-      }
-
-      const [{ data: doctorasData }, { data: visitasData }, { data: pagosData }, { data: serieData }] = await Promise.all([
+      const [{ data: doctorasData }, visitasData, pagosData, serieData] = await Promise.all([
         supabase.from("doctoras").select("id, nombre"),
-        qVisitas,
-        qPagos,
-        qSerie,
+        fetchTodasLasFilas<{ sede_id: string; doctora_id: string }>((d, h) => {
+          let q = supabase
+            .from("visitas")
+            .select("sede_id, doctora_id")
+            .eq("estado", "cobrado")
+            .gte("fecha", desde)
+            .lte("fecha", hasta)
+            .range(d, h);
+          if (sedeFiltro) q = q.eq("sede_id", sedeFiltro);
+          return q as unknown as PromiseLike<{ data: { sede_id: string; doctora_id: string }[] | null }>;
+        }),
+        fetchTodasLasFilas<{ valor: number; cargos: { sede_id: string; doctora_id: string } }>((d, h) => {
+          let q = supabase
+            .from("cargo_pagos")
+            .select("valor, cargos!inner(categoria, sede_id, doctora_id, fecha)")
+            .eq("cargos.categoria", "procedimiento")
+            .gte("cargos.fecha", desde)
+            .lte("cargos.fecha", hasta)
+            .range(d, h);
+          if (sedeFiltro) q = q.eq("cargos.sede_id", sedeFiltro);
+          return q as unknown as PromiseLike<{ data: { valor: number; cargos: { sede_id: string; doctora_id: string } }[] | null }>;
+        }),
+        fetchTodasLasFilas<{ valor: number; cargos: { fecha: string } }>((d, h) => {
+          let q = supabase
+            .from("cargo_pagos")
+            .select("valor, cargos!inner(categoria, sede_id, fecha)")
+            .eq("cargos.categoria", "procedimiento")
+            .gte("cargos.fecha", desde)
+            .lte("cargos.fecha", hasta)
+            .range(d, h);
+          if (sedeFiltro) q = q.eq("cargos.sede_id", sedeFiltro);
+          return q as unknown as PromiseLike<{ data: { valor: number; cargos: { fecha: string } }[] | null }>;
+        }),
       ]);
 
       const sedeNombre: Record<string, string> = Object.fromEntries(sedes.map((s) => [s.id, s.nombre]));
@@ -148,13 +160,13 @@ export function Reportes() {
       );
 
       const pacientesPorClave: Record<string, number> = {};
-      for (const v of (visitasData as { sede_id: string; doctora_id: string }[]) ?? []) {
+      for (const v of visitasData) {
         const clave = `${v.sede_id}|${v.doctora_id}`;
         pacientesPorClave[clave] = (pacientesPorClave[clave] ?? 0) + 1;
       }
 
       const facturadoPorClave: Record<string, number> = {};
-      for (const p of (pagosData as unknown as { valor: number; cargos: { sede_id: string; doctora_id: string } }[]) ?? []) {
+      for (const p of pagosData) {
         const clave = `${p.cargos.sede_id}|${p.cargos.doctora_id}`;
         facturadoPorClave[clave] = (facturadoPorClave[clave] ?? 0) + Number(p.valor);
       }
@@ -177,7 +189,7 @@ export function Reportes() {
       setFilas(filasCalc);
 
       const porDia: Record<string, number> = {};
-      for (const p of (serieData as unknown as { valor: number; cargos: { fecha: string } }[]) ?? []) {
+      for (const p of serieData) {
         porDia[p.cargos.fecha] = (porDia[p.cargos.fecha] ?? 0) + Number(p.valor);
       }
       setSerieDiaria(
@@ -194,17 +206,22 @@ export function Reportes() {
   useEffect(() => {
     (async () => {
       setCargandoSaldos(true);
-      let q = supabase.from("saldos_favor").select("valor_disponible, fecha, sede_origen_id, sedes(nombre), pacientes(nombre)").gt("valor_disponible", 0);
-      if (sedeFiltro) q = q.eq("sede_origen_id", sedeFiltro);
-      const { data } = await q;
-      const saldosFilas =
-        (data as unknown as {
-          valor_disponible: number;
-          fecha: string;
-          sede_origen_id: string;
-          sedes: { nombre: string } | null;
-          pacientes: { nombre: string } | null;
-        }[]) ?? [];
+      type FilaSaldo = {
+        valor_disponible: number;
+        fecha: string;
+        sede_origen_id: string;
+        sedes: { nombre: string } | null;
+        pacientes: { nombre: string } | null;
+      };
+      const saldosFilas = await fetchTodasLasFilas<FilaSaldo>((d, h) => {
+        let q = supabase
+          .from("saldos_favor")
+          .select("valor_disponible, fecha, sede_origen_id, sedes(nombre), pacientes(nombre)")
+          .gt("valor_disponible", 0)
+          .range(d, h);
+        if (sedeFiltro) q = q.eq("sede_origen_id", sedeFiltro);
+        return q as unknown as PromiseLike<{ data: FilaSaldo[] | null }>;
+      });
 
       const porSede: Record<string, { sede: string; total: number }> = {};
       for (const s of saldosFilas) {

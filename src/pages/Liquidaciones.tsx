@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Download, Check } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { fmtCOP, mesActual, periodoCiclo2625, periodoMesCompleto } from "../lib/format";
+import { fetchTodasLasFilas } from "../lib/db";
 import { TIPOS_INSUMO_CONSULTA, type Doctora, type Sede } from "../lib/types";
 
 const TIPOS_INSUMO_LABEL: Record<string, string> = Object.fromEntries(TIPOS_INSUMO_CONSULTA.map((t) => [t.value, t.label]));
@@ -19,24 +20,6 @@ const TABS = [
   { value: "sedacion", label: "Sedación" },
 ] as const;
 type Tab = (typeof TABS)[number]["value"];
-
-// Supabase/PostgREST solo devuelve un máximo de filas por consulta (por defecto
-// 1000) — en un ciclo completo de liquidación con las dos sedes, los pagos de
-// procedimiento fácilmente superan eso, y se perdían filas sin avisar,
-// descuadrando los totales. Esto pagina hasta traer todo.
-async function fetchTodasLasFilas<T>(construir: (desde: number, hasta: number) => PromiseLike<{ data: T[] | null }>): Promise<T[]> {
-  const TAMANO_PAGINA = 1000;
-  let desde = 0;
-  const todas: T[] = [];
-  for (;;) {
-    const { data } = await construir(desde, desde + TAMANO_PAGINA - 1);
-    if (!data || data.length === 0) break;
-    todas.push(...data);
-    if (data.length < TAMANO_PAGINA) break;
-    desde += TAMANO_PAGINA;
-  }
-  return todas;
-}
 
 function descargarCSV(nombre: string, encabezado: string[], filas: (string | number)[][]) {
   const csv = [encabezado.join(","), ...filas.map((f) => f.join(","))].join("\n");
