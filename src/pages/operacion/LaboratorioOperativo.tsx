@@ -21,6 +21,7 @@ interface LabRow {
   valor_factura: number | null;
   fecha_emision_factura: string | null;
   fecha_recibido: string | null;
+  fecha_instalado: string | null;
   mes_liquidacion: string | null;
   doctora_id: string;
   laboratorio_id: string;
@@ -84,7 +85,7 @@ export function LaboratorioOperativo() {
     let q = supabase
       .from("lab_ordenes")
       .select(
-        "id, estado, fecha_envio, factura_numero, consecutivo, valor_factura, fecha_emision_factura, fecha_recibido, mes_liquidacion, doctora_id, laboratorio_id, paciente_id, tipo_servicio, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), laboratorios(nombre)",
+        "id, estado, fecha_envio, factura_numero, consecutivo, valor_factura, fecha_emision_factura, fecha_recibido, fecha_instalado, mes_liquidacion, doctora_id, laboratorio_id, paciente_id, tipo_servicio, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), laboratorios(nombre)",
       )
       .eq("sede_id", sedeActiva.id)
       .order("fecha_envio", { ascending: false });
@@ -415,7 +416,7 @@ export function LaboratorioOperativo() {
                       {o.estado !== "enviado" && (
                         <div>
                           <label className="block text-[10px] text-gray-400 mb-1">
-                            Mes a liquidar (solo si esta factura quedó pendiente de un mes anterior y hay que incluirla ahora)
+                            Mes a liquidar (solo si este aparato instalado quedó pendiente de un mes anterior y hay que incluirlo ahora)
                           </label>
                           <input
                             type="date"
@@ -444,9 +445,9 @@ export function LaboratorioOperativo() {
                         {o.pacientes?.nombre} <span className="text-gray-400">· {o.doctoras?.nombre} · {o.laboratorios?.nombre}</span>
                       </span>
                       <span className="flex items-center gap-3">
-                        {(o.mes_liquidacion || o.fecha_recibido) && (
-                          <span className="text-xs text-gray-400" title="Fecha usada para el período de liquidación">
-                            {o.mes_liquidacion ?? o.fecha_recibido}
+                        {(o.mes_liquidacion || o.fecha_instalado) && (
+                          <span className="text-xs text-gray-400" title="Fecha usada para el período de liquidación (fecha de instalación)">
+                            {o.mes_liquidacion ?? o.fecha_instalado}
                           </span>
                         )}
                         {o.valor_factura && <span className="text-gray-500">{fmtCOP(o.valor_factura)}</span>}

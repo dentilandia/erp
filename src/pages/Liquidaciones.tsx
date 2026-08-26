@@ -226,7 +226,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
       let qLabs = supabase
         .from("lab_ordenes")
         .select(
-          "doctora_id, doctora_instala_id, tipo_servicio, sede_id, valor_factura, mes_liquidacion, fecha_emision_factura, fecha_recibido, factura_numero, pacientes(nombre), laboratorios(nombre)",
+          "doctora_id, doctora_instala_id, tipo_servicio, sede_id, valor_factura, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, factura_numero, pacientes(nombre), laboratorios(nombre)",
         )
         .not("valor_factura", "is", null);
       if (sedeId) qLabs = qLabs.eq("sede_id", sedeId);
@@ -245,14 +245,15 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
       };
       for (const l of (labsData as unknown as {
         doctora_id: string; doctora_instala_id: string | null; tipo_servicio: string; sede_id: string; valor_factura: number;
-        mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; factura_numero: string | null;
+        mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; fecha_instalado: string | null;
+        factura_numero: string | null;
         pacientes: { nombre: string } | null; laboratorios: { nombre: string } | null;
       }[]) ?? []) {
-        // El período de liquidación se define por cuándo se recibió la factura
-        // (no por la fecha de emisión del laboratorio, que puede ser semanas
-        // antes) — mes_liquidacion es solo el override manual para facturas
-        // atrasadas que se descubren después.
-        const fechaComparar = l.mes_liquidacion ?? l.fecha_recibido;
+        // Se paga por aparato instalado, no por factura recibida — el período
+        // de liquidación se define por cuándo se instaló (independiente de
+        // cuándo se emitió o recibió la factura). mes_liquidacion es el
+        // override manual para aparatos que se descubren sin liquidar después.
+        const fechaComparar = l.mes_liquidacion ?? l.fecha_instalado;
         if (!fechaComparar || fechaComparar < periodo.inicio || fechaComparar > periodo.fin) continue;
         const valor = Number(l.valor_factura);
         const sedeNom = sedeNombre[l.sede_id] ?? "—";
@@ -692,24 +693,24 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
       let q = supabase
         .from("lab_ordenes")
         .select(
-          "id, sede_id, mes_liquidacion, fecha_emision_factura, fecha_recibido, valor_factura, factura_numero, tipo_servicio, doctora_id, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), doctora_instala:doctoras!lab_ordenes_doctora_instala_id_fkey(nombre), laboratorios(nombre)",
+          "id, sede_id, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, valor_factura, factura_numero, tipo_servicio, doctora_id, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), doctora_instala:doctoras!lab_ordenes_doctora_instala_id_fkey(nombre), laboratorios(nombre)",
         )
         .not("valor_factura", "is", null);
       if (sedeId) q = q.eq("sede_id", sedeId);
       if (doctoraId) q = q.or(`doctora_id.eq.${doctoraId},doctora_instala_id.eq.${doctoraId}`);
       const { data } = await q;
       const filtradas = ((data as unknown as {
-        id: string; mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; valor_factura: number;
-        factura_numero: string | null; tipo_servicio: string; doctora_id: string;
+        id: string; mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; fecha_instalado: string | null;
+        valor_factura: number; factura_numero: string | null; tipo_servicio: string; doctora_id: string;
         pacientes: { nombre: string } | null; doctoras: { nombre: string } | null; doctora_instala: { nombre: string } | null; laboratorios: { nombre: string } | null;
       }[]) ?? []).filter((r) => {
-        const f = r.mes_liquidacion ?? r.fecha_recibido;
+        const f = r.mes_liquidacion ?? r.fecha_instalado;
         return f && f >= periodo.inicio && f <= periodo.fin;
       });
       setFilas(
         filtradas.map((r) => ({
           id: r.id,
-          fecha: r.mes_liquidacion ?? r.fecha_recibido,
+          fecha: r.mes_liquidacion ?? r.fecha_instalado,
           paciente: r.pacientes?.nombre ?? "—",
           doctoraId: r.doctora_id,
           doctora: r.doctoras?.nombre ?? "—",
