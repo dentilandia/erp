@@ -20,6 +20,24 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number]["value"];
 
+// Supabase/PostgREST solo devuelve un máximo de filas por consulta (por defecto
+// 1000) — en un ciclo completo de liquidación con las dos sedes, los pagos de
+// procedimiento fácilmente superan eso, y se perdían filas sin avisar,
+// descuadrando los totales. Esto pagina hasta traer todo.
+async function fetchTodasLasFilas<T>(construir: (desde: number, hasta: number) => PromiseLike<{ data: T[] | null }>): Promise<T[]> {
+  const TAMANO_PAGINA = 1000;
+  let desde = 0;
+  const todas: T[] = [];
+  for (;;) {
+    const { data } = await construir(desde, desde + TAMANO_PAGINA - 1);
+    if (!data || data.length === 0) break;
+    todas.push(...data);
+    if (data.length < TAMANO_PAGINA) break;
+    desde += TAMANO_PAGINA;
+  }
+  return todas;
+}
+
 function descargarCSV(nombre: string, encabezado: string[], filas: (string | number)[][]) {
   const csv = [encabezado.join(","), ...filas.map((f) => f.join(","))].join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
@@ -206,31 +224,43 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
       const { data: doctoras } = await supabase.from("doctoras").select("*").order("nombre");
       const sedeNombre: Record<string, string> = Object.fromEntries(sedes.map((s) => [s.id, s.nombre]));
 
-      let qPagos = supabase
-        .from("cargo_pagos")
-        .select("valor, cargos!inner(categoria, doctora_id, sede_id, fecha)")
-        .eq("cargos.categoria", "procedimiento")
-        .gte("cargos.fecha", periodo.inicio)
-        .lte("cargos.fecha", periodo.fin);
-      if (sedeId) qPagos = qPagos.eq("cargos.sede_id", sedeId);
-      const { data: pagosData } = await qPagos;
+      const pagosData = await fetchTodasLasFilas<{ valor: number; cargos: { doctora_id: string; sede_id: string } }>((desde, hasta) => {
+        let q = supabase
+          .from("cargo_pagos")
+          .select("valor, cargos!inner(categoria, doctora_id, sede_id, fecha)")
+          .eq("cargos.categoria", "procedimiento")
+          .gte("cargos.fecha", periodo.inicio)
+          .lte("cargos.fecha", periodo.fin)
+          .range(desde, hasta);
+        if (sedeId) q = q.eq("cargos.sede_id", sedeId);
+        return q as unknown as PromiseLike<{ data: { valor: number; cargos: { doctora_id: string; sede_id: string } }[] | null }>;
+      });
       const ventasPorDoctora: Record<string, number> = {};
       const ventasPorDoctoraSede: Record<string, Record<string, number>> = {};
-      for (const p of (pagosData as unknown as { valor: number; cargos: { doctora_id: string; sede_id: string } }[]) ?? []) {
+      for (const p of pagosData) {
         const { doctora_id, sede_id } = p.cargos;
         ventasPorDoctora[doctora_id] = (ventasPorDoctora[doctora_id] ?? 0) + Number(p.valor);
         ventasPorDoctoraSede[doctora_id] = ventasPorDoctoraSede[doctora_id] ?? {};
         ventasPorDoctoraSede[doctora_id][sede_id] = (ventasPorDoctoraSede[doctora_id][sede_id] ?? 0) + Number(p.valor);
       }
 
-      let qLabs = supabase
-        .from("lab_ordenes")
-        .select(
-          "doctora_id, doctora_instala_id, tipo_servicio, sede_id, valor_factura, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, factura_numero, pacientes(nombre), laboratorios(nombre)",
-        )
-        .not("valor_factura", "is", null);
-      if (sedeId) qLabs = qLabs.eq("sede_id", sedeId);
-      const { data: labsData } = await qLabs;
+      type LabRowLiq = {
+        doctora_id: string; doctora_instala_id: string | null; tipo_servicio: string; sede_id: string; valor_factura: number;
+        mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; fecha_instalado: string | null;
+        factura_numero: string | null;
+        pacientes: { nombre: string } | null; laboratorios: { nombre: string } | null;
+      };
+      const labsData = await fetchTodasLasFilas<LabRowLiq>((desde, hasta) => {
+        let q = supabase
+          .from("lab_ordenes")
+          .select(
+            "doctora_id, doctora_instala_id, tipo_servicio, sede_id, valor_factura, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, factura_numero, pacientes(nombre), laboratorios(nombre)",
+          )
+          .not("valor_factura", "is", null)
+          .range(desde, hasta);
+        if (sedeId) q = q.eq("sede_id", sedeId);
+        return q as unknown as PromiseLike<{ data: LabRowLiq[] | null }>;
+      });
       const labsPorDoctora: Record<string, number> = {};
       const labsPorDoctoraSede: Record<string, Record<string, number>> = {};
       const detalleLabsPorDoctora: Record<string, DetalleLab[]> = {};
@@ -243,12 +273,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         detalleLabsPorDoctora[doctoraId] = detalleLabsPorDoctora[doctoraId] ?? [];
         detalleLabsPorDoctora[doctoraId].push(det);
       };
-      for (const l of (labsData as unknown as {
-        doctora_id: string; doctora_instala_id: string | null; tipo_servicio: string; sede_id: string; valor_factura: number;
-        mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; fecha_instalado: string | null;
-        factura_numero: string | null;
-        pacientes: { nombre: string } | null; laboratorios: { nombre: string } | null;
-      }[]) ?? []) {
+      for (const l of labsData) {
         // Se paga por aparato instalado, no por factura recibida — el período
         // de liquidación se define por cuándo se instaló (independiente de
         // cuándo se emitió o recibió la factura). mes_liquidacion es el
@@ -284,20 +309,24 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
       // Insumos de aparatología (elásticos intraoral, tracción extra oral, máscara
       // facial) también los paga la doctora al mismo % que su honorario, igual que
       // los laboratorios — se suman a la misma base antes de aplicar el %.
-      let qInsumos = supabase
-        .from("insumos_consulta")
-        .select("valor_costo, tipo, visitas!inner(doctora_id, sede_id, fecha, pacientes(nombre))")
-        .gte("visitas.fecha", periodo.inicio)
-        .lte("visitas.fecha", periodo.fin);
-      if (sedeId) qInsumos = qInsumos.eq("visitas.sede_id", sedeId);
-      const { data: insumosData } = await qInsumos;
+      type InsumoRowLiq = {
+        valor_costo: number; tipo: string;
+        visitas: { doctora_id: string; sede_id: string; fecha: string; pacientes: { nombre: string } | null };
+      };
+      const insumosData = await fetchTodasLasFilas<InsumoRowLiq>((desde, hasta) => {
+        let q = supabase
+          .from("insumos_consulta")
+          .select("valor_costo, tipo, visitas!inner(doctora_id, sede_id, fecha, pacientes(nombre))")
+          .gte("visitas.fecha", periodo.inicio)
+          .lte("visitas.fecha", periodo.fin)
+          .range(desde, hasta);
+        if (sedeId) q = q.eq("visitas.sede_id", sedeId);
+        return q as unknown as PromiseLike<{ data: InsumoRowLiq[] | null }>;
+      });
       const insumosPorDoctora: Record<string, number> = {};
       const insumosPorDoctoraSede: Record<string, Record<string, number>> = {};
       const detalleInsumosPorDoctora: Record<string, DetalleInsumo[]> = {};
-      for (const i of (insumosData as unknown as {
-        valor_costo: number; tipo: string;
-        visitas: { doctora_id: string; sede_id: string; fecha: string; pacientes: { nombre: string } | null };
-      }[]) ?? []) {
+      for (const i of insumosData) {
         const { doctora_id, sede_id, fecha, pacientes } = i.visitas;
         const valor = Number(i.valor_costo);
         insumosPorDoctora[doctora_id] = (insumosPorDoctora[doctora_id] ?? 0) + valor;
@@ -690,20 +719,24 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
   useEffect(() => {
     (async () => {
       setCargando(true);
-      let q = supabase
-        .from("lab_ordenes")
-        .select(
-          "id, sede_id, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, valor_factura, factura_numero, tipo_servicio, doctora_id, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), doctora_instala:doctoras!lab_ordenes_doctora_instala_id_fkey(nombre), laboratorios(nombre)",
-        )
-        .not("valor_factura", "is", null);
-      if (sedeId) q = q.eq("sede_id", sedeId);
-      if (doctoraId) q = q.or(`doctora_id.eq.${doctoraId},doctora_instala_id.eq.${doctoraId}`);
-      const { data } = await q;
-      const filtradas = ((data as unknown as {
+      type LabRowLab = {
         id: string; mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; fecha_instalado: string | null;
         valor_factura: number; factura_numero: string | null; tipo_servicio: string; doctora_id: string;
         pacientes: { nombre: string } | null; doctoras: { nombre: string } | null; doctora_instala: { nombre: string } | null; laboratorios: { nombre: string } | null;
-      }[]) ?? []).filter((r) => {
+      };
+      const data = await fetchTodasLasFilas<LabRowLab>((desde, hasta) => {
+        let q = supabase
+          .from("lab_ordenes")
+          .select(
+            "id, sede_id, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, valor_factura, factura_numero, tipo_servicio, doctora_id, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), doctora_instala:doctoras!lab_ordenes_doctora_instala_id_fkey(nombre), laboratorios(nombre)",
+          )
+          .not("valor_factura", "is", null)
+          .range(desde, hasta);
+        if (sedeId) q = q.eq("sede_id", sedeId);
+        if (doctoraId) q = q.or(`doctora_id.eq.${doctoraId},doctora_instala_id.eq.${doctoraId}`);
+        return q as unknown as PromiseLike<{ data: LabRowLab[] | null }>;
+      });
+      const filtradas = data.filter((r) => {
         const f = r.mes_liquidacion ?? r.fecha_instalado;
         return f && f >= periodo.inicio && f <= periodo.fin;
       });
@@ -722,19 +755,23 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
         })),
       );
 
-      let qInsumos = supabase
-        .from("insumos_consulta")
-        .select("id, tipo, valor_costo, visitas!inner(fecha, sede_id, doctora_id, pacientes(nombre), doctoras(nombre))")
-        .gte("visitas.fecha", periodo.inicio)
-        .lte("visitas.fecha", periodo.fin);
-      if (sedeId) qInsumos = qInsumos.eq("visitas.sede_id", sedeId);
-      if (doctoraId) qInsumos = qInsumos.eq("visitas.doctora_id", doctoraId);
-      const { data: insumosData } = await qInsumos;
+      type InsumoRowLab = {
+        id: string; tipo: string; valor_costo: number;
+        visitas: { fecha: string; doctora_id: string; pacientes: { nombre: string } | null; doctoras: { nombre: string } | null };
+      };
+      const insumosData = await fetchTodasLasFilas<InsumoRowLab>((desde, hasta) => {
+        let q = supabase
+          .from("insumos_consulta")
+          .select("id, tipo, valor_costo, visitas!inner(fecha, sede_id, doctora_id, pacientes(nombre), doctoras(nombre))")
+          .gte("visitas.fecha", periodo.inicio)
+          .lte("visitas.fecha", periodo.fin)
+          .range(desde, hasta);
+        if (sedeId) q = q.eq("visitas.sede_id", sedeId);
+        if (doctoraId) q = q.eq("visitas.doctora_id", doctoraId);
+        return q as unknown as PromiseLike<{ data: InsumoRowLab[] | null }>;
+      });
       setInsumos(
-        ((insumosData as unknown as {
-          id: string; tipo: string; valor_costo: number;
-          visitas: { fecha: string; doctora_id: string; pacientes: { nombre: string } | null; doctoras: { nombre: string } | null };
-        }[]) ?? []).map((r) => ({
+        insumosData.map((r) => ({
           id: r.id,
           fecha: r.visitas.fecha,
           paciente: r.visitas.pacientes?.nombre ?? "—",
@@ -933,21 +970,25 @@ function LiquidacionSedacion({ mes, sedeId }: { mes: string; sedeId: string }) {
   useEffect(() => {
     (async () => {
       setCargando(true);
-      let q = supabase
-        .from("cargo_pagos")
-        .select(
-          "id, medio_pago, valor, cargos!inner(concepto, fecha, sede_id, doctoras(nombre), visitas(pacientes(nombre)))",
-        )
-        .in("cargos.concepto", CONCEPTOS_SEDACION)
-        .gte("cargos.fecha", periodo.inicio)
-        .lte("cargos.fecha", periodo.fin);
-      if (sedeId) q = q.eq("cargos.sede_id", sedeId);
-      const { data } = await q;
+      type PagoSedacion = {
+        id: string; medio_pago: string; valor: number;
+        cargos: { concepto: string; fecha: string; doctoras: { nombre: string } | null; visitas: { pacientes: { nombre: string } | null } | null };
+      };
+      const data = await fetchTodasLasFilas<PagoSedacion>((desde, hasta) => {
+        let q = supabase
+          .from("cargo_pagos")
+          .select(
+            "id, medio_pago, valor, cargos!inner(concepto, fecha, sede_id, doctoras(nombre), visitas(pacientes(nombre)))",
+          )
+          .in("cargos.concepto", CONCEPTOS_SEDACION)
+          .gte("cargos.fecha", periodo.inicio)
+          .lte("cargos.fecha", periodo.fin)
+          .range(desde, hasta);
+        if (sedeId) q = q.eq("cargos.sede_id", sedeId);
+        return q as unknown as PromiseLike<{ data: PagoSedacion[] | null }>;
+      });
       setFilas(
-        ((data as unknown as {
-          id: string; medio_pago: string; valor: number;
-          cargos: { concepto: string; fecha: string; doctoras: { nombre: string } | null; visitas: { pacientes: { nombre: string } | null } | null };
-        }[]) ?? []).map((r) => ({
+        data.map((r) => ({
           id: r.id,
           fecha: r.cargos.fecha,
           paciente: r.cargos.visitas?.pacientes?.nombre ?? "—",
