@@ -115,8 +115,8 @@ interface FilaDoctora {
   porSede: FilaDoctoraSede[];
   detalleLabs: DetalleLab[];
   detalleInsumos: DetalleInsumo[];
-  retencionTipo: "" | "voluntaria" | "depuracion";
   retencionValor: string;
+  retencionDepuracionValor: string;
   guardando: boolean;
   guardado: boolean;
   detalleAbierto: boolean;
@@ -308,6 +308,22 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         });
       }
 
+      // Si el período ya se había liquidado antes (ej. la doctora entregó la
+      // depuración de renta después de guardar), recuperamos lo guardado en vez
+      // de recalcular desde cero, para no perder ediciones manuales previas.
+      const { data: guardadasData } = await supabase
+        .from("liquidaciones_doctora")
+        .select("doctora_id, retencion_valor, retencion_depuracion_valor")
+        .eq("periodo_inicio", periodo.inicio)
+        .eq("periodo_fin", periodo.fin);
+      const guardadaPorDoctora: Record<string, { retencionValor: number | null; retencionDepuracion: number }> = {};
+      for (const g of (guardadasData as { doctora_id: string; retencion_valor: number | null; retencion_depuracion_valor: number }[]) ?? []) {
+        guardadaPorDoctora[g.doctora_id] = {
+          retencionValor: g.retencion_valor,
+          retencionDepuracion: Number(g.retencion_depuracion_valor ?? 0),
+        };
+      }
+
       const nuevasFilas: FilaDoctora[] = ((doctoras as Doctora[]) ?? [])
         .filter((d) => (ventasPorDoctora[d.id] ?? 0) > 0 || (labsPorDoctora[d.id] ?? 0) > 0 || (insumosPorDoctora[d.id] ?? 0) > 0)
         .map((d) => {
@@ -316,6 +332,8 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
           const totalInsumos = insumosPorDoctora[d.id] ?? 0;
           const bruto = totalVentas * (pct / 100);
           const retencionAuto = d.retencion_voluntaria_activa ? bruto * (Number(d.retencion_voluntaria_pct) / 100) : 0;
+          const guardada = guardadaPorDoctora[d.id];
+          const retencionVoluntariaValor = guardada?.retencionValor != null ? Number(guardada.retencionValor) : retencionAuto;
           const sedeIds = new Set([
             ...Object.keys(ventasPorDoctoraSede[d.id] ?? {}),
             ...Object.keys(labsPorDoctoraSede[d.id] ?? {}),
@@ -336,8 +354,8 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
             porSede,
             detalleLabs: detalleLabsPorDoctora[d.id] ?? [],
             detalleInsumos: detalleInsumosPorDoctora[d.id] ?? [],
-            retencionTipo: d.retencion_voluntaria_activa ? "voluntaria" : "",
-            retencionValor: retencionAuto ? String(Math.round(retencionAuto)) : "",
+            retencionValor: retencionVoluntariaValor ? String(Math.round(retencionVoluntariaValor)) : "",
+            retencionDepuracionValor: guardada?.retencionDepuracion ? String(Math.round(guardada.retencionDepuracion)) : "",
             guardando: false,
             guardado: false,
             detalleAbierto: false,
@@ -356,8 +374,9 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
     const f = filas[idx];
     const bruto = f.totalVentas * (pctHonorario / 100);
     const deduccion = (f.totalLaboratorios + f.totalInsumos) * (pctHonorario / 100);
-    const retencion = Number(f.retencionValor) || 0;
-    const totalPago = bruto - deduccion - retencion;
+    const retencionVoluntaria = Number(f.retencionValor) || 0;
+    const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
+    const totalPago = bruto - deduccion - retencionVoluntaria - retencionDepuracion;
     // IBC (Ingreso Base de Cotización) para seguridad social de independientes:
     // 40% del valor total a pagar, por ley.
     const ibc = totalPago * 0.4;
@@ -376,21 +395,31 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
           total_insumos: f.totalInsumos,
           deduccion_labs_insumos: deduccion,
           total_pago: totalPago,
-          retencion_valor: retencion || null,
-          retencion_tipo: retencion > 0 ? f.retencionTipo || "depuracion" : null,
+          retencion_valor: retencionVoluntaria || null,
+          retencion_tipo: retencionVoluntaria > 0 ? "voluntaria" : null,
+          retencion_depuracion_valor: retencionDepuracion,
           ibc,
-          estado: retencion > 0 ? "retencion_asignada" : "calculada",
+          estado: retencionVoluntaria > 0 || retencionDepuracion > 0 ? "retencion_asignada" : "calculada",
         },
         { onConflict: "doctora_id,periodo_inicio,periodo_fin" },
       )
       .select("id")
       .single();
-    if (!error && data && retencion > 0) {
-      await supabase.from("retenciones_historial").insert({
-        liquidacion_id: data.id,
-        valor: retencion,
-        tipo: f.retencionTipo || "depuracion",
-      });
+    if (!error && data) {
+      if (retencionVoluntaria > 0) {
+        await supabase.from("retenciones_historial").insert({
+          liquidacion_id: data.id,
+          valor: retencionVoluntaria,
+          tipo: "voluntaria",
+        });
+      }
+      if (retencionDepuracion > 0) {
+        await supabase.from("retenciones_historial").insert({
+          liquidacion_id: data.id,
+          valor: retencionDepuracion,
+          tipo: "depuracion",
+        });
+      }
     }
     actualizarFila(idx, { guardando: false, guardado: true });
     setTimeout(() => actualizarFila(idx, { guardado: false }), 1500);
@@ -408,8 +437,9 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         const bruto = f.totalVentas * (pctHonorario / 100);
         const totalLaboratoriosInsumos = f.totalLaboratorios + f.totalInsumos;
         const deduccion = totalLaboratoriosInsumos * (pctHonorario / 100);
-        const retencion = Number(f.retencionValor) || 0;
-        const totalPago = bruto - deduccion - retencion;
+        const retencionVoluntaria = Number(f.retencionValor) || 0;
+        const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
+        const totalPago = bruto - deduccion - retencionVoluntaria - retencionDepuracion;
         const ibc = totalPago * 0.4;
         return (
           <div key={f.doctora.id} className="bg-white rounded-xl border border-gray-200 p-4">
@@ -459,26 +489,30 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
               Laboratorios: {fmtCOP(f.totalLaboratorios)} · Otros aparatología (elásticos/tracción/máscara): {fmtCOP(f.totalInsumos)} · Se
               descuenta el {pctHonorario}% de esa suma: <span className="font-medium text-tinta">{fmtCOP(deduccion)}</span>
             </p>
-            <div className="flex items-end gap-2 flex-wrap mb-3">
+            <div className="flex items-end gap-4 flex-wrap mb-3">
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Retención</label>
-                <select
-                  value={f.retencionTipo}
-                  onChange={(e) => actualizarFila(idx, { retencionTipo: e.target.value as FilaDoctora["retencionTipo"] })}
-                  className="rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                >
-                  <option value="">Ninguna</option>
-                  <option value="voluntaria">Voluntaria</option>
-                  <option value="depuracion">Depuración</option>
-                </select>
+                <label className="block text-xs text-gray-400 mb-1">Retención voluntaria</label>
+                <input
+                  type="number"
+                  value={f.retencionValor}
+                  onChange={(e) => actualizarFila(idx, { retencionValor: e.target.value })}
+                  placeholder="0"
+                  className="w-32 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
               </div>
-              <input
-                type="number"
-                value={f.retencionValor}
-                onChange={(e) => actualizarFila(idx, { retencionValor: e.target.value })}
-                placeholder="Valor retención"
-                className="w-32 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-              />
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">
+                  Retención depuración de renta
+                </label>
+                <input
+                  type="number"
+                  value={f.retencionDepuracionValor}
+                  onChange={(e) => actualizarFila(idx, { retencionDepuracionValor: e.target.value })}
+                  placeholder="0"
+                  title="Solo se conoce después de recibir la cuenta de cobro y el formato de depuración diligenciado — puedes agregarla más tarde, aunque ya hayas guardado la liquidación."
+                  className="w-32 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </div>
               <div className="ml-auto flex items-end gap-6">
                 <div className="text-right">
                   <p className="text-xs text-gray-400">IBC seg. social (40%)</p>
