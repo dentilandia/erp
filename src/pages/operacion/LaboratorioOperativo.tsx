@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { Plus, X, Pencil, Check } from "lucide-react";
+import { Plus, X, Pencil, Check, Trash2 } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
 import { TIPOS_SERVICIO_LAB, type Sede, type Doctora, type Laboratorio, type Paciente, type EstadoLab } from "../../lib/types";
@@ -153,6 +153,13 @@ export function LaboratorioOperativo() {
     }
     await supabase.from("lab_ordenes").update(cambios).eq("id", id);
     setGuardandoEdit(false);
+    setEditandoId(null);
+    cargarOrdenes();
+  }
+
+  async function eliminarOrden(id: string) {
+    if (!window.confirm("¿Eliminar este aparato? Esta acción no se puede deshacer.")) return;
+    await supabase.from("lab_ordenes").delete().eq("id", id);
     setEditandoId(null);
     cargarOrdenes();
   }
@@ -436,6 +443,13 @@ export function LaboratorioOperativo() {
                         </button>
                         <button onClick={() => setEditandoId(null)} className="px-2 text-gray-400">
                           <X size={16} />
+                        </button>
+                        <button
+                          onClick={() => eliminarOrden(o.id)}
+                          title="Eliminar este aparato"
+                          className="ml-auto flex items-center gap-1 rounded-md border border-red-200 text-red-500 px-3 py-1.5 text-xs font-medium hover:bg-red-50"
+                        >
+                          <Trash2 size={14} /> Eliminar
                         </button>
                       </div>
                     </div>
