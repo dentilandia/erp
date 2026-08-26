@@ -40,6 +40,7 @@ export function Consultorio() {
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
   const [filtroDoctora, setFiltroDoctora] = useState("");
   const [doctoraInstalaPorOrden, setDoctoraInstalaPorOrden] = useState<Record<string, string>>({});
+  const [fechaInstaladoPorOrden, setFechaInstaladoPorOrden] = useState<Record<string, string>>({});
 
   const [mostrarReporteDoctora, setMostrarReporteDoctora] = useState(false);
   const [doctoraReporteId, setDoctoraReporteId] = useState("");
@@ -125,7 +126,8 @@ export function Consultorio() {
 
   async function marcarInstalado(p: LabPendienteInstalar) {
     const doctoraInstala = doctoraInstalaPorOrden[p.id] ?? p.doctora_id;
-    const cambios: Record<string, unknown> = { estado: "instalado", fecha_instalado: today() };
+    const fechaInstalado = fechaInstaladoPorOrden[p.id] ?? today();
+    const cambios: Record<string, unknown> = { estado: "instalado", fecha_instalado: fechaInstalado };
     if (doctoraInstala !== p.doctora_id) {
       if (p.tipo_servicio === "reparacion") {
         // En reparación no se divide: el pago es completo para quien instala.
@@ -212,6 +214,13 @@ export function Consultorio() {
                 )}
               </span>
               <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  value={fechaInstaladoPorOrden[p.id] ?? today()}
+                  onChange={(e) => setFechaInstaladoPorOrden((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                  title="Fecha de instalación (define en qué mes se liquida)"
+                  className="rounded-md border border-gray-300 px-2 py-1 text-xs"
+                />
                 <select
                   value={doctoraInstalaPorOrden[p.id] ?? p.doctora_id}
                   onChange={(e) => setDoctoraInstalaPorOrden((prev) => ({ ...prev, [p.id]: e.target.value }))}
