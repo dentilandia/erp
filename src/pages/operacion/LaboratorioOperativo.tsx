@@ -444,9 +444,9 @@ export function LaboratorioOperativo() {
                         {o.pacientes?.nombre} <span className="text-gray-400">· {o.doctoras?.nombre} · {o.laboratorios?.nombre}</span>
                       </span>
                       <span className="flex items-center gap-3">
-                        {(o.mes_liquidacion || o.fecha_emision_factura || o.fecha_recibido) && (
+                        {(o.mes_liquidacion || o.fecha_recibido) && (
                           <span className="text-xs text-gray-400" title="Fecha usada para el período de liquidación">
-                            {o.mes_liquidacion ?? o.fecha_emision_factura ?? o.fecha_recibido}
+                            {o.mes_liquidacion ?? o.fecha_recibido}
                           </span>
                         )}
                         {o.valor_factura && <span className="text-gray-500">{fmtCOP(o.valor_factura)}</span>}

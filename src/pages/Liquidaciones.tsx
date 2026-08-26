@@ -248,7 +248,11 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; factura_numero: string | null;
         pacientes: { nombre: string } | null; laboratorios: { nombre: string } | null;
       }[]) ?? []) {
-        const fechaComparar = l.mes_liquidacion ?? l.fecha_emision_factura ?? l.fecha_recibido;
+        // El período de liquidación se define por cuándo se recibió la factura
+        // (no por la fecha de emisión del laboratorio, que puede ser semanas
+        // antes) — mes_liquidacion es solo el override manual para facturas
+        // atrasadas que se descubren después.
+        const fechaComparar = l.mes_liquidacion ?? l.fecha_recibido;
         if (!fechaComparar || fechaComparar < periodo.inicio || fechaComparar > periodo.fin) continue;
         const valor = Number(l.valor_factura);
         const sedeNom = sedeNombre[l.sede_id] ?? "—";
@@ -699,13 +703,13 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
         factura_numero: string | null; tipo_servicio: string; doctora_id: string;
         pacientes: { nombre: string } | null; doctoras: { nombre: string } | null; doctora_instala: { nombre: string } | null; laboratorios: { nombre: string } | null;
       }[]) ?? []).filter((r) => {
-        const f = r.mes_liquidacion ?? r.fecha_emision_factura ?? r.fecha_recibido;
+        const f = r.mes_liquidacion ?? r.fecha_recibido;
         return f && f >= periodo.inicio && f <= periodo.fin;
       });
       setFilas(
         filtradas.map((r) => ({
           id: r.id,
-          fecha: r.mes_liquidacion ?? r.fecha_emision_factura ?? r.fecha_recibido,
+          fecha: r.mes_liquidacion ?? r.fecha_recibido,
           paciente: r.pacientes?.nombre ?? "—",
           doctoraId: r.doctora_id,
           doctora: r.doctoras?.nombre ?? "—",
