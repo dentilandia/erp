@@ -122,28 +122,72 @@ interface FilaDoctora {
   detalleAbierto: boolean;
 }
 
-function exportarDetalleDoctora(mes: string, periodo: { inicio: string; fin: string }, f: FilaDoctora) {
-  const lineas: string[] = [];
-  lineas.push(`Liquidación ${f.doctora.nombre} - período ${periodo.inicio} a ${periodo.fin}`);
-  lineas.push("");
-  lineas.push("Laboratorios (aparatos)");
-  lineas.push(["Fecha", "Sede", "Paciente", "Laboratorio", "Factura", "Valor", "Nota"].join(","));
-  for (const d of f.detalleLabs) {
-    lineas.push([d.fecha ?? "", d.sedeNombre, d.paciente, d.laboratorio, d.facturaNumero ?? "", d.valor, d.nota ?? ""].join(","));
+function esc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** Abre una ventana de impresión con el respaldo — la doctora/admin le da "Guardar como PDF" desde el diálogo de impresión. */
+function exportarDetalleDoctora(periodo: { inicio: string; fin: string }, f: FilaDoctora) {
+  const totalLabs = f.detalleLabs.reduce((a, d) => a + d.valor, 0);
+  const totalOtros = f.detalleInsumos.reduce((a, d) => a + d.valor, 0);
+  const filasLabs = f.detalleLabs
+    .map(
+      (d) =>
+        `<tr><td>${esc(d.fecha ?? "—")}</td><td>${esc(d.sedeNombre)}</td><td>${esc(d.paciente)}</td><td>${esc(d.laboratorio)}${
+          d.nota ? ` <span class="nota">(${esc(d.nota)})</span>` : ""
+        }</td><td>${esc(d.facturaNumero ?? "—")}</td><td class="num">${esc(fmtCOP(d.valor))}</td></tr>`,
+    )
+    .join("");
+  const filasOtros = f.detalleInsumos
+    .map(
+      (d) =>
+        `<tr><td>${esc(d.fecha)}</td><td>${esc(d.sedeNombre)}</td><td>${esc(d.paciente)}</td><td>${esc(d.tipo)}</td><td class="num">${esc(fmtCOP(d.valor))}</td></tr>`,
+    )
+    .join("");
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>Respaldo liquidación - ${esc(f.doctora.nombre)}</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; color: #2E253A; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  p.periodo { color: #666; font-size: 12px; margin: 0 0 22px; }
+  h2 { font-size: 14px; margin: 22px 0 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { border: 1px solid #ddd; padding: 5px 7px; text-align: left; }
+  th { background: #f5f5f5; }
+  .num { text-align: right; }
+  .nota { color: #888; }
+  tfoot td { font-weight: 600; background: #fafafa; }
+  @media print { body { padding: 0; } }
+</style>
+</head>
+<body>
+  <h1>Respaldo de liquidación — ${esc(f.doctora.nombre)}</h1>
+  <p class="periodo">Período ${periodo.inicio} a ${periodo.fin}</p>
+
+  <h2>Laboratorios (aparatos)</h2>
+  <table>
+    <thead><tr><th>Fecha</th><th>Sede</th><th>Paciente</th><th>Laboratorio</th><th>Factura</th><th class="num">Valor</th></tr></thead>
+    <tbody>${filasLabs || `<tr><td colspan="6">Sin laboratorios en este período.</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="5">Total laboratorios</td><td class="num">${esc(fmtCOP(totalLabs))}</td></tr></tfoot>
+  </table>
+
+  <h2>Otros aparatología</h2>
+  <table>
+    <thead><tr><th>Fecha</th><th>Sede</th><th>Paciente</th><th>Insumo</th><th class="num">Valor</th></tr></thead>
+    <tbody>${filasOtros || `<tr><td colspan="5">Sin otros aparatología en este período.</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="4">Total otros aparatología</td><td class="num">${esc(fmtCOP(totalOtros))}</td></tr></tfoot>
+  </table>
+</body></html>`;
+  const ventana = window.open("", "_blank");
+  if (!ventana) {
+    window.alert("El navegador bloqueó la ventana de impresión — permite ventanas emergentes para este sitio e inténtalo de nuevo.");
+    return;
   }
-  lineas.push("");
-  lineas.push("Insumos de aparatología");
-  lineas.push(["Fecha", "Sede", "Paciente", "Insumo", "Valor"].join(","));
-  for (const d of f.detalleInsumos) {
-    lineas.push([d.fecha, d.sedeNombre, d.paciente, d.tipo, d.valor].join(","));
-  }
-  const blob = new Blob([lineas.join("\n")], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `respaldo-${f.doctora.nombre.replace(/\s+/g, "_")}-${mes}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  ventana.document.write(html);
+  ventana.document.close();
+  ventana.focus();
+  ventana.onload = () => ventana.print();
 }
 
 function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: string; sedes: Sede[] }) {
@@ -380,7 +424,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                   <span>Sede</span>
                   <span className="text-right">Ventas</span>
                   <span className="text-right">Laboratorios</span>
-                  <span className="text-right">Insumos</span>
+                  <span className="text-right">Otros aparatología</span>
                 </div>
                 {f.porSede.map((s) => (
                   <div key={s.sedeId} className="grid grid-cols-4 gap-2 px-3 py-1.5 text-sm">
@@ -407,12 +451,12 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                 <p className="font-medium">{fmtCOP(bruto)}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-400">Laboratorios + insumos (100%)</p>
+                <p className="text-xs text-gray-400">Laboratorios + otros aparatología (100%)</p>
                 <p className="font-medium">{fmtCOP(totalLaboratoriosInsumos)}</p>
               </div>
             </div>
             <p className="text-xs text-gray-400 -mt-2 mb-3">
-              Laboratorios: {fmtCOP(f.totalLaboratorios)} · Insumos (elásticos/tracción/máscara): {fmtCOP(f.totalInsumos)} · Se
+              Laboratorios: {fmtCOP(f.totalLaboratorios)} · Otros aparatología (elásticos/tracción/máscara): {fmtCOP(f.totalInsumos)} · Se
               descuenta el {pctHonorario}% de esa suma: <span className="font-medium text-tinta">{fmtCOP(deduccion)}</span>
             </p>
             <div className="flex items-end gap-2 flex-wrap mb-3">
@@ -456,10 +500,10 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
               </button>
               {(f.detalleLabs.length > 0 || f.detalleInsumos.length > 0) && (
                 <button
-                  onClick={() => exportarDetalleDoctora(mes, periodo, f)}
+                  onClick={() => exportarDetalleDoctora(periodo, f)}
                   className="flex items-center gap-1 text-xs font-medium text-gray-500"
                 >
-                  <Download size={13} /> Exportar respaldo para enviar
+                  <Download size={13} /> Exportar respaldo en PDF
                 </button>
               )}
             </div>
@@ -509,7 +553,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                 </div>
                 <div>
                   <p className="text-xs font-semibold text-gray-500 mb-1">
-                    Insumos de aparatología entregados ({f.detalleInsumos.length})
+                    Otros aparatología entregados ({f.detalleInsumos.length})
                   </p>
                   <div className="rounded-lg border border-gray-200 overflow-x-auto">
                     <table className="w-full text-xs">
@@ -535,7 +579,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                         {f.detalleInsumos.length === 0 && (
                           <tr>
                             <td colSpan={5} className="px-2 py-2 text-center text-gray-400">
-                              Sin insumos en este período.
+                              Sin otros aparatología en este período.
                             </td>
                           </tr>
                         )}
@@ -775,7 +819,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
       )}
 
       <div className="flex items-center justify-between pt-2">
-        <h3 className="text-sm font-semibold text-gray-500">Insumos de aparatología</h3>
+        <h3 className="text-sm font-semibold text-gray-500">Otros aparatología</h3>
         <button onClick={exportarInsumos} className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]">
           <Download size={16} /> Exportar
         </button>
@@ -804,7 +848,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
             {insumos.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-3 py-4 text-center text-gray-400">
-                  Sin insumos de aparatología en este período.
+                  Sin otros aparatología en este período.
                 </td>
               </tr>
             )}
@@ -813,7 +857,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
       </div>
       {insumos.length > 0 && (
         <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-white border border-gray-200 text-sm font-semibold">
-          <span>Total insumos</span>
+          <span>Total otros aparatología</span>
           <span>{fmtCOP(totalInsumos)}</span>
         </div>
       )}
