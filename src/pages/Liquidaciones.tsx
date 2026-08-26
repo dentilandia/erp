@@ -448,7 +448,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
               <span className="font-semibold text-tinta">{f.doctora.nombre}</span>
             </div>
 
-            {!sedeId && f.porSede.length > 1 && (
+            {!sedeId && f.porSede.length >= 1 && (
               <div className="rounded-lg border border-gray-200 divide-y divide-gray-100 mb-3">
                 <div className="grid grid-cols-4 gap-2 px-3 py-1.5 text-xs font-semibold text-gray-500 bg-gray-50">
                   <span>Sede</span>
