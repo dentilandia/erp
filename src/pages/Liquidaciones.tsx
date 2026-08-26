@@ -85,7 +85,26 @@ interface FilaDoctoraSede {
   sedeId: string;
   sedeNombre: string;
   ventas: number;
-  labsInsumos: number;
+  labs: number;
+  insumos: number;
+}
+
+interface DetalleLab {
+  fecha: string | null;
+  sedeNombre: string;
+  paciente: string;
+  laboratorio: string;
+  facturaNumero: string | null;
+  valor: number;
+  nota: string | null;
+}
+
+interface DetalleInsumo {
+  fecha: string;
+  sedeNombre: string;
+  paciente: string;
+  tipo: string;
+  valor: number;
 }
 
 interface FilaDoctora {
@@ -94,10 +113,37 @@ interface FilaDoctora {
   totalLaboratorios: number;
   totalInsumos: number;
   porSede: FilaDoctoraSede[];
+  detalleLabs: DetalleLab[];
+  detalleInsumos: DetalleInsumo[];
   retencionTipo: "" | "voluntaria" | "depuracion";
   retencionValor: string;
   guardando: boolean;
   guardado: boolean;
+  detalleAbierto: boolean;
+}
+
+function exportarDetalleDoctora(mes: string, periodo: { inicio: string; fin: string }, f: FilaDoctora) {
+  const lineas: string[] = [];
+  lineas.push(`Liquidación ${f.doctora.nombre} - período ${periodo.inicio} a ${periodo.fin}`);
+  lineas.push("");
+  lineas.push("Laboratorios (aparatos)");
+  lineas.push(["Fecha", "Sede", "Paciente", "Laboratorio", "Factura", "Valor", "Nota"].join(","));
+  for (const d of f.detalleLabs) {
+    lineas.push([d.fecha ?? "", d.sedeNombre, d.paciente, d.laboratorio, d.facturaNumero ?? "", d.valor, d.nota ?? ""].join(","));
+  }
+  lineas.push("");
+  lineas.push("Insumos de aparatología");
+  lineas.push(["Fecha", "Sede", "Paciente", "Insumo", "Valor"].join(","));
+  for (const d of f.detalleInsumos) {
+    lineas.push([d.fecha, d.sedeNombre, d.paciente, d.tipo, d.valor].join(","));
+  }
+  const blob = new Blob([lineas.join("\n")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `respaldo-${f.doctora.nombre.replace(/\s+/g, "_")}-${mes}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: string; sedes: Sede[] }) {
@@ -135,28 +181,54 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
 
       let qLabs = supabase
         .from("lab_ordenes")
-        .select("doctora_id, doctora_instala_id, tipo_servicio, sede_id, valor_factura, mes_liquidacion, fecha_emision_factura, fecha_recibido")
+        .select(
+          "doctora_id, doctora_instala_id, tipo_servicio, sede_id, valor_factura, mes_liquidacion, fecha_emision_factura, fecha_recibido, factura_numero, pacientes(nombre), laboratorios(nombre)",
+        )
         .not("valor_factura", "is", null);
       if (sedeId) qLabs = qLabs.eq("sede_id", sedeId);
       const { data: labsData } = await qLabs;
       const labsPorDoctora: Record<string, number> = {};
-      const labsInsumosPorDoctoraSede: Record<string, Record<string, number>> = {};
-      const sumarLabsInsumo = (doctoraId: string, sedeIdItem: string, valor: number) => {
+      const labsPorDoctoraSede: Record<string, Record<string, number>> = {};
+      const detalleLabsPorDoctora: Record<string, DetalleLab[]> = {};
+      const sumarLab = (doctoraId: string, sedeIdItem: string, valor: number) => {
         labsPorDoctora[doctoraId] = (labsPorDoctora[doctoraId] ?? 0) + valor;
-        labsInsumosPorDoctoraSede[doctoraId] = labsInsumosPorDoctoraSede[doctoraId] ?? {};
-        labsInsumosPorDoctoraSede[doctoraId][sedeIdItem] = (labsInsumosPorDoctoraSede[doctoraId][sedeIdItem] ?? 0) + valor;
+        labsPorDoctoraSede[doctoraId] = labsPorDoctoraSede[doctoraId] ?? {};
+        labsPorDoctoraSede[doctoraId][sedeIdItem] = (labsPorDoctoraSede[doctoraId][sedeIdItem] ?? 0) + valor;
       };
-      for (const l of labsData ?? []) {
+      const agregarDetalleLab = (doctoraId: string, det: DetalleLab) => {
+        detalleLabsPorDoctora[doctoraId] = detalleLabsPorDoctora[doctoraId] ?? [];
+        detalleLabsPorDoctora[doctoraId].push(det);
+      };
+      for (const l of (labsData as unknown as {
+        doctora_id: string; doctora_instala_id: string | null; tipo_servicio: string; sede_id: string; valor_factura: number;
+        mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; factura_numero: string | null;
+        pacientes: { nombre: string } | null; laboratorios: { nombre: string } | null;
+      }[]) ?? []) {
         const fechaComparar = l.mes_liquidacion ?? l.fecha_emision_factura ?? l.fecha_recibido;
         if (!fechaComparar || fechaComparar < periodo.inicio || fechaComparar > periodo.fin) continue;
         const valor = Number(l.valor_factura);
+        const sedeNom = sedeNombre[l.sede_id] ?? "—";
+        const paciente = l.pacientes?.nombre ?? "—";
+        const laboratorio = l.laboratorios?.nombre ?? "—";
         // Fabricación con doctora de instalación distinta a quien tomó la impresión
         // se reparte 50/50; en reparación (o sin doctora_instala_id) va completo a doctora_id.
         if (l.tipo_servicio === "fabricacion" && l.doctora_instala_id && l.doctora_instala_id !== l.doctora_id) {
-          sumarLabsInsumo(l.doctora_id, l.sede_id, valor / 2);
-          sumarLabsInsumo(l.doctora_instala_id, l.sede_id, valor / 2);
+          sumarLab(l.doctora_id, l.sede_id, valor / 2);
+          sumarLab(l.doctora_instala_id, l.sede_id, valor / 2);
+          agregarDetalleLab(l.doctora_id, {
+            fecha: fechaComparar, sedeNombre: sedeNom, paciente, laboratorio, facturaNumero: l.factura_numero,
+            valor: valor / 2, nota: "50/50 con doctora que instaló",
+          });
+          agregarDetalleLab(l.doctora_instala_id, {
+            fecha: fechaComparar, sedeNombre: sedeNom, paciente, laboratorio, facturaNumero: l.factura_numero,
+            valor: valor / 2, nota: "50/50 con doctora que tomó la impresión",
+          });
         } else {
-          sumarLabsInsumo(l.doctora_id, l.sede_id, valor);
+          sumarLab(l.doctora_id, l.sede_id, valor);
+          agregarDetalleLab(l.doctora_id, {
+            fecha: fechaComparar, sedeNombre: sedeNom, paciente, laboratorio, facturaNumero: l.factura_numero,
+            valor, nota: null,
+          });
         }
       }
 
@@ -165,18 +237,31 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
       // los laboratorios — se suman a la misma base antes de aplicar el %.
       let qInsumos = supabase
         .from("insumos_consulta")
-        .select("valor_costo, visitas!inner(doctora_id, sede_id, fecha)")
+        .select("valor_costo, tipo, visitas!inner(doctora_id, sede_id, fecha, pacientes(nombre))")
         .gte("visitas.fecha", periodo.inicio)
         .lte("visitas.fecha", periodo.fin);
       if (sedeId) qInsumos = qInsumos.eq("visitas.sede_id", sedeId);
       const { data: insumosData } = await qInsumos;
       const insumosPorDoctora: Record<string, number> = {};
-      for (const i of (insumosData as unknown as { valor_costo: number; visitas: { doctora_id: string; sede_id: string } }[]) ?? []) {
-        const { doctora_id, sede_id } = i.visitas;
+      const insumosPorDoctoraSede: Record<string, Record<string, number>> = {};
+      const detalleInsumosPorDoctora: Record<string, DetalleInsumo[]> = {};
+      for (const i of (insumosData as unknown as {
+        valor_costo: number; tipo: string;
+        visitas: { doctora_id: string; sede_id: string; fecha: string; pacientes: { nombre: string } | null };
+      }[]) ?? []) {
+        const { doctora_id, sede_id, fecha, pacientes } = i.visitas;
         const valor = Number(i.valor_costo);
         insumosPorDoctora[doctora_id] = (insumosPorDoctora[doctora_id] ?? 0) + valor;
-        labsInsumosPorDoctoraSede[doctora_id] = labsInsumosPorDoctoraSede[doctora_id] ?? {};
-        labsInsumosPorDoctoraSede[doctora_id][sede_id] = (labsInsumosPorDoctoraSede[doctora_id][sede_id] ?? 0) + valor;
+        insumosPorDoctoraSede[doctora_id] = insumosPorDoctoraSede[doctora_id] ?? {};
+        insumosPorDoctoraSede[doctora_id][sede_id] = (insumosPorDoctoraSede[doctora_id][sede_id] ?? 0) + valor;
+        detalleInsumosPorDoctora[doctora_id] = detalleInsumosPorDoctora[doctora_id] ?? [];
+        detalleInsumosPorDoctora[doctora_id].push({
+          fecha,
+          sedeNombre: sedeNombre[sede_id] ?? "—",
+          paciente: pacientes?.nombre ?? "—",
+          tipo: TIPOS_INSUMO_LABEL[i.tipo] ?? i.tipo,
+          valor,
+        });
       }
 
       const nuevasFilas: FilaDoctora[] = ((doctoras as Doctora[]) ?? [])
@@ -187,12 +272,17 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
           const totalInsumos = insumosPorDoctora[d.id] ?? 0;
           const bruto = totalVentas * (pct / 100);
           const retencionAuto = d.retencion_voluntaria_activa ? bruto * (Number(d.retencion_voluntaria_pct) / 100) : 0;
-          const sedeIds = new Set([...Object.keys(ventasPorDoctoraSede[d.id] ?? {}), ...Object.keys(labsInsumosPorDoctoraSede[d.id] ?? {})]);
+          const sedeIds = new Set([
+            ...Object.keys(ventasPorDoctoraSede[d.id] ?? {}),
+            ...Object.keys(labsPorDoctoraSede[d.id] ?? {}),
+            ...Object.keys(insumosPorDoctoraSede[d.id] ?? {}),
+          ]);
           const porSede: FilaDoctoraSede[] = Array.from(sedeIds).map((sid) => ({
             sedeId: sid,
             sedeNombre: sedeNombre[sid] ?? "—",
             ventas: ventasPorDoctoraSede[d.id]?.[sid] ?? 0,
-            labsInsumos: labsInsumosPorDoctoraSede[d.id]?.[sid] ?? 0,
+            labs: labsPorDoctoraSede[d.id]?.[sid] ?? 0,
+            insumos: insumosPorDoctoraSede[d.id]?.[sid] ?? 0,
           }));
           return {
             doctora: d,
@@ -200,10 +290,13 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
             totalLaboratorios,
             totalInsumos,
             porSede,
+            detalleLabs: detalleLabsPorDoctora[d.id] ?? [],
+            detalleInsumos: detalleInsumosPorDoctora[d.id] ?? [],
             retencionTipo: d.retencion_voluntaria_activa ? "voluntaria" : "",
             retencionValor: retencionAuto ? String(Math.round(retencionAuto)) : "",
             guardando: false,
             guardado: false,
+            detalleAbierto: false,
           };
         });
       setFilas(nuevasFilas);
@@ -221,6 +314,9 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
     const deduccion = (f.totalLaboratorios + f.totalInsumos) * (pctHonorario / 100);
     const retencion = Number(f.retencionValor) || 0;
     const totalPago = bruto - deduccion - retencion;
+    // IBC (Ingreso Base de Cotización) para seguridad social de independientes:
+    // 40% del valor total a pagar, por ley.
+    const ibc = totalPago * 0.4;
     actualizarFila(idx, { guardando: true });
     const { data, error } = await supabase
       .from("liquidaciones_doctora")
@@ -238,7 +334,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
           total_pago: totalPago,
           retencion_valor: retencion || null,
           retencion_tipo: retencion > 0 ? f.retencionTipo || "depuracion" : null,
-          ibc: bruto,
+          ibc,
           estado: retencion > 0 ? "retencion_asignada" : "calculada",
         },
         { onConflict: "doctora_id,periodo_inicio,periodo_fin" },
@@ -262,7 +358,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
     <div className="space-y-3">
       <p className="text-xs text-gray-400">
         Período {periodo.inicio} a {periodo.fin}. Solo cuenta lo efectivamente cobrado (incluye pagos con saldo a
-        favor, no la creación de estos). IBC = valor bruto — confírmame si debe ser otro cálculo.
+        favor, no la creación de estos). IBC = 40% del total a pagar (base de cotización a seguridad social).
       </p>
       {filas.map((f, idx) => {
         const bruto = f.totalVentas * (pctHonorario / 100);
@@ -270,6 +366,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         const deduccion = totalLaboratoriosInsumos * (pctHonorario / 100);
         const retencion = Number(f.retencionValor) || 0;
         const totalPago = bruto - deduccion - retencion;
+        const ibc = totalPago * 0.4;
         return (
           <div key={f.doctora.id} className="bg-white rounded-xl border border-gray-200 p-4">
             <div className="flex items-center gap-2 mb-3">
@@ -279,16 +376,18 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
 
             {!sedeId && f.porSede.length > 1 && (
               <div className="rounded-lg border border-gray-200 divide-y divide-gray-100 mb-3">
-                <div className="grid grid-cols-3 gap-2 px-3 py-1.5 text-xs font-semibold text-gray-500 bg-gray-50">
+                <div className="grid grid-cols-4 gap-2 px-3 py-1.5 text-xs font-semibold text-gray-500 bg-gray-50">
                   <span>Sede</span>
                   <span className="text-right">Ventas</span>
-                  <span className="text-right">Labs + insumos (100%)</span>
+                  <span className="text-right">Laboratorios</span>
+                  <span className="text-right">Insumos</span>
                 </div>
                 {f.porSede.map((s) => (
-                  <div key={s.sedeId} className="grid grid-cols-3 gap-2 px-3 py-1.5 text-sm">
+                  <div key={s.sedeId} className="grid grid-cols-4 gap-2 px-3 py-1.5 text-sm">
                     <span>{s.sedeNombre}</span>
                     <span className="text-right">{fmtCOP(s.ventas)}</span>
-                    <span className="text-right">{fmtCOP(s.labsInsumos)}</span>
+                    <span className="text-right">{fmtCOP(s.labs)}</span>
+                    <span className="text-right">{fmtCOP(s.insumos)}</span>
                   </div>
                 ))}
               </div>
@@ -336,11 +435,117 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                 placeholder="Valor retención"
                 className="w-32 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
               />
-              <div className="ml-auto text-right">
-                <p className="text-xs text-gray-400">Total a pagar</p>
-                <p className="font-semibold text-lg">{fmtCOP(totalPago)}</p>
+              <div className="ml-auto flex items-end gap-6">
+                <div className="text-right">
+                  <p className="text-xs text-gray-400">IBC seg. social (40%)</p>
+                  <p className="font-medium">{fmtCOP(ibc)}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-gray-400">Total a pagar</p>
+                  <p className="font-semibold text-lg">{fmtCOP(totalPago)}</p>
+                </div>
               </div>
             </div>
+
+            <div className="flex items-center gap-3 mb-3">
+              <button
+                onClick={() => actualizarFila(idx, { detalleAbierto: !f.detalleAbierto })}
+                className="text-xs font-medium text-[var(--acento)]"
+              >
+                {f.detalleAbierto ? "Ocultar detalle" : "Ver detalle (laboratorios e insumos)"}
+              </button>
+              {(f.detalleLabs.length > 0 || f.detalleInsumos.length > 0) && (
+                <button
+                  onClick={() => exportarDetalleDoctora(mes, periodo, f)}
+                  className="flex items-center gap-1 text-xs font-medium text-gray-500"
+                >
+                  <Download size={13} /> Exportar respaldo para enviar
+                </button>
+              )}
+            </div>
+
+            {f.detalleAbierto && (
+              <div className="space-y-3 mb-3">
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 mb-1">
+                    Aparatos instalados / enviados a laboratorio ({f.detalleLabs.length})
+                  </p>
+                  <div className="rounded-lg border border-gray-200 overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-gray-50 text-left text-gray-500">
+                          <th className="px-2 py-1.5">Fecha</th>
+                          <th className="px-2 py-1.5">Sede</th>
+                          <th className="px-2 py-1.5">Paciente</th>
+                          <th className="px-2 py-1.5">Laboratorio</th>
+                          <th className="px-2 py-1.5">Factura</th>
+                          <th className="px-2 py-1.5 text-right">Valor</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {f.detalleLabs.map((d, i) => (
+                          <tr key={i} className="border-t border-gray-100">
+                            <td className="px-2 py-1.5">{d.fecha}</td>
+                            <td className="px-2 py-1.5">{d.sedeNombre}</td>
+                            <td className="px-2 py-1.5">{d.paciente}</td>
+                            <td className="px-2 py-1.5">
+                              {d.laboratorio}
+                              {d.nota && <span className="text-gray-400"> ({d.nota})</span>}
+                            </td>
+                            <td className="px-2 py-1.5">{d.facturaNumero ?? "—"}</td>
+                            <td className="px-2 py-1.5 text-right">{fmtCOP(d.valor)}</td>
+                          </tr>
+                        ))}
+                        {f.detalleLabs.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="px-2 py-2 text-center text-gray-400">
+                              Sin laboratorios en este período.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 mb-1">
+                    Insumos de aparatología entregados ({f.detalleInsumos.length})
+                  </p>
+                  <div className="rounded-lg border border-gray-200 overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-gray-50 text-left text-gray-500">
+                          <th className="px-2 py-1.5">Fecha</th>
+                          <th className="px-2 py-1.5">Sede</th>
+                          <th className="px-2 py-1.5">Paciente</th>
+                          <th className="px-2 py-1.5">Insumo</th>
+                          <th className="px-2 py-1.5 text-right">Valor</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {f.detalleInsumos.map((d, i) => (
+                          <tr key={i} className="border-t border-gray-100">
+                            <td className="px-2 py-1.5">{d.fecha}</td>
+                            <td className="px-2 py-1.5">{d.sedeNombre}</td>
+                            <td className="px-2 py-1.5">{d.paciente}</td>
+                            <td className="px-2 py-1.5">{d.tipo}</td>
+                            <td className="px-2 py-1.5 text-right">{fmtCOP(d.valor)}</td>
+                          </tr>
+                        ))}
+                        {f.detalleInsumos.length === 0 && (
+                          <tr>
+                            <td colSpan={5} className="px-2 py-2 text-center text-gray-400">
+                              Sin insumos en este período.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={() => guardarFila(idx)}
               disabled={f.guardando}

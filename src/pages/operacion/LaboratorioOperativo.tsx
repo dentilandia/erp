@@ -51,6 +51,7 @@ export function LaboratorioOperativo() {
   const [editFacturaNumero, setEditFacturaNumero] = useState("");
   const [editValorFactura, setEditValorFactura] = useState("");
   const [editFechaEmision, setEditFechaEmision] = useState("");
+  const [editMesLiquidacion, setEditMesLiquidacion] = useState("");
   const [guardandoEdit, setGuardandoEdit] = useState(false);
 
   const [mostrarForm, setMostrarForm] = useState(false);
@@ -131,6 +132,7 @@ export function LaboratorioOperativo() {
     setEditFacturaNumero(o.factura_numero ?? o.consecutivo ?? "");
     setEditValorFactura(o.valor_factura === null ? "" : String(o.valor_factura));
     setEditFechaEmision(o.fecha_emision_factura ?? "");
+    setEditMesLiquidacion(o.mes_liquidacion ?? "");
   }
 
   async function guardarEdicion(id: string, tieneFactura: boolean) {
@@ -145,6 +147,7 @@ export function LaboratorioOperativo() {
       cambios.consecutivo = editFacturaNumero.trim() || null;
       cambios.valor_factura = editValorFactura === "" ? null : Number(editValorFactura);
       cambios.fecha_emision_factura = editFechaEmision || null;
+      cambios.mes_liquidacion = editMesLiquidacion || null;
     }
     await supabase.from("lab_ordenes").update(cambios).eq("id", id);
     setGuardandoEdit(false);
@@ -389,6 +392,19 @@ export function LaboratorioOperativo() {
                             value={editFechaEmision}
                             onChange={(e) => setEditFechaEmision(e.target.value)}
                             className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                          />
+                        </div>
+                      )}
+                      {o.estado !== "enviado" && (
+                        <div>
+                          <label className="block text-[10px] text-gray-400 mb-1">
+                            Mes a liquidar (solo si esta factura quedó pendiente de un mes anterior y hay que incluirla ahora)
+                          </label>
+                          <input
+                            type="date"
+                            value={editMesLiquidacion}
+                            onChange={(e) => setEditMesLiquidacion(e.target.value)}
+                            className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
                           />
                         </div>
                       )}
