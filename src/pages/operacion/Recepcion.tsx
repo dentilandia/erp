@@ -439,9 +439,22 @@ function ResumenOperacionDia({ sedeId, fecha }: { sedeId: string; fecha: string 
           laboratorio: r.laboratorios?.nombre ?? "—",
           tipo_servicio: r.tipo_servicio,
         }));
-      const { data: env } = await supabase.from("lab_ordenes").select(select).eq("sede_id", sedeId).eq("fecha_envio", fecha);
+      // Solo lo que viene de una visita real ese día (enviado/instalado desde
+      // Consultorio) — lo que se agrega manualmente desde Laboratorio no tiene
+      // visita_id y no refleja quién atendió ese día en esta sede.
+      const { data: env } = await supabase
+        .from("lab_ordenes")
+        .select(select)
+        .eq("sede_id", sedeId)
+        .eq("fecha_envio", fecha)
+        .not("visita_id", "is", null);
       setEnviados(mapear((env as unknown as Fila[]) ?? []));
-      const { data: inst } = await supabase.from("lab_ordenes").select(select).eq("sede_id", sedeId).eq("fecha_instalado", fecha);
+      const { data: inst } = await supabase
+        .from("lab_ordenes")
+        .select(select)
+        .eq("sede_id", sedeId)
+        .eq("fecha_instalado", fecha)
+        .not("visita_id", "is", null);
       setInstalados(mapear((inst as unknown as Fila[]) ?? []));
     })();
   }, [sedeId, fecha]);
