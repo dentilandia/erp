@@ -9,8 +9,11 @@ interface AuthState {
   perfil: Perfil | null;
   sede: Sede | null;
   error: string | null;
+  recuperandoClave: boolean;
   signIn: (email: string, password: string) => Promise<string | null>;
   signOut: () => Promise<void>;
+  enviarRecuperacion: (email: string) => Promise<string | null>;
+  actualizarClave: (password: string) => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -21,14 +24,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [sede, setSede] = useState<Sede | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [recuperandoClave, setRecuperandoClave] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       if (!data.session) setLoading(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
+    // PASSWORD_RECOVERY se dispara cuando alguien entra desde el link del
+    // correo de "olvidé mi contraseña" (o de invitación) — en ese caso no
+    // debe pasar directo al ERP, sino pedirle que ponga una contraseña nueva.
+    const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
       setSession(next);
+      if (event === "PASSWORD_RECOVERY") setRecuperandoClave(true);
       if (!next) {
         setPerfil(null);
         setSede(null);
@@ -89,8 +97,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut();
   }
 
+  async function enviarRecuperacion(email: string) {
+    const { error: recError } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    return recError ? recError.message : null;
+  }
+
+  async function actualizarClave(password: string) {
+    const { error: updError } = await supabase.auth.updateUser({ password });
+    if (updError) return updError.message;
+    setRecuperandoClave(false);
+    return null;
+  }
+
   return (
-    <AuthContext.Provider value={{ loading, session, perfil, sede, error, signIn, signOut }}>
+    <AuthContext.Provider
+      value={{ loading, session, perfil, sede, error, recuperandoClave, signIn, signOut, enviarRecuperacion, actualizarClave }}
+    >
       {children}
     </AuthContext.Provider>
   );

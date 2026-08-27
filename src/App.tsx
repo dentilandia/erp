@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { LoginPage } from "./auth/LoginPage";
+import { SetPasswordPage } from "./auth/SetPasswordPage";
 import { Layout } from "./components/Layout";
 import { Recepcion } from "./pages/operacion/Recepcion";
 import { Consultorio } from "./pages/operacion/Consultorio";
@@ -15,7 +16,7 @@ import { Reportes } from "./pages/Reportes";
 import { Parametros } from "./pages/Parametros";
 
 function Gate({ children }: { children: React.ReactNode }) {
-  const { loading, session, perfil, error } = useAuth();
+  const { loading, session, perfil, error, recuperandoClave } = useAuth();
 
   if (loading) {
     return (
@@ -24,6 +25,7 @@ function Gate({ children }: { children: React.ReactNode }) {
       </div>
     );
   }
+  if (recuperandoClave) return <SetPasswordPage />;
   if (!session) return <LoginPage />;
   if (error || !perfil) {
     return (
