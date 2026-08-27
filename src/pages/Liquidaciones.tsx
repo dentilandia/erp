@@ -516,7 +516,9 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
             </div>
             <div className="flex items-end gap-4 flex-wrap mb-3">
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Retención voluntaria</label>
+                <label className="block text-xs text-gray-400 mb-1">
+                  Retención voluntaria{f.doctora.retencion_voluntaria_activa ? ` (${f.doctora.retencion_voluntaria_pct}%)` : ""}
+                </label>
                 <input
                   type="number"
                   value={f.retencionValor}
@@ -538,15 +540,9 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                   className="w-32 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
                 />
               </div>
-              <div className="ml-auto flex items-end gap-6">
-                <div className="text-right">
-                  <p className="text-xs text-gray-400">IBC seg. social (40%)</p>
-                  <p className="font-medium">{fmtCOP(ibc)}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-xs text-gray-400">Total a pagar</p>
-                  <p className="font-semibold text-lg">{fmtCOP(totalPago)}</p>
-                </div>
+              <div className="ml-auto text-right">
+                <p className="text-xs text-gray-400">Total a pagar</p>
+                <p className="font-semibold text-lg">{fmtCOP(totalPago)}</p>
               </div>
             </div>
 
@@ -657,6 +653,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
               {f.guardado ? <Check size={16} /> : null}
               {f.guardando ? "Guardando…" : f.guardado ? "Guardado" : "Guardar liquidación"}
             </button>
+            <p className="text-xs text-gray-400 mt-2">IBC seg. social (informativo, 40% del total a pagar): {fmtCOP(ibc)}</p>
           </div>
         );
       })}
