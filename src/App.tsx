@@ -15,6 +15,14 @@ import { CierreCaja } from "./pages/CierreCaja";
 import { Reportes } from "./pages/Reportes";
 import { Parametros } from "./pages/Parametros";
 
+/** Bloquea de verdad las rutas de administración/parámetros para el equipo de
+ *  operación — antes solo estaban ocultas del menú, no impedidas por ruta. */
+function SoloAdmin({ children }: { children: React.ReactNode }) {
+  const { perfil } = useAuth();
+  if (perfil?.rol !== "admin") return <Navigate to="/operacion/recepcion" replace />;
+  return <>{children}</>;
+}
+
 function Gate({ children }: { children: React.ReactNode }) {
   const { loading, session, perfil, error, recuperandoClave } = useAuth();
 
@@ -54,11 +62,11 @@ function App() {
               <Route path="operacion/laboratorio" element={<LaboratorioOperativo />} />
               <Route path="operacion/historial" element={<Historial />} />
               <Route path="operacion/comprobantes" element={<ComprobantesFinanciacion />} />
-              <Route path="administracion/liquidaciones" element={<Liquidaciones />} />
-              <Route path="administracion/financiacion" element={<Financiacion />} />
-              <Route path="administracion/cierre-caja" element={<CierreCaja />} />
-              <Route path="administracion/reportes" element={<Reportes />} />
-              <Route path="parametros" element={<Parametros />} />
+              <Route path="administracion/liquidaciones" element={<SoloAdmin><Liquidaciones /></SoloAdmin>} />
+              <Route path="administracion/financiacion" element={<SoloAdmin><Financiacion /></SoloAdmin>} />
+              <Route path="administracion/cierre-caja" element={<SoloAdmin><CierreCaja /></SoloAdmin>} />
+              <Route path="administracion/reportes" element={<SoloAdmin><Reportes /></SoloAdmin>} />
+              <Route path="parametros" element={<SoloAdmin><Parametros /></SoloAdmin>} />
             </Route>
           </Routes>
         </Gate>
