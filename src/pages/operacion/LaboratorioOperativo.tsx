@@ -159,7 +159,11 @@ export function LaboratorioOperativo() {
 
   async function eliminarOrden(id: string) {
     if (!window.confirm("¿Eliminar este aparato? Esta acción no se puede deshacer.")) return;
-    await supabase.from("lab_ordenes").delete().eq("id", id);
+    const { error } = await supabase.from("lab_ordenes").delete().eq("id", id);
+    if (error) {
+      window.alert(`No se pudo eliminar: ${error.message}`);
+      return;
+    }
     setEditandoId(null);
     cargarOrdenes();
   }
