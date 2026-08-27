@@ -35,14 +35,17 @@ function Gate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+const CLAVE_ULTIMA_RUTA = "erp_ultima_ruta";
+
 function App() {
+  const ultimaRuta = localStorage.getItem(CLAVE_ULTIMA_RUTA);
   return (
     <AuthProvider>
       <BrowserRouter>
         <Gate>
           <Routes>
             <Route path="/" element={<Layout />}>
-              <Route index element={<Navigate to="/operacion/recepcion" replace />} />
+              <Route index element={<Navigate to={ultimaRuta || "/operacion/recepcion"} replace />} />
               <Route path="operacion/recepcion" element={<Recepcion />} />
               <Route path="operacion/consultorio" element={<Consultorio />} />
               <Route path="operacion/cierre" element={<CierreDiario />} />

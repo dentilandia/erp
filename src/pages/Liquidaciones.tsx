@@ -171,10 +171,15 @@ function exportarDetalleDoctora(periodo: { inicio: string; fin: string }, f: Fil
   .num { text-align: right; }
   .nota { color: #888; }
   tfoot td { font-weight: 600; background: #fafafa; }
-  @media print { body { padding: 0; } }
+  .btn-imprimir {
+    position: fixed; top: 14px; right: 14px; background: #2E253A; color: #fff; border: none;
+    border-radius: 8px; padding: 8px 14px; font-size: 13px; font-family: inherit; cursor: pointer;
+  }
+  @media print { body { padding: 0; } .btn-imprimir { display: none; } }
 </style>
 </head>
 <body>
+  <button class="btn-imprimir" onclick="window.print()">Imprimir / Guardar como PDF</button>
   <h1>Respaldo de liquidación — ${esc(f.doctora.nombre)}</h1>
   <p class="periodo">Período ${periodo.inicio} a ${periodo.fin}</p>
 
@@ -200,7 +205,6 @@ function exportarDetalleDoctora(periodo: { inicio: string; fin: string }, f: Fil
   ventana.document.write(html);
   ventana.document.close();
   ventana.focus();
-  ventana.onload = () => ventana.print();
 }
 
 /** El estado de cuenta en sí (para enviarle a la doctora) — refleja la misma ficha que se ve en pantalla. */
@@ -243,10 +247,15 @@ function generarLiquidacionPDF(periodo: { inicio: string; fin: string }, pctHono
     background: #efe9f6; border-radius: 8px; margin: 10px 0; }
   .total-pagar .valor { font-size: 20px; font-weight: 700; }
   .ibc { color: #888; font-size: 12px; margin-top: 18px; }
-  @media print { body { padding: 0; } }
+  .btn-imprimir {
+    position: fixed; top: 14px; right: 14px; background: #2E253A; color: #fff; border: none;
+    border-radius: 8px; padding: 8px 14px; font-size: 13px; font-family: inherit; cursor: pointer;
+  }
+  @media print { body { padding: 0; } .btn-imprimir { display: none; } }
 </style>
 </head>
 <body>
+  <button class="btn-imprimir" onclick="window.print()">Imprimir / Guardar como PDF</button>
   <h1>Liquidación — ${esc(f.doctora.nombre)}</h1>
   <p class="periodo">Período ${periodo.inicio} a ${periodo.fin}</p>
 
@@ -284,7 +293,6 @@ function generarLiquidacionPDF(periodo: { inicio: string; fin: string }, pctHono
   ventana.document.write(html);
   ventana.document.close();
   ventana.focus();
-  ventana.onload = () => ventana.print();
 }
 
 function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: string; sedes: Sede[] }) {

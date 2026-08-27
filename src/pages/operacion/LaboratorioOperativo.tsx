@@ -55,6 +55,7 @@ export function LaboratorioOperativo() {
   const [editFechaEmision, setEditFechaEmision] = useState("");
   const [editMesLiquidacion, setEditMesLiquidacion] = useState("");
   const [guardandoEdit, setGuardandoEdit] = useState(false);
+  const [marcandoRecibido, setMarcandoRecibido] = useState(false);
 
   const [mostrarForm, setMostrarForm] = useState(false);
   const [nuevoPaciente, setNuevoPaciente] = useState<Paciente | null>(null);
@@ -128,6 +129,7 @@ export function LaboratorioOperativo() {
 
   function empezarEdicion(o: LabRow) {
     setEditandoId(o.id);
+    setMarcandoRecibido(false);
     setEditDoctoraId(o.doctora_id);
     setEditLaboratorioId(o.laboratorio_id);
     setEditTipoServicio(o.tipo_servicio);
@@ -137,7 +139,40 @@ export function LaboratorioOperativo() {
     setEditMesLiquidacion(o.mes_liquidacion ?? "");
   }
 
+  // Reemplaza el flujo anterior de 3 window.prompt() seguidos — si salías a
+  // confirmar un dato entre uno y otro, se perdía todo y tocaba empezar de
+  // nuevo. Ahora es un formulario normal que queda ahí hasta que le des Guardar.
+  function empezarRecibir(o: LabRow) {
+    setEditandoId(o.id);
+    setMarcandoRecibido(true);
+    setEditDoctoraId(o.doctora_id);
+    setEditLaboratorioId(o.laboratorio_id);
+    setEditTipoServicio(o.tipo_servicio);
+    setEditFacturaNumero("");
+    setEditValorFactura("");
+    setEditFechaEmision(today());
+    setEditMesLiquidacion("");
+  }
+
   async function guardarEdicion(id: string, tieneFactura: boolean) {
+    if (marcandoRecibido && editFacturaNumero.trim()) {
+      const { data: existentes } = await supabase
+        .from("lab_ordenes")
+        .select("paciente_id, pacientes(nombre)")
+        .eq("laboratorio_id", editLaboratorioId)
+        .eq("factura_numero", editFacturaNumero.trim())
+        .neq("id", id);
+      const pacienteActual = ordenes.find((o) => o.id === id)?.paciente_id;
+      const conflicto = ((existentes as unknown as { paciente_id: string; pacientes: { nombre: string } | null }[]) ?? []).find(
+        (e) => e.paciente_id !== pacienteActual,
+      );
+      if (conflicto) {
+        const seguir = window.confirm(
+          `Ese consecutivo ya está asociado a ${conflicto.pacientes?.nombre ?? "otro paciente"} — ¿seguro que quieres usarlo también aquí?`,
+        );
+        if (!seguir) return;
+      }
+    }
     setGuardandoEdit(true);
     const cambios: Record<string, unknown> = {
       doctora_id: editDoctoraId,
@@ -151,9 +186,14 @@ export function LaboratorioOperativo() {
       cambios.fecha_emision_factura = editFechaEmision || null;
       cambios.mes_liquidacion = editMesLiquidacion || null;
     }
+    if (marcandoRecibido) {
+      cambios.estado = "recibido";
+      cambios.fecha_recibido = today();
+    }
     await supabase.from("lab_ordenes").update(cambios).eq("id", id);
     setGuardandoEdit(false);
     setEditandoId(null);
+    setMarcandoRecibido(false);
     cargarOrdenes();
   }
 
@@ -166,59 +206,6 @@ export function LaboratorioOperativo() {
     }
     setEditandoId(null);
     cargarOrdenes();
-  }
-
-  async function marcarRecibido(o: LabRow) {
-    const facturaNumero = window.prompt(
-      "Consecutivo de la factura (el mismo si vienen varios aparatos en una sola factura):",
-    );
-    if (facturaNumero === null) return;
-    if (facturaNumero.trim()) {
-      const { data: existentes } = await supabase
-        .from("lab_ordenes")
-        .select("paciente_id, pacientes(nombre)")
-        .eq("laboratorio_id", o.laboratorio_id)
-        .eq("factura_numero", facturaNumero.trim())
-        .neq("id", o.id);
-      const conflicto = ((existentes as unknown as { paciente_id: string; pacientes: { nombre: string } | null }[]) ?? []).find(
-        (e) => e.paciente_id !== o.paciente_id,
-      );
-      if (conflicto) {
-        const seguir = window.confirm(
-          `Ese consecutivo ya está asociado a ${conflicto.pacientes?.nombre ?? "otro paciente"} — ¿seguro que quieres usarlo también aquí?`,
-        );
-        if (!seguir) return;
-      }
-    }
-    const valorFacturaStr = window.prompt("Valor de la factura:");
-    if (valorFacturaStr === null) return;
-    const fechaEmision = window.prompt("Fecha de la factura (AAAA-MM-DD):", today());
-    if (fechaEmision === null) return;
-    await supabase
-      .from("lab_ordenes")
-      .update({
-        estado: "recibido",
-        fecha_recibido: today(),
-        factura_numero: facturaNumero.trim() || null,
-        consecutivo: facturaNumero.trim() || null,
-        valor_factura: Number(valorFacturaStr) || null,
-        fecha_emision_factura: fechaEmision.trim() || null,
-      })
-      .eq("id", o.id);
-    setOrdenes((prev) =>
-      prev.map((x) =>
-        x.id === o.id
-          ? {
-              ...x,
-              estado: "recibido",
-              factura_numero: facturaNumero.trim() || null,
-              consecutivo: facturaNumero.trim() || null,
-              valor_factura: Number(valorFacturaStr) || null,
-              fecha_emision_factura: fechaEmision.trim() || null,
-            }
-          : x,
-      ),
-    );
   }
 
   return (
@@ -401,7 +388,7 @@ export function LaboratorioOperativo() {
                           ))}
                         </select>
                       </div>
-                      {o.estado !== "enviado" && (
+                      {(o.estado !== "enviado" || marcandoRecibido) && (
                         <div className="flex gap-2 flex-wrap">
                           <input
                             value={editFacturaNumero}
@@ -424,7 +411,7 @@ export function LaboratorioOperativo() {
                           />
                         </div>
                       )}
-                      {o.estado !== "enviado" && (
+                      {(o.estado !== "enviado" || marcandoRecibido) && !marcandoRecibido && (
                         <div>
                           <label className="block text-[10px] text-gray-400 mb-1">
                             Mes a liquidar (solo si este aparato instalado quedó pendiente de un mes anterior y hay que incluirlo ahora)
@@ -439,13 +426,19 @@ export function LaboratorioOperativo() {
                       )}
                       <div className="flex gap-2">
                         <button
-                          onClick={() => guardarEdicion(o.id, o.estado !== "enviado")}
+                          onClick={() => guardarEdicion(o.id, o.estado !== "enviado" || marcandoRecibido)}
                           disabled={guardandoEdit}
                           className="flex items-center gap-1 rounded-md bg-[var(--acento)] text-white px-3 text-sm font-medium disabled:opacity-40"
                         >
-                          <Check size={14} /> Guardar
+                          <Check size={14} /> {marcandoRecibido ? "Marcar recibido" : "Guardar"}
                         </button>
-                        <button onClick={() => setEditandoId(null)} className="px-2 text-gray-400">
+                        <button
+                          onClick={() => {
+                            setEditandoId(null);
+                            setMarcandoRecibido(false);
+                          }}
+                          className="px-2 text-gray-400"
+                        >
                           <X size={16} />
                         </button>
                         <button
@@ -473,7 +466,7 @@ export function LaboratorioOperativo() {
                           <Pencil size={14} />
                         </button>
                         {e.value === "enviado" && (
-                          <button onClick={() => marcarRecibido(o)} className="text-[var(--acento)] font-medium text-xs">
+                          <button onClick={() => empezarRecibir(o)} className="text-[var(--acento)] font-medium text-xs">
                             Marcar recibido
                           </button>
                         )}

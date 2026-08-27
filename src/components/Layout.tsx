@@ -44,11 +44,18 @@ const ADMIN_TABS = [
 
 /** Sede sobre la que trabaja la pantalla: fija si el perfil es de operación,
  *  seleccionable si es admin (filtro de sede libre). */
+const CLAVE_SEDE_ADMIN = "erp_sede_admin";
+
 export function useSedeActiva() {
   const { perfil, sede } = useAuth();
   const [sedes, setSedes] = useState<Sede[]>([]);
-  const [sedeAdminId, setSedeAdminId] = useState<string | null>(null);
+  const [sedeAdminId, setSedeAdminIdState] = useState<string | null>(() => localStorage.getItem(CLAVE_SEDE_ADMIN));
   const [errorSedes, setErrorSedes] = useState<string | null>(null);
+
+  function setSedeAdminId(id: string) {
+    localStorage.setItem(CLAVE_SEDE_ADMIN, id);
+    setSedeAdminIdState(id);
+  }
 
   useEffect(() => {
     if (perfil?.rol !== "admin") return;
@@ -63,7 +70,10 @@ export function useSedeActiva() {
           return;
         }
         setSedes((data as Sede[]) ?? []);
-        if (data && data.length > 0) setSedeAdminId((prev) => prev ?? data[0].id);
+        // Si la sede recordada ya no existe, cae a la primera disponible.
+        if (data && data.length > 0) {
+          setSedeAdminIdState((prev) => (prev && data.some((s) => s.id === prev) ? prev : data[0].id));
+        }
       });
   }, [perfil?.rol]);
 
@@ -80,6 +90,13 @@ export function Layout() {
   const location = useLocation();
   const enOperacion = location.pathname.startsWith("/operacion");
   const enAdministracion = location.pathname.startsWith("/administracion");
+
+  // Recuerda la última pantalla visitada — al volver a abrir el ERP (o si el
+  // navegador recarga la pestaña en segundo plano), retoma ahí en vez de
+  // reiniciar siempre en Recepción.
+  useEffect(() => {
+    localStorage.setItem("erp_ultima_ruta", location.pathname);
+  }, [location.pathname]);
 
   return (
     <div className="min-h-screen flex flex-col">
