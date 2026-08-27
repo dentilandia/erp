@@ -206,6 +206,9 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
 
       const { data: doctoras } = await supabase.from("doctoras").select("*").order("nombre");
       const sedeNombre: Record<string, string> = Object.fromEntries(sedes.map((s) => [s.id, s.nombre]));
+      const doctoraNombrePorId: Record<string, string> = Object.fromEntries(
+        ((doctoras as Doctora[]) ?? []).map((d) => [d.id, d.nombre]),
+      );
 
       const pagosData = await fetchTodasLasFilas<{ valor: number; cargos: { doctora_id: string; sede_id: string } }>((desde, hasta) => {
         let q = supabase
@@ -272,13 +275,15 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         if (l.tipo_servicio === "fabricacion" && l.doctora_instala_id && l.doctora_instala_id !== l.doctora_id) {
           sumarLab(l.doctora_id, l.sede_id, valor / 2);
           sumarLab(l.doctora_instala_id, l.sede_id, valor / 2);
+          const nombreImpresion = doctoraNombrePorId[l.doctora_id] ?? "—";
+          const nombreInstala = doctoraNombrePorId[l.doctora_instala_id] ?? "—";
           agregarDetalleLab(l.doctora_id, {
             fecha: fechaComparar, sedeNombre: sedeNom, paciente, laboratorio, facturaNumero: l.factura_numero,
-            valor: valor / 2, nota: "50/50 con doctora que instaló",
+            valor: valor / 2, nota: `50/50 con ${nombreInstala}, que instaló`,
           });
           agregarDetalleLab(l.doctora_instala_id, {
             fecha: fechaComparar, sedeNombre: sedeNom, paciente, laboratorio, facturaNumero: l.factura_numero,
-            valor: valor / 2, nota: "50/50 con doctora que tomó la impresión",
+            valor: valor / 2, nota: `50/50 con ${nombreImpresion}, que tomó la impresión`,
           });
         } else {
           sumarLab(l.doctora_id, l.sede_id, valor);
