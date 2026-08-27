@@ -121,6 +121,18 @@ interface FilaDoctora {
   guardando: boolean;
   guardado: boolean;
   detalleAbierto: boolean;
+  historialAbierto: boolean;
+  historial: HistorialLiquidacion[];
+}
+
+interface HistorialLiquidacion {
+  periodoInicio: string;
+  periodoFin: string;
+  totalVentas: number;
+  totalPago: number;
+  retencionValor: number | null;
+  retencionDepuracionValor: number;
+  estado: string;
 }
 
 function esc(s: string): string {
@@ -178,6 +190,66 @@ function exportarDetalleDoctora(periodo: { inicio: string; fin: string }, f: Fil
     <thead><tr><th>Fecha</th><th>Sede</th><th>Paciente</th><th>Insumo</th><th class="num">Valor</th></tr></thead>
     <tbody>${filasOtros || `<tr><td colspan="5">Sin otros aparatología en este período.</td></tr>`}</tbody>
     <tfoot><tr><td colspan="4">Total otros aparatología</td><td class="num">${esc(fmtCOP(totalOtros))}</td></tr></tfoot>
+  </table>
+</body></html>`;
+  const ventana = window.open("", "_blank");
+  if (!ventana) {
+    window.alert("El navegador bloqueó la ventana de impresión — permite ventanas emergentes para este sitio e inténtalo de nuevo.");
+    return;
+  }
+  ventana.document.write(html);
+  ventana.document.close();
+  ventana.focus();
+  ventana.onload = () => ventana.print();
+}
+
+/** El estado de cuenta en sí (para enviarle a la doctora) — distinto del respaldo de detalle. */
+function generarLiquidacionPDF(periodo: { inicio: string; fin: string }, pctHonorario: number, f: FilaDoctora) {
+  const bruto = f.totalVentas * (pctHonorario / 100);
+  const totalLaboratoriosInsumos = f.totalLaboratorios + f.totalInsumos;
+  const deduccion = totalLaboratoriosInsumos * (pctHonorario / 100);
+  const retencionVoluntaria = Number(f.retencionValor) || 0;
+  const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
+  const totalPago = bruto - deduccion - retencionVoluntaria - retencionDepuracion;
+  const ibc = totalPago * 0.4;
+
+  const filaSede = (label: string, valor: (s: FilaDoctoraSede) => number) =>
+    f.porSede.map((s) => `<tr><td>${label} - ${esc(s.sedeNombre)}</td><td class="num">${esc(fmtCOP(valor(s)))}</td></tr>`).join("");
+
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>Liquidación - ${esc(f.doctora.nombre)}</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; color: #2E253A; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  p.periodo { color: #666; font-size: 12px; margin: 0 0 20px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid #ddd; padding: 7px 10px; text-align: left; }
+  .num { text-align: right; }
+  tr.total td { font-weight: 700; background: #faf8fc; }
+  tr.pago td { font-weight: 700; background: #efe9f6; font-size: 14px; }
+  @media print { body { padding: 0; } }
+</style>
+</head>
+<body>
+  <h1>Liquidación — ${esc(f.doctora.nombre)}</h1>
+  <p class="periodo">Período ${periodo.inicio} a ${periodo.fin}</p>
+  <table>
+    <tbody>
+      ${filaSede("Ventas", (s) => s.ventas)}
+      <tr class="total"><td>Total ventas</td><td class="num">${esc(fmtCOP(f.totalVentas))}</td></tr>
+      <tr><td>Porcentaje honorario</td><td class="num">${pctHonorario}%</td></tr>
+      <tr class="total"><td>Valor bruto (honorarios)</td><td class="num">${esc(fmtCOP(bruto))}</td></tr>
+      ${filaSede("Laboratorios", (s) => s.labs)}
+      ${filaSede("Otros aparatología", (s) => s.insumos)}
+      <tr class="total"><td>Total laboratorios + otros aparatología</td><td class="num">${esc(fmtCOP(totalLaboratoriosInsumos))}</td></tr>
+      <tr><td>Deducción (${pctHonorario}%)</td><td class="num">-${esc(fmtCOP(deduccion))}</td></tr>
+      <tr class="total"><td>Subtotal (antes de retenciones)</td><td class="num">${esc(fmtCOP(bruto - deduccion))}</td></tr>
+      <tr><td>Retención voluntaria</td><td class="num">${esc(fmtCOP(retencionVoluntaria))}</td></tr>
+      <tr><td>Retención depuración de renta</td><td class="num">${esc(fmtCOP(retencionDepuracion))}</td></tr>
+      <tr class="pago"><td>Total a pagar</td><td class="num">${esc(fmtCOP(totalPago))}</td></tr>
+      <tr><td>IBC seguridad social (40%)</td><td class="num">${esc(fmtCOP(ibc))}</td></tr>
+    </tbody>
   </table>
 </body></html>`;
   const ventana = window.open("", "_blank");
@@ -381,6 +453,8 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
             guardando: false,
             guardado: false,
             detalleAbierto: false,
+            historialAbierto: false,
+            historial: [],
           };
         });
       setFilas(nuevasFilas);
@@ -390,6 +464,34 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
 
   function actualizarFila(idx: number, cambios: Partial<FilaDoctora>) {
     setFilas((prev) => prev.map((f, i) => (i === idx ? { ...f, ...cambios } : f)));
+  }
+
+  async function alternarHistorial(idx: number) {
+    const f = filas[idx];
+    if (f.historialAbierto) {
+      actualizarFila(idx, { historialAbierto: false });
+      return;
+    }
+    const { data } = await supabase
+      .from("liquidaciones_doctora")
+      .select("periodo_inicio, periodo_fin, total_ventas, total_pago, retencion_valor, retencion_depuracion_valor, estado")
+      .eq("doctora_id", f.doctora.id)
+      .order("periodo_inicio", { ascending: false });
+    const historial: HistorialLiquidacion[] = (
+      (data as {
+        periodo_inicio: string; periodo_fin: string; total_ventas: number; total_pago: number;
+        retencion_valor: number | null; retencion_depuracion_valor: number | null; estado: string;
+      }[]) ?? []
+    ).map((r) => ({
+      periodoInicio: r.periodo_inicio,
+      periodoFin: r.periodo_fin,
+      totalVentas: Number(r.total_ventas),
+      totalPago: Number(r.total_pago),
+      retencionValor: r.retencion_valor != null ? Number(r.retencion_valor) : null,
+      retencionDepuracionValor: Number(r.retencion_depuracion_valor ?? 0),
+      estado: r.estado,
+    }));
+    actualizarFila(idx, { historialAbierto: true, historial });
   }
 
   async function guardarFila(idx: number) {
@@ -546,7 +648,13 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
               </div>
             </div>
 
-            <div className="flex items-center gap-3 mb-3">
+            <div className="flex items-center gap-3 mb-3 flex-wrap">
+              <button
+                onClick={() => generarLiquidacionPDF(periodo, pctHonorario, f)}
+                className="flex items-center gap-1 text-xs font-medium text-white bg-[var(--acento)] px-3 py-1.5 rounded-md"
+              >
+                <Download size={13} /> Generar liquidación (PDF)
+              </button>
               <button
                 onClick={() => actualizarFila(idx, { detalleAbierto: !f.detalleAbierto })}
                 className="text-xs font-medium text-[var(--acento)]"
@@ -561,7 +669,46 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                   <Download size={13} /> Exportar respaldo en PDF
                 </button>
               )}
+              <button onClick={() => alternarHistorial(idx)} className="text-xs font-medium text-gray-500">
+                {f.historialAbierto ? "Ocultar historial" : "Ver historial de liquidaciones guardadas"}
+              </button>
             </div>
+
+            {f.historialAbierto && (
+              <div className="rounded-lg border border-gray-200 overflow-x-auto mb-3">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-gray-50 text-left text-gray-500">
+                      <th className="px-2 py-1.5">Período</th>
+                      <th className="px-2 py-1.5 text-right">Ventas</th>
+                      <th className="px-2 py-1.5 text-right">Ret. voluntaria</th>
+                      <th className="px-2 py-1.5 text-right">Ret. depuración</th>
+                      <th className="px-2 py-1.5 text-right">Total pagado</th>
+                      <th className="px-2 py-1.5">Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {f.historial.map((h, i) => (
+                      <tr key={i} className="border-t border-gray-100">
+                        <td className="px-2 py-1.5">{h.periodoInicio} a {h.periodoFin}</td>
+                        <td className="px-2 py-1.5 text-right">{fmtCOP(h.totalVentas)}</td>
+                        <td className="px-2 py-1.5 text-right">{fmtCOP(h.retencionValor ?? 0)}</td>
+                        <td className="px-2 py-1.5 text-right">{fmtCOP(h.retencionDepuracionValor)}</td>
+                        <td className="px-2 py-1.5 text-right font-medium">{fmtCOP(h.totalPago)}</td>
+                        <td className="px-2 py-1.5">{h.estado}</td>
+                      </tr>
+                    ))}
+                    {f.historial.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-2 py-3 text-center text-gray-400">
+                          Sin liquidaciones guardadas todavía para esta doctora.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {f.detalleAbierto && (
               <div className="space-y-3 mb-3">
