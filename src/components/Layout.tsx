@@ -15,6 +15,7 @@ import {
   Landmark,
   Building2,
   BarChart3,
+  GraduationCap,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -145,6 +146,13 @@ export function Layout() {
               </span>
             )
           )}
+          <a
+            href="/capacitacion.html"
+            title="Capacitación"
+            className="flex items-center gap-1.5 text-xs font-medium text-gris hover:text-white"
+          >
+            <GraduationCap size={16} /> Capacitación
+          </a>
           <span className="text-sm text-gris">{perfil?.nombre}</span>
           <button onClick={signOut} title="Cerrar sesión" className="text-gris hover:text-white">
             <LogOut size={18} />
