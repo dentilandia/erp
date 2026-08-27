@@ -203,18 +203,23 @@ function exportarDetalleDoctora(periodo: { inicio: string; fin: string }, f: Fil
   ventana.onload = () => ventana.print();
 }
 
-/** El estado de cuenta en sí (para enviarle a la doctora) — distinto del respaldo de detalle. */
+/** El estado de cuenta en sí (para enviarle a la doctora) — refleja la misma ficha que se ve en pantalla. */
 function generarLiquidacionPDF(periodo: { inicio: string; fin: string }, pctHonorario: number, f: FilaDoctora) {
   const bruto = f.totalVentas * (pctHonorario / 100);
   const totalLaboratoriosInsumos = f.totalLaboratorios + f.totalInsumos;
   const deduccion = totalLaboratoriosInsumos * (pctHonorario / 100);
   const retencionVoluntaria = Number(f.retencionValor) || 0;
   const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
-  const totalPago = bruto - deduccion - retencionVoluntaria - retencionDepuracion;
+  const subtotal = bruto - deduccion;
+  const totalPago = subtotal - retencionVoluntaria - retencionDepuracion;
   const ibc = totalPago * 0.4;
 
-  const filaSede = (label: string, valor: (s: FilaDoctoraSede) => number) =>
-    f.porSede.map((s) => `<tr><td>${label} - ${esc(s.sedeNombre)}</td><td class="num">${esc(fmtCOP(valor(s)))}</td></tr>`).join("");
+  const filasPorSede = f.porSede
+    .map(
+      (s) =>
+        `<tr><td>${esc(s.sedeNombre)}</td><td class="num">${esc(fmtCOP(s.ventas))}</td><td class="num">${esc(fmtCOP(s.labs))}</td><td class="num">${esc(fmtCOP(s.insumos))}</td></tr>`,
+    )
+    .join("");
 
   const html = `<!doctype html>
 <html><head><meta charset="utf-8" />
@@ -223,34 +228,53 @@ function generarLiquidacionPDF(periodo: { inicio: string; fin: string }, pctHono
   body { font-family: Arial, Helvetica, sans-serif; color: #2E253A; padding: 24px; }
   h1 { font-size: 18px; margin: 0 0 2px; }
   p.periodo { color: #666; font-size: 12px; margin: 0 0 20px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 16px; }
   th, td { border: 1px solid #ddd; padding: 7px 10px; text-align: left; }
+  th { background: #f5f5f5; font-size: 12px; color: #666; }
   .num { text-align: right; }
   tr.total td { font-weight: 700; background: #faf8fc; }
-  tr.pago td { font-weight: 700; background: #efe9f6; font-size: 14px; }
+  .caja { border: 1px solid #ddd; border-radius: 8px; padding: 12px 14px; background: #faf8fc; margin-bottom: 16px; }
+  .fila { display: flex; justify-content: space-between; padding: 3px 0; }
+  .fila.subtotal { border-top: 1px solid #ddd; margin-top: 6px; padding-top: 8px; font-weight: 700; }
+  .mas { color: #0a7a4a; font-weight: 600; }
+  .menos { color: #b3261e; font-weight: 600; }
+  .retenciones .fila { padding: 5px 0; }
+  .total-pagar { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 14px;
+    background: #efe9f6; border-radius: 8px; margin: 10px 0; }
+  .total-pagar .valor { font-size: 20px; font-weight: 700; }
+  .ibc { color: #888; font-size: 12px; margin-top: 18px; }
   @media print { body { padding: 0; } }
 </style>
 </head>
 <body>
   <h1>Liquidación — ${esc(f.doctora.nombre)}</h1>
   <p class="periodo">Período ${periodo.inicio} a ${periodo.fin}</p>
+
   <table>
+    <thead><tr><th>Sede</th><th class="num">Ventas</th><th class="num">Laboratorios</th><th class="num">Otros aparatología</th></tr></thead>
     <tbody>
-      ${filaSede("Ventas", (s) => s.ventas)}
-      <tr class="total"><td>Total ventas</td><td class="num">${esc(fmtCOP(f.totalVentas))}</td></tr>
-      <tr><td>Porcentaje honorario</td><td class="num">${pctHonorario}%</td></tr>
-      <tr class="total"><td>Valor bruto (honorarios)</td><td class="num">${esc(fmtCOP(bruto))}</td></tr>
-      ${filaSede("Laboratorios", (s) => s.labs)}
-      ${filaSede("Otros aparatología", (s) => s.insumos)}
-      <tr class="total"><td>Total laboratorios + otros aparatología</td><td class="num">${esc(fmtCOP(totalLaboratoriosInsumos))}</td></tr>
-      <tr><td>Deducción (${pctHonorario}%)</td><td class="num">-${esc(fmtCOP(deduccion))}</td></tr>
-      <tr class="total"><td>Subtotal (antes de retenciones)</td><td class="num">${esc(fmtCOP(bruto - deduccion))}</td></tr>
-      <tr><td>Retención voluntaria</td><td class="num">${esc(fmtCOP(retencionVoluntaria))}</td></tr>
-      <tr><td>Retención depuración de renta</td><td class="num">${esc(fmtCOP(retencionDepuracion))}</td></tr>
-      <tr class="pago"><td>Total a pagar</td><td class="num">${esc(fmtCOP(totalPago))}</td></tr>
-      <tr><td>IBC seguridad social (40%)</td><td class="num">${esc(fmtCOP(ibc))}</td></tr>
+      ${filasPorSede}
+      <tr class="total"><td>Total</td><td class="num">${esc(fmtCOP(f.totalVentas))}</td><td class="num">${esc(fmtCOP(f.totalLaboratorios))}</td><td class="num">${esc(fmtCOP(f.totalInsumos))}</td></tr>
     </tbody>
   </table>
+
+  <div class="caja">
+    <div class="fila"><span>Honorarios — ${pctHonorario}% de ${esc(fmtCOP(f.totalVentas))} en ventas</span><span class="mas">+${esc(fmtCOP(bruto))}</span></div>
+    <div class="fila"><span>Laboratorios + otros aparatología — ${pctHonorario}% de ${esc(fmtCOP(totalLaboratoriosInsumos))}</span><span class="menos">-${esc(fmtCOP(deduccion))}</span></div>
+    <div class="fila subtotal"><span>Subtotal (antes de retenciones)</span><span>${esc(fmtCOP(subtotal))}</span></div>
+  </div>
+
+  <div class="retenciones">
+    <div class="fila"><span>Retención voluntaria</span><span>${esc(fmtCOP(retencionVoluntaria))}</span></div>
+    <div class="fila"><span>Retención depuración de renta</span><span>${esc(fmtCOP(retencionDepuracion))}</span></div>
+  </div>
+
+  <div class="total-pagar">
+    <span>Total a pagar</span>
+    <span class="valor">${esc(fmtCOP(totalPago))}</span>
+  </div>
+
+  <p class="ibc">IBC seguridad social (informativo, 40% del total a pagar): ${esc(fmtCOP(ibc))}</p>
 </body></html>`;
   const ventana = window.open("", "_blank");
   if (!ventana) {
