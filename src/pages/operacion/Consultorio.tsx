@@ -127,7 +127,10 @@ export function Consultorio() {
   async function marcarInstalado(p: LabPendienteInstalar) {
     const doctoraInstala = doctoraInstalaPorOrden[p.id] ?? p.doctora_id;
     const fechaInstalado = fechaInstaladoPorOrden[p.id] ?? today();
-    const cambios: Record<string, unknown> = { estado: "instalado", fecha_instalado: fechaInstalado };
+    // mes_liquidacion queda explícito desde ya (igual a la fecha de instalación,
+    // que es cuando se le paga al laboratorio) — sigue editable después si hay
+    // que corregirlo a un mes distinto.
+    const cambios: Record<string, unknown> = { estado: "instalado", fecha_instalado: fechaInstalado, mes_liquidacion: fechaInstalado };
     if (doctoraInstala !== p.doctora_id) {
       if (p.tipo_servicio === "reparacion") {
         // En reparación no se divide: el pago es completo para quien instala.
