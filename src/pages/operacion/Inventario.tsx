@@ -117,22 +117,30 @@ export function Inventario() {
 
       <section className="bg-white rounded-xl border border-gray-200 p-4">
         <h2 className="font-semibold text-tinta mb-3">Inventario — {sedeActiva.nombre}</h2>
+        {stock.length === 0 && (
+          <p className="text-xs text-amber-600 mb-2">
+            No se encontró la tabla de inventario en la base de datos todavía — falta correr la migración
+            (0024_inventario_insumos.sql) en el SQL Editor de Supabase.
+          </p>
+        )}
         <div className="divide-y divide-gray-100">
           {TIPOS_INVENTARIO.map((t) => {
             const fila = stock.find((s) => s.tipo === t.value);
-            if (!fila) return null;
-            const bajo = fila.cantidad <= fila.umbral_alerta;
+            const cantidad = fila?.cantidad ?? 0;
+            const umbral = fila?.umbral_alerta ?? 5;
+            const bajo = cantidad <= umbral;
             return (
               <div key={t.value} className="flex items-center gap-3 py-2.5 flex-wrap">
                 <span className="text-sm flex-1 min-w-[140px]">{t.label}</span>
-                <span className={`text-lg font-semibold ${bajo ? "text-red-600" : "text-tinta"}`}>{fila.cantidad}</span>
+                <span className={`text-lg font-semibold ${bajo ? "text-red-600" : "text-tinta"}`}>{cantidad}</span>
                 <div className="flex items-center gap-1.5 text-xs text-gray-400">
                   <span>Alerta si ≤</span>
                   <input
                     type="number"
-                    defaultValue={fila.umbral_alerta}
-                    onBlur={(e) => guardarUmbral(fila.id, Number(e.target.value))}
-                    className="w-14 rounded-md border border-gray-300 px-1.5 py-1 text-xs"
+                    defaultValue={umbral}
+                    disabled={!fila}
+                    onBlur={(e) => fila && guardarUmbral(fila.id, Number(e.target.value))}
+                    className="w-14 rounded-md border border-gray-300 px-1.5 py-1 text-xs disabled:opacity-40"
                   />
                 </div>
               </div>

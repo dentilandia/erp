@@ -573,11 +573,11 @@
     display:flex;justify-content:space-between;align-items:center;margin-bottom:22px;
   }
   .home-topbar-actions{display:flex;gap:10px;}
-  .home-topbar-actions button{
+  .home-topbar-actions button,.home-topbar-actions a{
     all:unset;cursor:pointer;font-size:12.5px;font-weight:700;
     padding:8px 14px;border-radius:999px;border:1.5px solid var(--line);color:var(--primary-dark);
   }
-  .home-topbar-actions button:hover{border-color:var(--primary);}
+  .home-topbar-actions button:hover,.home-topbar-actions a:hover{border-color:var(--primary);}
 
   /* ---- Coming soon ---- */
   .soon-card{
@@ -1739,6 +1739,7 @@ function renderHome(){
           <span style="font-family:'Baloo 2',sans-serif;font-weight:700;font-size:17px;color:var(--primary-dark);vertical-align:middle;">Dentilandia · Capacitación</span>
         </div>
         <div class="home-topbar-actions">
+          <a href="/">← Operación</a>
           <button id="rankingBtnHome">🏆 ${points} pts · Ranking</button>
           ${state.isAdmin ? `<button id="adminBtnHome">Panel administrador →</button>` : ''}
           <button id="logoutBtnHome">Cerrar sesión</button>
