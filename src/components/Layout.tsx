@@ -16,6 +16,7 @@ import {
   Building2,
   BarChart3,
   GraduationCap,
+  Boxes,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -26,6 +27,7 @@ const TABS = [
   { to: "/operacion/consultorio", label: "Consultorio", icon: Stethoscope },
   { to: "/operacion/cierre", label: "Cierre diario", icon: Wallet },
   { to: "/operacion/laboratorio", label: "Laboratorio", icon: FlaskConical },
+  { to: "/operacion/inventario", label: "Inventario", icon: Boxes },
   { to: "/operacion/comprobantes", label: "Financiación", icon: Paperclip },
   { to: "/operacion/historial", label: "Historial", icon: History },
 ];

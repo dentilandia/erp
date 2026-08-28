@@ -7,6 +7,7 @@ import { Recepcion } from "./pages/operacion/Recepcion";
 import { Consultorio } from "./pages/operacion/Consultorio";
 import { CierreDiario } from "./pages/operacion/CierreDiario";
 import { LaboratorioOperativo } from "./pages/operacion/LaboratorioOperativo";
+import { Inventario } from "./pages/operacion/Inventario";
 import { Historial } from "./pages/operacion/Historial";
 import { ComprobantesFinanciacion } from "./pages/operacion/ComprobantesFinanciacion";
 import { Liquidaciones } from "./pages/Liquidaciones";
@@ -60,6 +61,7 @@ function App() {
               <Route path="operacion/consultorio" element={<Consultorio />} />
               <Route path="operacion/cierre" element={<CierreDiario />} />
               <Route path="operacion/laboratorio" element={<LaboratorioOperativo />} />
+              <Route path="operacion/inventario" element={<Inventario />} />
               <Route path="operacion/historial" element={<Historial />} />
               <Route path="operacion/comprobantes" element={<ComprobantesFinanciacion />} />
               <Route path="administracion/liquidaciones" element={<SoloAdmin><Liquidaciones /></SoloAdmin>} />
