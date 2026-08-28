@@ -845,6 +845,16 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
 // Laboratorios
 // ============================================================
 
+// Cuantía mínima no sometida a retención en la fuente (compras/servicios,
+// 4%) — la DIAN la ajustó varias veces durante 2026. Actualizar aquí cuando
+// vuelva a cambiar.
+function umbralRetencionLab(fecha: string): number {
+  if (fecha <= "2026-05-07") return 105000;
+  if (fecha <= "2026-06-30") return 209000;
+  return 105000;
+}
+const PCT_RETENCION_LAB = 0.04;
+
 interface FilaLab {
   id: string;
   fecha: string | null;
@@ -858,22 +868,11 @@ interface FilaLab {
   valor_factura: number;
 }
 
-interface FilaInsumo {
-  id: string;
-  fecha: string;
-  paciente: string;
-  doctoraId: string;
-  doctora: string;
-  tipo: string;
-  valor: number;
-}
-
 function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string }) {
   const periodo = useMemo(() => periodoCiclo2625(mes), [mes]);
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
   const [doctoraId, setDoctoraId] = useState("");
   const [filas, setFilas] = useState<FilaLab[]>([]);
-  const [insumos, setInsumos] = useState<FilaInsumo[]>([]);
   const [cargando, setCargando] = useState(true);
 
   useEffect(() => {
@@ -919,68 +918,98 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
         })),
       );
 
-      type InsumoRowLab = {
-        id: string; tipo: string; valor_costo: number;
-        visitas: { fecha: string; doctora_id: string; pacientes: { nombre: string } | null; doctoras: { nombre: string } | null };
-      };
-      const insumosData = await fetchTodasLasFilas<InsumoRowLab>((desde, hasta) => {
-        let q = supabase
-          .from("insumos_consulta")
-          .select("id, tipo, valor_costo, visitas!inner(fecha, sede_id, doctora_id, pacientes(nombre), doctoras(nombre))")
-          .gte("visitas.fecha", periodo.inicio)
-          .lte("visitas.fecha", periodo.fin)
-          .range(desde, hasta);
-        if (sedeId) q = q.eq("visitas.sede_id", sedeId);
-        if (doctoraId) q = q.eq("visitas.doctora_id", doctoraId);
-        return q as unknown as PromiseLike<{ data: InsumoRowLab[] | null }>;
-      });
-      setInsumos(
-        insumosData.map((r) => ({
-          id: r.id,
-          fecha: r.visitas.fecha,
-          paciente: r.visitas.pacientes?.nombre ?? "—",
-          doctoraId: r.visitas.doctora_id,
-          doctora: r.visitas.doctoras?.nombre ?? "—",
-          tipo: TIPOS_INSUMO_LABEL[r.tipo] ?? r.tipo,
-          valor: Number(r.valor_costo),
-        })),
-      );
       setCargando(false);
     })();
   }, [periodo.inicio, periodo.fin, sedeId, doctoraId]);
 
+  function retencionDe(f: FilaLab): number {
+    if (!f.fecha) return 0;
+    return f.valor_factura >= umbralRetencionLab(f.fecha) ? f.valor_factura * PCT_RETENCION_LAB : 0;
+  }
+
   const totalesPorLab = useMemo(() => {
-    const t: Record<string, number> = {};
-    for (const f of filas) t[f.laboratorio] = (t[f.laboratorio] ?? 0) + f.valor_factura;
+    const t: Record<string, { facturado: number; retencion: number }> = {};
+    for (const f of filas) {
+      t[f.laboratorio] = t[f.laboratorio] ?? { facturado: 0, retencion: 0 };
+      t[f.laboratorio].facturado += f.valor_factura;
+      t[f.laboratorio].retencion += retencionDe(f);
+    }
     return t;
   }, [filas]);
 
   const total = filas.reduce((a, f) => a + f.valor_factura, 0);
-  const totalInsumos = insumos.reduce((a, i) => a + i.valor, 0);
+  const totalRetencion = filas.reduce((a, f) => a + retencionDe(f), 0);
+  const totalNeto = total - totalRetencion;
 
-  function exportar() {
-    descargarCSV(
-      `liquidacion-laboratorios-${mes}.csv`,
-      ["Fecha", "Paciente", "Doctora", "Doctora instala (50/50)", "Laboratorio", "Tipo servicio", "Factura", "Valor"],
-      filas.map((f) => [
-        f.fecha ?? "",
-        f.paciente,
-        f.doctora,
-        f.doctoraInstala ?? "",
-        f.laboratorio,
-        f.tipo_servicio,
-        f.factura_numero ?? "",
-        f.valor_factura,
-      ]),
-    );
+  function generarPDF() {
+    const filasHtml = filas
+      .map((f) => {
+        const ret = retencionDe(f);
+        return `<tr><td>${esc(f.fecha ?? "")}</td><td>${esc(f.paciente)}</td><td>${esc(f.doctora)}${
+          f.doctoraInstala ? ` <span class="nota">+ ${esc(f.doctoraInstala)} (50/50)</span>` : ""
+        }</td><td>${esc(f.laboratorio)}</td><td>${esc(f.factura_numero ?? "—")}</td><td class="num">${esc(
+          fmtCOP(f.valor_factura),
+        )}</td><td class="num">${esc(fmtCOP(ret))}</td><td class="num">${esc(fmtCOP(f.valor_factura - ret))}</td></tr>`;
+      })
+      .join("");
+    const filasTotalLab = Object.entries(totalesPorLab)
+      .map(
+        ([lab, t]) =>
+          `<tr><td>${esc(lab)}</td><td class="num">${esc(fmtCOP(t.facturado))}</td><td class="num">${esc(
+            fmtCOP(t.retencion),
+          )}</td><td class="num">${esc(fmtCOP(t.facturado - t.retencion))}</td></tr>`,
+      )
+      .join("");
+    const html = `<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>Liquidación laboratorios - ${mes}</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; color: #2E253A; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  h2 { font-size: 14px; margin: 22px 0 6px; }
+  p.periodo { color: #666; font-size: 12px; margin: 0 0 20px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
+  th { background: #f5f5f5; }
+  .num { text-align: right; }
+  .nota { color: #888; }
+  tfoot td, tr.total td { font-weight: 700; background: #fafafa; }
+  .btn-imprimir {
+    position: fixed; top: 14px; right: 14px; background: #2E253A; color: #fff; border: none;
+    border-radius: 8px; padding: 8px 14px; font-size: 13px; font-family: inherit; cursor: pointer;
   }
+  @media print { body { padding: 0; } .btn-imprimir { display: none; } }
+</style>
+</head>
+<body>
+  <button class="btn-imprimir" onclick="window.print()">Imprimir / Guardar como PDF</button>
+  <h1>Liquidación de laboratorios</h1>
+  <p class="periodo">Período ${periodo.inicio} a ${periodo.fin} — retención del ${PCT_RETENCION_LAB * 100}% aplicada a facturas
+  que superan la cuantía mínima vigente en su fecha.</p>
 
-  function exportarInsumos() {
-    descargarCSV(
-      `liquidacion-insumos-${mes}.csv`,
-      ["Fecha", "Paciente", "Doctora", "Insumo", "Valor"],
-      insumos.map((i) => [i.fecha, i.paciente, i.doctora, i.tipo, i.valor]),
-    );
+  <h2>Facturas</h2>
+  <table>
+    <thead><tr><th>Fecha</th><th>Paciente</th><th>Doctora</th><th>Laboratorio</th><th>Factura</th><th class="num">Valor</th><th class="num">Retención</th><th class="num">Neto</th></tr></thead>
+    <tbody>${filasHtml || `<tr><td colspan="8">Sin facturas en este período.</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="5">Total</td><td class="num">${esc(fmtCOP(total))}</td><td class="num">${esc(
+      fmtCOP(totalRetencion),
+    )}</td><td class="num">${esc(fmtCOP(totalNeto))}</td></tr></tfoot>
+  </table>
+
+  <h2>Totales por laboratorio</h2>
+  <table>
+    <thead><tr><th>Laboratorio</th><th class="num">Facturado</th><th class="num">Retención</th><th class="num">Neto a pagar</th></tr></thead>
+    <tbody>${filasTotalLab}</tbody>
+  </table>
+</body></html>`;
+    const ventana = window.open("", "_blank");
+    if (!ventana) {
+      window.alert("El navegador bloqueó la ventana de impresión — permite ventanas emergentes para este sitio e inténtalo de nuevo.");
+      return;
+    }
+    ventana.document.write(html);
+    ventana.document.close();
+    ventana.focus();
   }
 
   if (cargando) return <p className="text-sm text-gray-400">Cargando…</p>;
@@ -988,7 +1017,10 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <p className="text-xs text-gray-400">Período {periodo.inicio} a {periodo.fin}.</p>
+        <p className="text-xs text-gray-400">
+          Período {periodo.inicio} a {periodo.fin}. Retención del {PCT_RETENCION_LAB * 100}% sobre facturas que superan la
+          cuantía mínima vigente en su fecha.
+        </p>
         <select value={doctoraId} onChange={(e) => setDoctoraId(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm">
           <option value="">Todas las doctoras</option>
           {doctoras.map((d) => (
@@ -998,14 +1030,10 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
           ))}
         </select>
       </div>
-      <p className="text-xs text-gray-400 -mt-2">
-        Para enviarle a cada doctora el respaldo de lo que se le está descontando: filtra por su nombre y exporta las
-        dos tablas (facturas de laboratorio e insumos de aparatología).
-      </p>
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-gray-500">Facturas de laboratorio</h3>
-        <button onClick={exportar} className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]">
-          <Download size={16} /> Exportar
+        <button onClick={generarPDF} className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]">
+          <Download size={16} /> Generar PDF
         </button>
       </div>
       <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
@@ -1016,29 +1044,34 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
               <th className="px-3 py-2">Paciente</th>
               <th className="px-3 py-2">Doctora</th>
               <th className="px-3 py-2">Laboratorio</th>
-              <th className="px-3 py-2">Servicio</th>
               <th className="px-3 py-2">Factura</th>
               <th className="px-3 py-2 text-right">Valor</th>
+              <th className="px-3 py-2 text-right">Retención</th>
+              <th className="px-3 py-2 text-right">Neto</th>
             </tr>
           </thead>
           <tbody>
-            {filas.map((f) => (
-              <tr key={f.id} className="border-t border-gray-100">
-                <td className="px-3 py-2">{f.fecha}</td>
-                <td className="px-3 py-2">{f.paciente}</td>
-                <td className="px-3 py-2">
-                  {f.doctora}
-                  {f.doctoraInstala && <span className="text-gray-400"> + {f.doctoraInstala} (50/50)</span>}
-                </td>
-                <td className="px-3 py-2">{f.laboratorio}</td>
-                <td className="px-3 py-2">{f.tipo_servicio}</td>
-                <td className="px-3 py-2">{f.factura_numero ?? "—"}</td>
-                <td className="px-3 py-2 text-right">{fmtCOP(f.valor_factura)}</td>
-              </tr>
-            ))}
+            {filas.map((f) => {
+              const ret = retencionDe(f);
+              return (
+                <tr key={f.id} className="border-t border-gray-100">
+                  <td className="px-3 py-2">{f.fecha}</td>
+                  <td className="px-3 py-2">{f.paciente}</td>
+                  <td className="px-3 py-2">
+                    {f.doctora}
+                    {f.doctoraInstala && <span className="text-gray-400"> + {f.doctoraInstala} (50/50)</span>}
+                  </td>
+                  <td className="px-3 py-2">{f.laboratorio}</td>
+                  <td className="px-3 py-2">{f.factura_numero ?? "—"}</td>
+                  <td className="px-3 py-2 text-right">{fmtCOP(f.valor_factura)}</td>
+                  <td className="px-3 py-2 text-right">{fmtCOP(ret)}</td>
+                  <td className="px-3 py-2 text-right font-medium">{fmtCOP(f.valor_factura - ret)}</td>
+                </tr>
+              );
+            })}
             {filas.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-4 text-center text-gray-400">
+                <td colSpan={8} className="px-3 py-4 text-center text-gray-400">
                   Sin facturas de laboratorio en este período.
                 </td>
               </tr>
@@ -1048,66 +1081,28 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
       </div>
       {Object.keys(totalesPorLab).length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-1 text-sm">
-          {Object.entries(totalesPorLab).map(([lab, val]) => (
-            <div key={lab} className="flex items-center justify-between">
+          <div className="grid grid-cols-4 gap-2 text-xs font-semibold text-gray-400">
+            <span>Laboratorio</span>
+            <span className="text-right">Facturado</span>
+            <span className="text-right">Retención</span>
+            <span className="text-right">Neto a pagar</span>
+          </div>
+          {Object.entries(totalesPorLab).map(([lab, t]) => (
+            <div key={lab} className="grid grid-cols-4 gap-2">
               <span className="text-gray-500">{lab}</span>
-              <span className="font-medium">{fmtCOP(val)}</span>
+              <span className="text-right">{fmtCOP(t.facturado)}</span>
+              <span className="text-right">{fmtCOP(t.retencion)}</span>
+              <span className="text-right font-medium">{fmtCOP(t.facturado - t.retencion)}</span>
             </div>
           ))}
-          <div className="flex items-center justify-between pt-2 mt-2 border-t border-gray-100 font-semibold">
+          <div className="grid grid-cols-4 gap-2 pt-2 mt-2 border-t border-gray-100 font-semibold">
             <span>Total</span>
-            <span>{fmtCOP(total)}</span>
+            <span className="text-right">{fmtCOP(total)}</span>
+            <span className="text-right">{fmtCOP(totalRetencion)}</span>
+            <span className="text-right">{fmtCOP(totalNeto)}</span>
           </div>
         </div>
       )}
-
-      <div className="flex items-center justify-between pt-2">
-        <h3 className="text-sm font-semibold text-gray-500">Otros aparatología</h3>
-        <button onClick={exportarInsumos} className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]">
-          <Download size={16} /> Exportar
-        </button>
-      </div>
-      <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-gray-50 text-left text-gray-500">
-              <th className="px-3 py-2">Fecha</th>
-              <th className="px-3 py-2">Paciente</th>
-              <th className="px-3 py-2">Doctora</th>
-              <th className="px-3 py-2">Insumo</th>
-              <th className="px-3 py-2 text-right">Valor</th>
-            </tr>
-          </thead>
-          <tbody>
-            {insumos.map((i) => (
-              <tr key={i.id} className="border-t border-gray-100">
-                <td className="px-3 py-2">{i.fecha}</td>
-                <td className="px-3 py-2">{i.paciente}</td>
-                <td className="px-3 py-2">{i.doctora}</td>
-                <td className="px-3 py-2">{i.tipo}</td>
-                <td className="px-3 py-2 text-right">{fmtCOP(i.valor)}</td>
-              </tr>
-            ))}
-            {insumos.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-3 py-4 text-center text-gray-400">
-                  Sin otros aparatología en este período.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      {insumos.length > 0 && (
-        <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-white border border-gray-200 text-sm font-semibold">
-          <span>Total otros aparatología</span>
-          <span>{fmtCOP(totalInsumos)}</span>
-        </div>
-      )}
-
-      <p className="text-xs text-gray-400">
-        Formato provisional — lo ajustamos apenas confirmes cómo se ve la planilla que ya manejan con los laboratorios.
-      </p>
     </div>
   );
 }
