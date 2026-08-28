@@ -80,7 +80,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [session]);
+    // Depende del id del usuario, no del objeto session completo — Supabase
+    // dispara un evento (y una session nueva) en cosas como actualizarClave()
+    // aunque sea el mismo usuario, y eso volvía a poner loading=true y
+    // recreaba la pantalla de "sin perfil", borrando el mensaje de éxito
+    // antes de que se alcanzara a ver.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user.id]);
 
   async function signIn(email: string, password: string) {
     setError(null);
