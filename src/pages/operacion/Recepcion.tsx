@@ -937,61 +937,54 @@ function ModalCobro({
               </p>
             )}
 
-            {tratamiento && (
-              <p className="text-sm bg-gray-50 rounded-lg px-3 py-2 mb-3">
-                <span className="text-gray-500">Tratamiento (consultorio):</span> {tratamiento}
-              </p>
-            )}
+            <div className="rounded-lg border-2 border-amber-300 bg-amber-50/60 px-3 py-3 mb-3 space-y-3">
+              <p className="text-xs font-semibold text-amber-700">Registrado en consultorio (editable aquí)</p>
+              {tratamiento && (
+                <p className="text-sm">
+                  <span className="text-gray-500">Tratamiento:</span> {tratamiento}
+                </p>
+              )}
 
-            <div className="rounded-lg bg-gray-50 px-3 py-2 mb-3">
-              <p className="text-xs text-gray-500 mb-1.5">Insumos de aparatología entregados</p>
-              <div className="flex flex-col gap-1">
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={cargos.some((c) => c.categoria === "rx")}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        agregarRx();
-                      } else {
-                        const idx = cargos.findIndex((c) => c.categoria === "rx");
-                        if (idx !== -1) quitarCargo(idx);
-                      }
-                    }}
-                  />
-                  RX tomada {precios["rx"] ? `(${fmtCOP(precios["rx"])})` : ""}
-                </label>
-                {TIPOS_INSUMO_CONSULTA.map((t) => (
-                  <label key={t.value} className="flex items-center gap-2 text-sm">
+              <div>
+                <p className="text-xs text-gray-500 mb-1.5">Insumos de aparatología entregados</p>
+                <div className="flex flex-col gap-1">
+                  <label className="flex items-center gap-2 text-sm">
                     <input
                       type="checkbox"
-                      checked={!!insumos[t.value]}
-                      onChange={(e) => setInsumos((prev) => ({ ...prev, [t.value]: e.target.checked }))}
+                      checked={cargos.some((c) => c.categoria === "rx")}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          agregarRx();
+                        } else {
+                          const idx = cargos.findIndex((c) => c.categoria === "rx");
+                          if (idx !== -1) quitarCargo(idx);
+                        }
+                      }}
                     />
-                    {t.label} {precios[t.value] ? `(${fmtCOP(precios[t.value])})` : ""}
+                    RX tomada {precios["rx"] ? `(${fmtCOP(precios["rx"])})` : ""}
                   </label>
-                ))}
+                  {TIPOS_INSUMO_CONSULTA.map((t) => (
+                    <label key={t.value} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={!!insumos[t.value]}
+                        onChange={(e) => setInsumos((prev) => ({ ...prev, [t.value]: e.target.checked }))}
+                      />
+                      {t.label} {precios[t.value] ? `(${fmtCOP(precios[t.value])})` : ""}
+                    </label>
+                  ))}
+                </div>
               </div>
-            </div>
 
-            <div className="mb-3">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Próxima cita</label>
-              <input
-                value={proximaCita}
-                onChange={(e) => setProximaCita(e.target.value)}
-                placeholder="Nota de consultorio, o la fecha ya agendada"
-                className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-              />
-            </div>
-
-            <div className="mb-3">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Observación</label>
-              <input
-                value={observacion}
-                onChange={(e) => setObservacion(e.target.value)}
-                placeholder="Ej: no agendó cita, quedó pendiente de llamar…"
-                className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-              />
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Próxima cita</label>
+                <input
+                  value={proximaCita}
+                  onChange={(e) => setProximaCita(e.target.value)}
+                  placeholder="Nota de consultorio, o la fecha ya agendada"
+                  className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </div>
             </div>
 
             {cargos.length === 0 && (
@@ -1062,6 +1055,16 @@ function ModalCobro({
                   </div>
                 </div>
               ))}
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Observación (recepción)</label>
+              <input
+                value={observacion}
+                onChange={(e) => setObservacion(e.target.value)}
+                placeholder="Ej: no agendó cita, quedó pendiente de llamar…"
+                className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+              />
             </div>
 
             <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-4">

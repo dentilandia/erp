@@ -601,7 +601,7 @@ function ModalAtencion({
                   {enviosLab.map((e, idx) => (
                     <div key={idx} className="flex items-center justify-between rounded-md bg-gray-50 px-2 py-1.5 text-sm">
                       <span>
-                        {e.laboratorioNombre} · {TIPOS_SERVICIO_LAB.find((t) => t.value === e.tipoServicio)?.label} · {e.doctoraNombre}
+                        {e.laboratorioNombre} · {TIPOS_SERVICIO_LAB.find((t) => t.value === e.tipoServicio)?.label}
                       </span>
                       <button onClick={() => quitarEnvioLab(idx)}>
                         <X size={14} className="text-gray-400" />
@@ -633,25 +633,13 @@ function ModalAtencion({
                     </option>
                   ))}
                 </select>
-                <select
-                  value={envioDoctoraId}
-                  onChange={(e) => setEnvioDoctoraId(e.target.value)}
-                  title="Doctora que envía (puede ser distinta a quien atiende hoy)"
-                  className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1 text-sm"
-                >
-                  {doctoras.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.nombre}
-                    </option>
-                  ))}
-                </select>
                 <button onClick={agregarEnvioLab} className="rounded-md bg-gray-100 px-3 text-sm font-medium">
                   <Plus size={14} />
                 </button>
               </div>
               <p className="text-xs text-gray-400">
-                Agrega uno por cada aparato (ej. si va superior e inferior, agrega los dos). La doctora puede ser
-                distinta a quien atiende hoy — por defecto trae la de la visita.
+                Agrega uno por cada aparato (ej. si va superior e inferior, agrega los dos). Queda a nombre de la
+                doctora de la visita.
               </p>
             </div>
           )}
