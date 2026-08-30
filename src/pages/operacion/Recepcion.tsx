@@ -72,6 +72,7 @@ export function Recepcion() {
   const [notaSaldoExterno, setNotaSaldoExterno] = useState("");
   const [guardandoSaldoExterno, setGuardandoSaldoExterno] = useState(false);
   const [saldoExternoOk, setSaldoExternoOk] = useState(false);
+  const [errorSaldoExterno, setErrorSaldoExterno] = useState<string | null>(null);
   const [mostrarSaldoExterno, setMostrarSaldoExterno] = useState(false);
 
   async function cargarVisitas() {
@@ -134,7 +135,8 @@ export function Recepcion() {
     const valor = Number(valorSaldoExterno);
     if (!pacienteSaldoExterno || !valor) return;
     setGuardandoSaldoExterno(true);
-    await supabase.from("saldos_favor").insert({
+    setErrorSaldoExterno(null);
+    const { error } = await supabase.from("saldos_favor").insert({
       paciente_id: pacienteSaldoExterno.id,
       sede_origen_id: sedeActiva.id,
       valor,
@@ -144,6 +146,10 @@ export function Recepcion() {
       notas: notaSaldoExterno.trim() || null,
     });
     setGuardandoSaldoExterno(false);
+    if (error) {
+      setErrorSaldoExterno(error.message);
+      return;
+    }
     setPacienteSaldoExterno(null);
     setValorSaldoExterno("");
     setNotaSaldoExterno("");
@@ -275,6 +281,7 @@ export function Recepcion() {
                 placeholder="Nota (ej: anticipo sedación, pendiente de agendar)"
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
               />
+              {errorSaldoExterno && <p className="text-sm text-red-600">{errorSaldoExterno}</p>}
               <button
                 onClick={registrarSaldoSinCita}
                 disabled={!pacienteSaldoExterno || !valorSaldoExterno || guardandoSaldoExterno}
@@ -887,7 +894,7 @@ function ModalCobro({
 
       for (const e of excedentes) {
         if (!e.valor) continue;
-        await supabase.from("saldos_favor").insert({
+        const { error } = await supabase.from("saldos_favor").insert({
           paciente_id: pacienteId,
           sede_origen_id: sedeId,
           valor: e.valor,
@@ -895,6 +902,7 @@ function ModalCobro({
           medio_origen: e.medio,
           fecha: visitaFecha,
         });
+        if (error) throw error;
       }
 
       await supabase

@@ -37,6 +37,7 @@ export function Parametros() {
   const [notasSaldo, setNotasSaldo] = useState("");
   const [guardandoSaldo, setGuardandoSaldo] = useState(false);
   const [saldoRegistrado, setSaldoRegistrado] = useState(false);
+  const [errorSaldo, setErrorSaldo] = useState<string | null>(null);
 
   const [pacienteEditar, setPacienteEditar] = useState<Paciente | null>(null);
   const [saldosPaciente, setSaldosPaciente] = useState<SaldoFavor[]>([]);
@@ -84,7 +85,8 @@ export function Parametros() {
     const valor = Number(valorSaldo);
     if (!pacienteSaldo || !sedeSaldoId || !valor) return;
     setGuardandoSaldo(true);
-    await supabase.from("saldos_favor").insert({
+    setErrorSaldo(null);
+    const { error } = await supabase.from("saldos_favor").insert({
       paciente_id: pacienteSaldo.id,
       sede_origen_id: sedeSaldoId,
       valor,
@@ -94,6 +96,10 @@ export function Parametros() {
       notas: notasSaldo.trim() || null,
     });
     setGuardandoSaldo(false);
+    if (error) {
+      setErrorSaldo(error.message);
+      return;
+    }
     setPacienteSaldo(null);
     setValorSaldo("");
     setNotasSaldo("");
@@ -274,6 +280,7 @@ export function Parametros() {
             placeholder="Nota (ej: saldo trasladado del sistema anterior)"
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
           />
+          {errorSaldo && <p className="text-sm text-red-600">{errorSaldo}</p>}
           <button
             onClick={registrarSaldo}
             disabled={!pacienteSaldo || !valorSaldo || guardandoSaldo}
