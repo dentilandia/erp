@@ -14,6 +14,11 @@ const CONCEPTOS_SEDACION = [
   "Sedación óxido nitroso",
 ];
 
+// Desde que el anticipo/pago de sedación se registra como saldo a favor (no
+// como concepto administrativo), hay que sumarlo aparte por su motivo — si no,
+// desaparecería del reporte el mes en que se cobra el anticipo.
+const MOTIVOS_SEDACION_SALDO = ["Anticipo sedación", "Pago sedación"];
+
 const TABS = [
   { value: "doctoras", label: "Odontopediatra" },
   { value: "laboratorios", label: "Laboratorios" },
@@ -1133,29 +1138,57 @@ function LiquidacionSedacion({ mes, sedeId }: { mes: string; sedeId: string }) {
         id: string; medio_pago: string; valor: number;
         cargos: { concepto: string; fecha: string; doctoras: { nombre: string } | null; visitas: { pacientes: { nombre: string } | null } | null };
       };
-      const data = await fetchTodasLasFilas<PagoSedacion>((desde, hasta) => {
-        let q = supabase
-          .from("cargo_pagos")
-          .select(
-            "id, medio_pago, valor, cargos!inner(concepto, fecha, sede_id, doctoras(nombre), visitas(pacientes(nombre)))",
-          )
-          .in("cargos.concepto", CONCEPTOS_SEDACION)
-          .gte("cargos.fecha", periodo.inicio)
-          .lte("cargos.fecha", periodo.fin)
-          .range(desde, hasta);
-        if (sedeId) q = q.eq("cargos.sede_id", sedeId);
-        return q as unknown as PromiseLike<{ data: PagoSedacion[] | null }>;
-      });
+      const [pagos, saldos] = await Promise.all([
+        fetchTodasLasFilas<PagoSedacion>((desde, hasta) => {
+          let q = supabase
+            .from("cargo_pagos")
+            .select(
+              "id, medio_pago, valor, cargos!inner(concepto, fecha, sede_id, doctoras(nombre), visitas(pacientes(nombre)))",
+            )
+            .in("cargos.concepto", CONCEPTOS_SEDACION)
+            .gte("cargos.fecha", periodo.inicio)
+            .lte("cargos.fecha", periodo.fin)
+            .range(desde, hasta);
+          if (sedeId) q = q.eq("cargos.sede_id", sedeId);
+          return q as unknown as PromiseLike<{ data: PagoSedacion[] | null }>;
+        }),
+        fetchTodasLasFilas<{ id: string; fecha: string; valor: number; medio_origen: string; motivo: string; pacientes: { nombre: string } | null }>(
+          (desde, hasta) => {
+            let q = supabase
+              .from("saldos_favor")
+              .select("id, fecha, valor, medio_origen, motivo, pacientes(nombre)")
+              .in("motivo", MOTIVOS_SEDACION_SALDO)
+              .gte("fecha", periodo.inicio)
+              .lte("fecha", periodo.fin)
+              .range(desde, hasta);
+            if (sedeId) q = q.eq("sede_origen_id", sedeId);
+            return q as unknown as PromiseLike<{
+              data: { id: string; fecha: string; valor: number; medio_origen: string; motivo: string; pacientes: { nombre: string } | null }[] | null;
+            }>;
+          },
+        ),
+      ]);
       setFilas(
-        data.map((r) => ({
-          id: r.id,
-          fecha: r.cargos.fecha,
-          paciente: r.cargos.visitas?.pacientes?.nombre ?? "—",
-          doctora: r.cargos.doctoras?.nombre ?? "—",
-          concepto: r.cargos.concepto,
-          medio: r.medio_pago,
-          valor: Number(r.valor),
-        })),
+        [
+          ...pagos.map((r) => ({
+            id: `pago-${r.id}`,
+            fecha: r.cargos.fecha,
+            paciente: r.cargos.visitas?.pacientes?.nombre ?? "—",
+            doctora: r.cargos.doctoras?.nombre ?? "—",
+            concepto: r.cargos.concepto,
+            medio: r.medio_pago,
+            valor: Number(r.valor),
+          })),
+          ...saldos.map((s) => ({
+            id: `saldo-${s.id}`,
+            fecha: s.fecha,
+            paciente: s.pacientes?.nombre ?? "—",
+            doctora: "—",
+            concepto: s.motivo,
+            medio: s.medio_origen,
+            valor: Number(s.valor),
+          })),
+        ].sort((a, b) => (a.fecha < b.fecha ? 1 : -1)),
       );
       setCargando(false);
     })();

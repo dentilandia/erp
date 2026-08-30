@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Plus, Check, X, Trash2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
-import type { Doctora, Sede, Paciente, SaldoFavor } from "../lib/types";
+import { MOTIVOS_SALDO_FAVOR, type Doctora, type Sede, type Paciente, type SaldoFavor } from "../lib/types";
 import { PacienteAutocomplete } from "../components/PacienteAutocomplete";
 
 const PALETA_SUGERIDA = [
@@ -34,6 +34,7 @@ export function Parametros() {
   const [sedeSaldoId, setSedeSaldoId] = useState("");
   const [fechaSaldo, setFechaSaldo] = useState(today());
   const [valorSaldo, setValorSaldo] = useState("");
+  const [motivoSaldo, setMotivoSaldo] = useState(MOTIVOS_SALDO_FAVOR[0]);
   const [notasSaldo, setNotasSaldo] = useState("");
   const [guardandoSaldo, setGuardandoSaldo] = useState(false);
   const [saldoRegistrado, setSaldoRegistrado] = useState(false);
@@ -92,6 +93,7 @@ export function Parametros() {
       valor,
       valor_disponible: valor,
       medio_origen: "ajuste_manual",
+      motivo: motivoSaldo,
       fecha: fechaSaldo,
       notas: notasSaldo.trim() || null,
     });
@@ -126,7 +128,7 @@ export function Parametros() {
     if (!s) return;
     await supabase
       .from("saldos_favor")
-      .update({ fecha: s.fecha, valor: s.valor, valor_disponible: s.valor_disponible, notas: s.notas })
+      .update({ fecha: s.fecha, valor: s.valor, valor_disponible: s.valor_disponible, motivo: s.motivo, notas: s.notas })
       .eq("id", id);
     setSaldoGuardadoId(id);
     setTimeout(() => setSaldoGuardadoId((prev) => (prev === id ? null : prev)), 1500);
@@ -273,6 +275,17 @@ export function Parametros() {
               onChange={(e) => setValorSaldo(e.target.value)}
               className="w-32 rounded-lg border border-gray-300 px-3 py-2 text-sm"
             />
+            <select
+              value={motivoSaldo}
+              onChange={(e) => setMotivoSaldo(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            >
+              {MOTIVOS_SALDO_FAVOR.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
           </div>
           <input
             value={notasSaldo}
@@ -340,6 +353,21 @@ export function Parametros() {
                     onChange={(e) => editarSaldoPaciente(s.id, { valor_disponible: Number(e.target.value) })}
                     className="w-28 rounded-md border border-gray-300 px-2 py-1 text-sm"
                   />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-gray-400">Motivo</label>
+                  <select
+                    value={s.motivo ?? ""}
+                    onChange={(e) => editarSaldoPaciente(s.id, { motivo: e.target.value })}
+                    className="rounded-md border border-gray-300 px-2 py-1 text-sm"
+                  >
+                    <option value="">— sin motivo —</option>
+                    {MOTIVOS_SALDO_FAVOR.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <button
                   onClick={() => guardarSaldoPaciente(s.id)}

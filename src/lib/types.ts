@@ -104,18 +104,22 @@ export interface SaldoFavor {
   medio_origen: string;
   fecha: string;
   cargo_pago_origen_id: string | null;
+  motivo: string | null;
   notas: string | null;
 }
 
-export const CONCEPTOS_ADMINISTRATIVOS = [
-  "Anticipo sedación intravenosa",
-  "Sedación intravenosa",
-  "Anticipo sedación óxido nitroso",
-  "Sedación óxido nitroso",
-  "GUM",
-  "Caja aparato",
-  "Llave de aparato",
+/** Para qué es el saldo a favor — sedación (anticipo o pago completo por
+ *  adelantado) ya no se cobra como concepto administrativo, se registra acá
+ *  y se consume después como medio de pago "Saldo a favor" del cargo real. */
+export const MOTIVOS_SALDO_FAVOR = [
+  "Anticipo sedación",
+  "Pago sedación",
+  "Reparación aparato",
+  "Modificación aparato",
+  "Tratamiento odontológico",
 ];
+
+export const CONCEPTOS_ADMINISTRATIVOS = ["GUM", "Caja aparato", "Llave de aparato"];
 
 export const TIPOS_INSUMO_CONSULTA: { value: string; label: string }[] = [
   { value: "mascara_facial", label: "Máscara facial" },

@@ -6,6 +6,7 @@ import { fmtCOP, today } from "../../lib/format";
 import {
   MEDIOS_PAGO,
   CONCEPTOS_ADMINISTRATIVOS,
+  MOTIVOS_SALDO_FAVOR,
   TIPOS_INSUMO_CONSULTA,
   type Sede,
   type Doctora,
@@ -43,6 +44,12 @@ interface PagoLinea {
   valor: number;
 }
 
+interface ExcedenteLinea {
+  medio: MedioPago;
+  valor: number;
+  motivo: string;
+}
+
 interface CargoEdit {
   id?: string; // undefined = concepto nuevo, aún no insertado
   categoria: CategoriaCargo;
@@ -68,6 +75,7 @@ export function Recepcion() {
 
   const [pacienteSaldoExterno, setPacienteSaldoExterno] = useState<Paciente | null>(null);
   const [medioSaldoExterno, setMedioSaldoExterno] = useState<MedioPago>("efectivo");
+  const [motivoSaldoExterno, setMotivoSaldoExterno] = useState(MOTIVOS_SALDO_FAVOR[0]);
   const [valorSaldoExterno, setValorSaldoExterno] = useState("");
   const [notaSaldoExterno, setNotaSaldoExterno] = useState("");
   const [guardandoSaldoExterno, setGuardandoSaldoExterno] = useState(false);
@@ -142,6 +150,7 @@ export function Recepcion() {
       valor,
       valor_disponible: valor,
       medio_origen: medioSaldoExterno,
+      motivo: motivoSaldoExterno,
       fecha,
       notas: notaSaldoExterno.trim() || null,
     });
@@ -274,6 +283,17 @@ export function Recepcion() {
                   onChange={(e) => setValorSaldoExterno(e.target.value)}
                   className="w-32 rounded-lg border border-gray-300 px-3 py-2 text-sm"
                 />
+                <select
+                  value={motivoSaldoExterno}
+                  onChange={(e) => setMotivoSaldoExterno(e.target.value)}
+                  className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                >
+                  {MOTIVOS_SALDO_FAVOR.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
               </div>
               <input
                 value={notaSaldoExterno}
@@ -300,8 +320,8 @@ export function Recepcion() {
       <section>
         <h3 className="text-sm font-semibold text-gray-500 mb-2">En espera ({enEspera.length})</h3>
         <p className="text-xs text-gray-400 mb-2">
-          Toca un paciente en espera para cobrarle directamente un concepto administrativo (RX, GUM, anticipo de
-          sedación, etc.) sin necesidad de que pase por consultorio.
+          Toca un paciente en espera para cobrarle directamente un concepto administrativo (RX, GUM, caja/llave de
+          aparato) o crear un saldo a favor, sin necesidad de que pase por consultorio.
         </p>
         <div className="space-y-2">
           {enEspera.map((v) => (
@@ -649,14 +669,14 @@ function ModalCobro({
   const [visitaFecha, setVisitaFecha] = useState(today());
   const [tratamiento, setTratamiento] = useState("");
   const [proximaCita, setProximaCita] = useState("");
-  const [observacion, setObservacion] = useState("");
   const [insumos, setInsumos] = useState<Record<string, boolean>>({});
   const [insumosOriginales, setInsumosOriginales] = useState<string[]>([]);
   const [cargos, setCargos] = useState<CargoEdit[]>([]);
   const [cargosOriginalesIds, setCargosOriginalesIds] = useState<string[]>([]);
   const [saldoDisponible, setSaldoDisponible] = useState(0);
-  const [excedentes, setExcedentes] = useState<PagoLinea[]>([]);
+  const [excedentes, setExcedentes] = useState<ExcedenteLinea[]>([]);
   const [excedenteMedio, setExcedenteMedio] = useState<MedioPago>("efectivo");
+  const [excedenteMotivo, setExcedenteMotivo] = useState(MOTIVOS_SALDO_FAVOR[0]);
   const [excedenteValor, setExcedenteValor] = useState("");
   const [conceptoTipo, setConceptoTipo] = useState(CONCEPTOS_ADMINISTRATIVOS[0]);
   const [conceptoValor, setConceptoValor] = useState("");
@@ -670,7 +690,7 @@ function ModalCobro({
     (async () => {
       const { data: visita } = await supabase
         .from("visitas")
-        .select("id, estado, fecha, paciente_id, motivo_valor_cero, tratamiento, proxima_cita, observacion, pacientes(nombre)")
+        .select("id, estado, fecha, paciente_id, motivo_valor_cero, tratamiento, proxima_cita, pacientes(nombre)")
         .eq("id", visitaId)
         .single();
       if (!visita) return;
@@ -682,7 +702,6 @@ function ModalCobro({
         motivo_valor_cero: string | null;
         tratamiento: string | null;
         proxima_cita: string | null;
-        observacion: string | null;
         pacientes: { nombre: string };
       };
       setPacienteId(v.paciente_id);
@@ -691,7 +710,6 @@ function ModalCobro({
       setVisitaFecha(v.fecha);
       setTratamiento(v.tratamiento ?? "");
       setProximaCita(v.proxima_cita ?? "");
-      setObservacion(v.observacion ?? "");
       setMotivoCero(v.motivo_valor_cero ?? "");
 
       const { data: cargosData } = await supabase
@@ -801,13 +819,15 @@ function ModalCobro({
   function agregarExcedente() {
     const valor = Number(excedenteValor);
     if (!valor) return;
-    setExcedentes((prev) => [...prev, { medio: excedenteMedio, valor }]);
+    setExcedentes((prev) => [...prev, { medio: excedenteMedio, valor, motivo: excedenteMotivo }]);
     setExcedenteValor("");
   }
 
   function quitarExcedente(idx: number) {
     setExcedentes((prev) => prev.filter((_, i) => i !== idx));
   }
+
+  const idxProcedimiento = cargos.findIndex((c) => c.categoria === "procedimiento");
 
   async function confirmar() {
     setErrorMsg(null);
@@ -900,6 +920,7 @@ function ModalCobro({
           valor: e.valor,
           valor_disponible: e.valor,
           medio_origen: e.medio,
+          motivo: e.motivo,
           fecha: visitaFecha,
         });
         if (error) throw error;
@@ -911,7 +932,6 @@ function ModalCobro({
           estado: "cobrado",
           motivo_valor_cero: cargos.length === 0 ? motivoCero.trim() : null,
           proxima_cita: proximaCita || null,
-          observacion: observacion.trim() || null,
           updated_at: new Date().toISOString(),
         })
         .eq("id", visitaId);
@@ -948,9 +968,18 @@ function ModalCobro({
             <div className="rounded-lg border-2 border-amber-300 bg-amber-50/60 px-3 py-3 mb-3 space-y-3">
               <p className="text-xs font-semibold text-amber-700">Registrado en consultorio (editable aquí)</p>
               {tratamiento && (
-                <p className="text-sm">
-                  <span className="text-gray-500">Tratamiento:</span> {tratamiento}
-                </p>
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-gray-500 shrink-0">Tratamiento:</span>
+                  <span className="flex-1 min-w-0 truncate">{tratamiento}</span>
+                  {idxProcedimiento !== -1 && (
+                    <input
+                      type="number"
+                      value={cargos[idxProcedimiento].valor || ""}
+                      onChange={(e) => actualizarValorCargo(idxProcedimiento, e.target.value)}
+                      className="w-28 shrink-0 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                    />
+                  )}
+                </div>
               )}
 
               <div>
@@ -1018,12 +1047,14 @@ function ModalCobro({
                       onChange={(e) => actualizarConcepto(idx, e.target.value)}
                       className="flex-1 min-w-0 rounded-md border border-gray-200 px-2 py-1 text-sm font-medium"
                     />
-                    <input
-                      type="number"
-                      value={c.valor || ""}
-                      onChange={(e) => actualizarValorCargo(idx, e.target.value)}
-                      className="w-28 rounded-md border border-gray-200 px-2 py-1 text-sm"
-                    />
+                    {c.categoria !== "procedimiento" && (
+                      <input
+                        type="number"
+                        value={c.valor || ""}
+                        onChange={(e) => actualizarValorCargo(idx, e.target.value)}
+                        className="w-28 rounded-md border border-gray-200 px-2 py-1 text-sm"
+                      />
+                    )}
                     <button onClick={() => dividirPago(idx)} title="Dividir en varios medios de pago">
                       <Split size={14} className="text-gray-400" />
                     </button>
@@ -1065,16 +1096,6 @@ function ModalCobro({
               ))}
             </div>
 
-            <div className="mb-4">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Observación (recepción)</label>
-              <input
-                value={observacion}
-                onChange={(e) => setObservacion(e.target.value)}
-                placeholder="Ej: no agendó cita, quedó pendiente de llamar…"
-                className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-              />
-            </div>
-
             <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-4">
               <p className="text-xs font-medium text-gray-500 mb-2">Agregar concepto administrativo</p>
               <div className="flex gap-2">
@@ -1107,13 +1128,13 @@ function ModalCobro({
             </div>
 
             <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-4">
-              <p className="text-xs font-medium text-gray-500 mb-2">Excedente / anticipo (crea saldo a favor)</p>
+              <p className="text-xs font-medium text-gray-500 mb-2">Crear saldo a favor</p>
               {excedentes.length > 0 && (
                 <div className="space-y-1 mb-2">
                   {excedentes.map((e, idx) => (
                     <div key={idx} className="flex items-center justify-between rounded-md bg-gray-50 px-2 py-1 text-sm">
                       <span>
-                        {MEDIOS_PAGO.find((m) => m.value === e.medio)?.label} · {fmtCOP(e.valor)}
+                        {MEDIOS_PAGO.find((m) => m.value === e.medio)?.label} · {fmtCOP(e.valor)} · {e.motivo}
                       </span>
                       <button onClick={() => quitarExcedente(idx)}>
                         <X size={14} className="text-gray-400" />
@@ -1122,11 +1143,11 @@ function ModalCobro({
                   ))}
                 </div>
               )}
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <select
                   value={excedenteMedio}
                   onChange={(e) => setExcedenteMedio(e.target.value as MedioPago)}
-                  className="flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                  className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1 text-sm"
                 >
                   {MEDIOS_PAGO.filter((m) => m.value !== "saldo_favor").map((m) => (
                     <option key={m.value} value={m.value}>
@@ -1144,6 +1165,20 @@ function ModalCobro({
                 <button onClick={agregarExcedente} className="rounded-md bg-gray-100 px-3 text-sm font-medium">
                   <Plus size={14} />
                 </button>
+              </div>
+              <div className="mt-2">
+                <label className="block text-xs text-gray-500 mb-1">¿Para qué es?</label>
+                <select
+                  value={excedenteMotivo}
+                  onChange={(e) => setExcedenteMotivo(e.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
+                >
+                  {MOTIVOS_SALDO_FAVOR.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 

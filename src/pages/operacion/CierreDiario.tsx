@@ -396,8 +396,8 @@ export function CierreDiario() {
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <h3 className="text-sm font-semibold text-gray-500 mb-1">Otros ingresos</h3>
           <p className="text-xs text-gray-400 mb-2">
-            RX, conceptos administrativos (GUM, sedación, anticipos…) y saldo a favor generado hoy — no cuentan
-            como venta de la doctora.
+            RX, conceptos administrativos (GUM, caja/llave de aparato) y saldo a favor generado hoy (anticipos,
+            sedación, tratamientos por adelantado…) — no cuentan como venta de la doctora.
           </p>
           <div className="divide-y divide-gray-100 text-sm">
             {otrosIngresosAuto.map((o) => (
