@@ -361,6 +361,8 @@ function ModalAtencion({
   onGuardado: () => void;
 }) {
   const [pacienteNombre, setPacienteNombre] = useState("");
+  const [observacionAnterior, setObservacionAnterior] = useState<string | null>(null);
+  const [fechaObservacionAnterior, setFechaObservacionAnterior] = useState<string | null>(null);
   const [tratamiento, setTratamiento] = useState("");
   const [valorTratamiento, setValorTratamiento] = useState("");
   const [motivoCero, setMotivoCero] = useState("");
@@ -382,10 +384,27 @@ function ModalAtencion({
 
   useEffect(() => {
     (async () => {
-      const { data: v } = await supabase.from("visitas").select("pacientes(nombre), doctora_id").eq("id", visitaId).single();
-      const visita = v as unknown as { pacientes: { nombre: string }; doctora_id: string } | null;
+      const { data: v } = await supabase
+        .from("visitas")
+        .select("pacientes(nombre), doctora_id, paciente_id")
+        .eq("id", visitaId)
+        .single();
+      const visita = v as unknown as { pacientes: { nombre: string }; doctora_id: string; paciente_id: string } | null;
       setPacienteNombre(visita?.pacientes?.nombre ?? "");
       setEnvioDoctoraId(visita?.doctora_id ?? "");
+      if (visita?.paciente_id) {
+        const { data: anterior } = await supabase
+          .from("visitas")
+          .select("fecha, observacion")
+          .eq("paciente_id", visita.paciente_id)
+          .neq("id", visitaId)
+          .order("fecha", { ascending: false })
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        setObservacionAnterior(anterior?.observacion ?? null);
+        setFechaObservacionAnterior(anterior?.fecha ?? null);
+      }
       const { data: preciosData } = await supabase.from("precios_config").select("clave, valor");
       const map: Record<string, number> = {};
       (preciosData ?? []).forEach((p) => (map[p.clave] = Number(p.valor)));
@@ -415,7 +434,7 @@ function ModalAtencion({
   async function guardar() {
     if (sinCargo && !motivoCero.trim()) return;
     setGuardando(true);
-    const { data: visita } = await supabase.from("visitas").select("doctora_id, paciente_id").eq("id", visitaId).single();
+    const { data: visita } = await supabase.from("visitas").select("doctora_id, paciente_id, fecha").eq("id", visitaId).single();
     if (!visita) {
       setGuardando(false);
       return;
@@ -455,7 +474,10 @@ function ModalAtencion({
         laboratorio_id: envio.laboratorioId,
         tipo_servicio: envio.tipoServicio,
         estado: "enviado",
-        fecha_envio: today(),
+        // La fecha del envío es la de la visita, no la de hoy — si se está
+        // registrando con retraso una atención de un día anterior, el envío
+        // al laboratorio debe quedar en el día real de la atención.
+        fecha_envio: visita.fecha,
       });
     }
     if (interconsulta && interconsultaEspecialidad.trim()) {
@@ -465,7 +487,7 @@ function ModalAtencion({
         paciente_id: visita.paciente_id,
         doctora_id: visita.doctora_id,
         especialidad: interconsultaEspecialidad.trim(),
-        fecha: today(),
+        fecha: visita.fecha,
       });
     }
 
@@ -494,6 +516,13 @@ function ModalAtencion({
             <X size={18} />
           </button>
         </div>
+
+        {observacionAnterior && (
+          <p className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-sm text-emerald-800">
+            <span className="font-semibold">Observación de la cita anterior ({fechaObservacionAnterior}):</span>{" "}
+            {observacionAnterior}
+          </p>
+        )}
 
         <div>
           <label className="block text-sm font-medium mb-1">Tratamiento</label>
