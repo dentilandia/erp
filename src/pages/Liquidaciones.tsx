@@ -889,6 +889,8 @@ const PCT_RETENCION_LAB = 0.04;
 interface FilaLab {
   id: string;
   fecha: string | null;
+  fechaFactura: string | null;
+  fechaInstalado: string | null;
   paciente: string;
   doctoraId: string;
   doctora: string;
@@ -938,6 +940,8 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
         filtradas.map((r) => ({
           id: r.id,
           fecha: r.mes_liquidacion ?? r.fecha_instalado,
+          fechaFactura: r.fecha_emision_factura,
+          fechaInstalado: r.fecha_instalado,
           paciente: r.pacientes?.nombre ?? "—",
           doctoraId: r.doctora_id,
           doctora: r.doctoras?.nombre ?? "—",
@@ -976,7 +980,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
     const filasHtml = filas
       .map((f) => {
         const ret = retencionDe(f);
-        return `<tr><td>${esc(f.fecha ?? "")}</td><td>${esc(f.paciente)}</td><td>${esc(f.doctora)}${
+        return `<tr><td>${esc(f.fechaFactura ?? "—")}</td><td>${esc(f.fechaInstalado ?? "—")}</td><td>${esc(f.paciente)}</td><td>${esc(f.doctora)}${
           f.doctoraInstala ? ` <span class="nota">+ ${esc(f.doctoraInstala)} (50/50)</span>` : ""
         }</td><td>${esc(f.laboratorio)}</td><td>${esc(f.factura_numero ?? "—")}</td><td class="num">${esc(
           fmtCOP(f.valor_factura),
@@ -1020,9 +1024,9 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
 
   <h2>Facturas</h2>
   <table>
-    <thead><tr><th>Fecha</th><th>Paciente</th><th>Doctora</th><th>Laboratorio</th><th>Factura</th><th class="num">Valor</th><th class="num">Retención</th><th class="num">Neto</th></tr></thead>
-    <tbody>${filasHtml || `<tr><td colspan="8">Sin facturas en este período.</td></tr>`}</tbody>
-    <tfoot><tr><td colspan="5">Total</td><td class="num">${esc(fmtCOP(total))}</td><td class="num">${esc(
+    <thead><tr><th>Fecha factura</th><th>Fecha instalación</th><th>Paciente</th><th>Doctora</th><th>Laboratorio</th><th>Factura</th><th class="num">Valor</th><th class="num">Retención</th><th class="num">Neto</th></tr></thead>
+    <tbody>${filasHtml || `<tr><td colspan="9">Sin facturas en este período.</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="6">Total</td><td class="num">${esc(fmtCOP(total))}</td><td class="num">${esc(
       fmtCOP(totalRetencion),
     )}</td><td class="num">${esc(fmtCOP(totalNeto))}</td></tr></tfoot>
   </table>
@@ -1071,7 +1075,8 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 text-left text-gray-500">
-              <th className="px-3 py-2">Fecha</th>
+              <th className="px-3 py-2">Fecha factura</th>
+              <th className="px-3 py-2">Fecha instalación</th>
               <th className="px-3 py-2">Paciente</th>
               <th className="px-3 py-2">Doctora</th>
               <th className="px-3 py-2">Laboratorio</th>
@@ -1086,7 +1091,8 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
               const ret = retencionDe(f);
               return (
                 <tr key={f.id} className="border-t border-gray-100">
-                  <td className="px-3 py-2">{f.fecha}</td>
+                  <td className="px-3 py-2">{f.fechaFactura ?? "—"}</td>
+                  <td className="px-3 py-2">{f.fechaInstalado ?? "—"}</td>
                   <td className="px-3 py-2">{f.paciente}</td>
                   <td className="px-3 py-2">
                     {f.doctora}
@@ -1102,7 +1108,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
             })}
             {filas.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-4 text-center text-gray-400">
+                <td colSpan={9} className="px-3 py-4 text-center text-gray-400">
                   Sin facturas de laboratorio en este período.
                 </td>
               </tr>
