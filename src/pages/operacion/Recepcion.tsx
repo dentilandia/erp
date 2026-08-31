@@ -135,7 +135,18 @@ export function Recepcion() {
 
   async function eliminarVisita(id: string) {
     if (!window.confirm("¿Eliminar esta visita? Esto no se puede deshacer.")) return;
-    await supabase.from("visitas").delete().eq("id", id);
+    const { error } = await supabase.from("visitas").delete().eq("id", id);
+    if (error) {
+      // La causa más común: la visita tiene un envío a laboratorio asociado
+      // (lab_ordenes.visita_id) y esa tabla no tiene on-delete-cascade, así
+      // que Postgres bloquea el borrado — antes esto fallaba en silencio.
+      window.alert(
+        error.code === "23503"
+          ? "No se puede eliminar: esta visita tiene un envío a laboratorio asociado. Bórralo primero desde el módulo de Laboratorio y vuelve a intentar."
+          : `No se pudo eliminar la visita: ${error.message}`,
+      );
+      return;
+    }
     cargarVisitas();
   }
 
