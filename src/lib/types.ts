@@ -114,8 +114,7 @@ export interface SaldoFavor {
 export const MOTIVOS_SALDO_FAVOR = [
   "Anticipo sedación",
   "Pago sedación",
-  "Reparación aparato",
-  "Modificación aparato",
+  "Laboratorio aparato",
   "Tratamiento odontológico",
 ];
 
