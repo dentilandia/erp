@@ -112,7 +112,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function actualizarClave(password: string) {
     const { error: updError } = await supabase.auth.updateUser({ password });
-    if (updError) return updError.message;
+    if (updError) {
+      // Pasa seguido cuando el link de invitación/recuperación se abrió dentro
+      // del navegador embebido de una app de correo (Gmail, Outlook) en el
+      // celular — ese navegador a veces no guarda bien la sesión que trae el
+      // link. El mensaje de Supabase ("Auth session missing!") no dice nada
+      // de esto, así que lo traducimos a algo accionable.
+      if (updError.message.toLowerCase().includes("session missing")) {
+        return "No se pudo guardar la contraseña porque el link no cargó bien la sesión en este navegador — pasa seguido al abrir el link desde la app de Gmail/Outlook en el celular. Copia el link y ábrelo en Chrome o Safari, o pide un link nuevo con \"Reenviar link de acceso\" abajo.";
+      }
+      return updError.message;
+    }
     setRecuperandoClave(false);
     return null;
   }

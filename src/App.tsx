@@ -30,11 +30,13 @@ function SoloAdmin({ children }: { children: React.ReactNode }) {
  *  recuperación no activó la pantalla dedicada (pasa con algunos navegadores
  *  de correo en el celular, que dañan el link) — así no queda bloqueada. */
 function SinPerfil({ error }: { error: string | null }) {
-  const { actualizarClave, signOut } = useAuth();
+  const { actualizarClave, signOut, session, enviarRecuperacion } = useAuth();
   const [password, setPassword] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [resultado, setResultado] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
+  const [reenviando, setReenviando] = useState(false);
+  const [reenviado, setReenviado] = useState(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -47,6 +49,14 @@ function SinPerfil({ error }: { error: string | null }) {
     setEnviando(false);
     setResultado(result);
     if (!result) setOk(true);
+  }
+
+  async function handleReenviar() {
+    if (!session?.user.email) return;
+    setReenviando(true);
+    await enviarRecuperacion(session.user.email);
+    setReenviando(false);
+    setReenviado(true);
   }
 
   return (
@@ -79,6 +89,15 @@ function SinPerfil({ error }: { error: string | null }) {
                   {enviando ? "Guardando…" : "Guardar contraseña"}
                 </button>
               </form>
+              {session?.user.email && (
+                <button
+                  onClick={handleReenviar}
+                  disabled={reenviando}
+                  className="w-full text-center text-xs text-teal hover:underline disabled:opacity-50"
+                >
+                  {reenviando ? "Enviando…" : reenviado ? "Link reenviado — revisa tu correo" : "¿No funcionó? Reenviar link de acceso a mi correo"}
+                </button>
+              )}
             </>
           )}
           <button onClick={signOut} className="w-full text-center text-xs text-gray-400 hover:text-tinta">
