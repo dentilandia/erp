@@ -620,7 +620,12 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                 {f.porSede.map((s) => (
                   <div key={s.sedeId} className="grid grid-cols-4 gap-2 px-3 py-1.5 text-sm">
                     <span>{s.sedeNombre}</span>
-                    <span className="text-right">{fmtCOP(s.ventas)}</span>
+                    <span className="text-right">
+                      {fmtCOP(s.ventas)}
+                      {f.totalVentas > 0 && (
+                        <span className="text-gray-400"> ({((s.ventas / f.totalVentas) * 100).toFixed(1)}%)</span>
+                      )}
+                    </span>
                     <span className="text-right">{fmtCOP(s.labs)}</span>
                     <span className="text-right">{fmtCOP(s.insumos)}</span>
                   </div>
@@ -684,6 +689,27 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                 <p className="font-semibold text-lg">{fmtCOP(totalPago)}</p>
               </div>
             </div>
+
+            {!sedeId && f.porSede.length >= 1 && f.totalVentas > 0 && (
+              <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-3">
+                <p className="text-xs font-medium text-gray-400 mb-1.5">
+                  Reparto del total a pagar por sede (solo para asignar el gasto — no sale en la liquidación de la doctora)
+                </p>
+                <div className="space-y-1">
+                  {f.porSede.map((s) => {
+                    const pctSede = s.ventas / f.totalVentas;
+                    return (
+                      <div key={s.sedeId} className="flex items-center justify-between text-sm">
+                        <span className="text-gray-500">
+                          {s.sedeNombre} <span className="text-gray-400">({(pctSede * 100).toFixed(1)}%)</span>
+                        </span>
+                        <span className="font-medium">{fmtCOP(totalPago * pctSede)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="flex items-center gap-3 mb-3 flex-wrap">
               <button
