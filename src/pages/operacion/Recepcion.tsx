@@ -477,22 +477,20 @@ function ResumenOperacionDia({ sedeId, fecha }: { sedeId: string; fecha: string 
           laboratorio: r.laboratorios?.nombre ?? "—",
           tipo_servicio: r.tipo_servicio,
         }));
-      // Solo lo que viene de una visita real ese día (enviado/instalado desde
-      // Consultorio) — lo que se agrega manualmente desde Laboratorio no tiene
-      // visita_id y no refleja quién atendió ese día en esta sede.
+      // Incluye tanto lo enviado/instalado desde una visita de Consultorio
+      // como lo registrado directamente desde el módulo de Laboratorio (que
+      // no tiene visita_id) — antes este resumen solo mostraba lo primero.
       const { data: env } = await supabase
         .from("lab_ordenes")
         .select(select)
         .eq("sede_id", sedeId)
-        .eq("fecha_envio", fecha)
-        .not("visita_id", "is", null);
+        .eq("fecha_envio", fecha);
       setEnviados(mapear((env as unknown as Fila[]) ?? []));
       const { data: inst } = await supabase
         .from("lab_ordenes")
         .select(select)
         .eq("sede_id", sedeId)
-        .eq("fecha_instalado", fecha)
-        .not("visita_id", "is", null);
+        .eq("fecha_instalado", fecha);
       setInstalados(mapear((inst as unknown as Fila[]) ?? []));
     })();
   }, [sedeId, fecha]);
