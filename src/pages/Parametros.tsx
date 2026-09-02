@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Plus, Check, X, Trash2, Bell } from "lucide-react";
+import { Plus, Check, X, Trash2, Bell, ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
-import { MOTIVOS_SALDO_FAVOR, type Doctora, type Sede, type Paciente, type SaldoFavor } from "../lib/types";
+import { MOTIVOS_SALDO_FAVOR, type Doctora, type Sede, type Paciente, type SaldoFavor, type InsumoGeneralCatalogo } from "../lib/types";
 import { PacienteAutocomplete } from "../components/PacienteAutocomplete";
 import { useAuth } from "../auth/AuthContext";
 
@@ -54,6 +54,13 @@ export function Parametros() {
   const [saldosPaciente, setSaldosPaciente] = useState<SaldoFavor[]>([]);
   const [saldoGuardadoId, setSaldoGuardadoId] = useState<string | null>(null);
 
+  const [catalogoGeneral, setCatalogoGeneral] = useState<InsumoGeneralCatalogo[]>([]);
+  const [categoriasAbiertas, setCategoriasAbiertas] = useState<Record<string, boolean>>({});
+  const [nuevoItemCategoria, setNuevoItemCategoria] = useState("");
+  const [nuevoItemNombre, setNuevoItemNombre] = useState("");
+  const [guardandoItem, setGuardandoItem] = useState(false);
+  const [errorCatalogo, setErrorCatalogo] = useState<string | null>(null);
+
   async function cargar() {
     const { data: d } = await supabase.from("doctoras").select("*").order("nombre");
     setDoctoras((d as Doctora[]) ?? []);
@@ -101,10 +108,43 @@ export function Parametros() {
     );
   }
 
+  async function cargarCatalogoGeneral() {
+    const { data } = await supabase.from("insumos_generales_catalogo").select("*").order("orden");
+    setCatalogoGeneral((data as InsumoGeneralCatalogo[]) ?? []);
+  }
+
   useEffect(() => {
     cargar();
     cargarPedidosPendientes();
+    cargarCatalogoGeneral();
   }, []);
+
+  const categoriasGeneral = Array.from(new Set(catalogoGeneral.map((c) => c.categoria)));
+
+  async function agregarItemCatalogo() {
+    if (!nuevoItemCategoria.trim() || !nuevoItemNombre.trim()) return;
+    setGuardandoItem(true);
+    setErrorCatalogo(null);
+    const siguienteOrden = Math.max(0, ...catalogoGeneral.map((c) => c.orden)) + 1;
+    const { error } = await supabase.from("insumos_generales_catalogo").insert({
+      categoria: nuevoItemCategoria.trim(),
+      nombre: nuevoItemNombre.trim(),
+      orden: siguienteOrden,
+    });
+    setGuardandoItem(false);
+    if (error) {
+      setErrorCatalogo(error.message);
+      return;
+    }
+    setNuevoItemNombre("");
+    cargarCatalogoGeneral();
+  }
+
+  async function actualizarItemCatalogo(id: string, cambios: Partial<InsumoGeneralCatalogo>) {
+    setCatalogoGeneral((prev) => prev.map((c) => (c.id === id ? { ...c, ...cambios } : c)));
+    const { error } = await supabase.from("insumos_generales_catalogo").update(cambios).eq("id", id);
+    if (error) setErrorCatalogo(error.message);
+  }
 
   async function actualizarDoctora(id: string, cambios: Partial<Doctora>) {
     setDoctoras((prev) => prev.map((d) => (d.id === id ? { ...d, ...cambios } : d)));
@@ -455,6 +495,80 @@ export function Parametros() {
             {saldosPaciente.length === 0 && <p className="text-sm text-gray-400">Sin saldos a favor registrados.</p>}
           </div>
         )}
+      </section>
+
+      <section className="bg-white rounded-xl border border-gray-200 p-4">
+        <h2 className="font-semibold text-tinta mb-1">Catálogo de insumos generales (bodega)</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Agrega ítems nuevos o desactiva los que ya no se usan — desactivar no borra el historial de conteos ya
+          hechos con ese ítem. Se ve reflejado en Operación → Inventario → Insumos generales de ambas sedes.
+        </p>
+        <div className="flex items-end gap-2 flex-wrap mb-3">
+          <input
+            list="categorias-existentes"
+            value={nuevoItemCategoria}
+            onChange={(e) => setNuevoItemCategoria(e.target.value)}
+            placeholder="Categoría"
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          />
+          <datalist id="categorias-existentes">
+            {categoriasGeneral.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
+          <input
+            value={nuevoItemNombre}
+            onChange={(e) => setNuevoItemNombre(e.target.value)}
+            placeholder="Nombre del ítem"
+            className="flex-1 min-w-[160px] rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          />
+          <button
+            onClick={agregarItemCatalogo}
+            disabled={!nuevoItemCategoria.trim() || !nuevoItemNombre.trim() || guardandoItem}
+            className="flex items-center gap-2 rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+          >
+            <Plus size={16} /> {guardandoItem ? "Agregando…" : "Agregar ítem"}
+          </button>
+        </div>
+        {errorCatalogo && <p className="text-sm text-red-600 mb-2">{errorCatalogo}</p>}
+        <div className="divide-y divide-gray-100 border-t border-gray-100">
+          {categoriasGeneral.map((categoria) => {
+            const items = catalogoGeneral.filter((c) => c.categoria === categoria);
+            const abierta = !!categoriasAbiertas[categoria];
+            return (
+              <div key={categoria}>
+                <button
+                  onClick={() => setCategoriasAbiertas((prev) => ({ ...prev, [categoria]: !prev[categoria] }))}
+                  className="w-full flex items-center gap-2 py-2 text-sm font-medium text-tinta"
+                >
+                  {abierta ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  {categoria} ({items.length})
+                </button>
+                {abierta && (
+                  <div className="pb-2 space-y-1">
+                    {items.map((item) => (
+                      <div key={item.id} className="flex items-center gap-2 pl-5">
+                        <input
+                          defaultValue={item.nombre}
+                          onBlur={(e) => e.target.value.trim() && e.target.value !== item.nombre && actualizarItemCatalogo(item.id, { nombre: e.target.value.trim() })}
+                          className={`flex-1 rounded-md border border-gray-200 px-2 py-1 text-sm ${!item.activo ? "text-gray-400 line-through" : ""}`}
+                        />
+                        <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                          <input
+                            type="checkbox"
+                            checked={item.activo}
+                            onChange={(e) => actualizarItemCatalogo(item.id, { activo: e.target.checked })}
+                          />
+                          Activo
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </section>
     </div>
   );

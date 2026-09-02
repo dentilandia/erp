@@ -1,12 +1,18 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Download, FileText } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, mesActual, today } from "../../lib/format";
 import type { Sede, CajaMenorPeriodo, CajaMenorMovimiento } from "../../lib/types";
+import { useAuth } from "../../auth/AuthContext";
+
+function esc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
 
 export function CajaMenor() {
   const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
+  const { perfil } = useAuth();
   const [mes, setMes] = useState(mesActual());
   const [periodo, setPeriodo] = useState<CajaMenorPeriodo | null>(null);
   const [movimientos, setMovimientos] = useState<CajaMenorMovimiento[]>([]);
@@ -146,6 +152,81 @@ export function CajaMenor() {
   const montoAsignado = periodo?.monto_asignado ?? (Number(montoInput) || 0);
   const saldoDisponible = montoAsignado - totalGastado;
 
+  function exportarCSV() {
+    const encabezado = ["Fecha", "Factura", "NIT/Cédula", "Pagado a", "Concepto", "Valor factura", "IVA", "Neto pagado"];
+    const lineas = movimientos.map((m) =>
+      [m.fecha, m.factura_numero ?? "", m.nit_cedula ?? "", m.pagado_a, m.concepto, m.valor_factura, m.iva, Number(m.valor_factura) + Number(m.iva)]
+        .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+        .join(","),
+    );
+    const csv = [encabezado.join(","), ...lineas].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `caja-menor-${sedeActiva.nombre}-${mes}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportarPDF() {
+    const filasHtml = movimientos
+      .map(
+        (m) =>
+          `<tr><td>${esc(m.fecha)}</td><td>${esc(m.factura_numero ?? "—")}</td><td>${esc(m.nit_cedula ?? "—")}</td><td>${esc(
+            m.pagado_a,
+          )}</td><td>${esc(m.concepto)}</td><td class="num">${esc(fmtCOP(m.valor_factura))}</td><td class="num">${esc(
+            fmtCOP(m.iva),
+          )}</td><td class="num">${esc(fmtCOP(Number(m.valor_factura) + Number(m.iva)))}</td></tr>`,
+      )
+      .join("");
+    const html = `<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>Caja menor - ${esc(sedeActiva.nombre)} - ${mes}</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; color: #2E253A; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  p.periodo { color: #666; font-size: 12px; margin: 0 0 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px; }
+  th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
+  th { background: #f5f5f5; }
+  .num { text-align: right; }
+  tfoot td { font-weight: 700; background: #fafafa; }
+  .resumen { display: flex; gap: 24px; margin: 14px 0; font-size: 13px; }
+  .resumen div { border: 1px solid #ddd; border-radius: 8px; padding: 10px 14px; }
+  .resumen .valor { font-size: 16px; font-weight: 700; }
+  .btn-imprimir {
+    position: fixed; top: 14px; right: 14px; background: #2E253A; color: #fff; border: none;
+    border-radius: 8px; padding: 8px 14px; font-size: 13px; font-family: inherit; cursor: pointer;
+  }
+  @media print { body { padding: 0; } .btn-imprimir { display: none; } }
+</style>
+</head>
+<body>
+  <button class="btn-imprimir" onclick="window.print()">Imprimir / Guardar como PDF</button>
+  <h1>Reembolso caja menor — ${esc(sedeActiva.nombre)}</h1>
+  <p class="periodo">Mes: ${mes} — Responsable: ${esc(perfil?.nombre ?? "—")}</p>
+  <div class="resumen">
+    <div>Monto asignado<div class="valor">${esc(fmtCOP(montoAsignado))}</div></div>
+    <div>Total gastado<div class="valor">${esc(fmtCOP(totalGastado))}</div></div>
+    <div>Saldo disponible<div class="valor">${esc(fmtCOP(saldoDisponible))}</div></div>
+  </div>
+  <table>
+    <thead><tr><th>Fecha</th><th>Factura</th><th>NIT/Cédula</th><th>Pagado a</th><th>Concepto</th><th class="num">Valor</th><th class="num">IVA</th><th class="num">Neto</th></tr></thead>
+    <tbody>${filasHtml || `<tr><td colspan="8">Sin gastos registrados este mes.</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="7">Total</td><td class="num">${esc(fmtCOP(totalGastado))}</td></tr></tfoot>
+  </table>
+</body></html>`;
+    const ventana = window.open("", "_blank");
+    if (!ventana) {
+      window.alert("El navegador bloqueó la ventana de impresión — permite ventanas emergentes para este sitio e inténtalo de nuevo.");
+      return;
+    }
+    ventana.document.write(html);
+    ventana.document.close();
+    ventana.focus();
+  }
+
   if (cargando) return <p className="text-sm text-gray-400">Cargando…</p>;
 
   return (
@@ -153,7 +234,15 @@ export function CajaMenor() {
       <section className="bg-white rounded-xl border border-gray-200 p-4">
         <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
           <h2 className="font-semibold text-tinta">Caja menor — {sedeActiva.nombre}</h2>
-          <input type="month" value={mes} onChange={(e) => setMes(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+          <div className="flex items-center gap-3 flex-wrap">
+            <input type="month" value={mes} onChange={(e) => setMes(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+            <button onClick={exportarPDF} className="flex items-center gap-1.5 text-sm font-medium text-[var(--acento)]">
+              <FileText size={15} /> PDF
+            </button>
+            <button onClick={exportarCSV} className="flex items-center gap-1.5 text-sm font-medium text-[var(--acento)]">
+              <Download size={15} /> CSV
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
