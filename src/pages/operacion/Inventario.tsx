@@ -28,12 +28,14 @@ export function Inventario() {
   const [motivoReponer, setMotivoReponer] = useState("");
   const [guardandoReponer, setGuardandoReponer] = useState(false);
   const [reponerOk, setReponerOk] = useState(false);
+  const [errorReponer, setErrorReponer] = useState<string | null>(null);
 
   const [pacienteBoton, setPacienteBoton] = useState<Paciente | null>(null);
   const [doctoraBotonId, setDoctoraBotonId] = useState("");
   const [conCadeneta, setConCadeneta] = useState(false);
   const [guardandoBoton, setGuardandoBoton] = useState(false);
   const [botonOk, setBotonOk] = useState(false);
+  const [errorBoton, setErrorBoton] = useState<string | null>(null);
 
   async function cargarStock() {
     const { data } = await supabase.from("inventario_stock").select("*").eq("sede_id", sedeActiva.id);
@@ -66,13 +68,18 @@ export function Inventario() {
     const cantidad = Number(cantidadReponer);
     if (!cantidad) return;
     setGuardandoReponer(true);
-    await supabase.from("inventario_movimientos").insert({
+    setErrorReponer(null);
+    const { error } = await supabase.from("inventario_movimientos").insert({
       sede_id: sedeActiva.id,
       tipo: tipoReponer,
       cantidad,
       motivo: motivoReponer.trim() || null,
     });
     setGuardandoReponer(false);
+    if (error) {
+      setErrorReponer(error.message);
+      return;
+    }
     setCantidadReponer("");
     setMotivoReponer("");
     setReponerOk(true);
@@ -83,7 +90,8 @@ export function Inventario() {
   async function registrarBoton() {
     if (!pacienteBoton || !doctoraBotonId) return;
     setGuardandoBoton(true);
-    await supabase.from("entregas_boton").insert({
+    setErrorBoton(null);
+    const { error } = await supabase.from("entregas_boton").insert({
       sede_id: sedeActiva.id,
       paciente_id: pacienteBoton.id,
       doctora_id: doctoraBotonId,
@@ -91,6 +99,10 @@ export function Inventario() {
       fecha: today(),
     });
     setGuardandoBoton(false);
+    if (error) {
+      setErrorBoton(error.message);
+      return;
+    }
     setPacienteBoton(null);
     setConCadeneta(false);
     setBotonOk(true);
@@ -189,6 +201,7 @@ export function Inventario() {
             {guardandoReponer ? "Guardando…" : reponerOk ? "Registrado" : "Registrar"}
           </button>
         </div>
+        {errorReponer && <p className="text-sm text-red-600 mt-2">{errorReponer}</p>}
       </section>
 
       <section className="bg-white rounded-xl border border-gray-200 p-4">
@@ -233,6 +246,7 @@ export function Inventario() {
               {guardandoBoton ? "Guardando…" : botonOk ? "Registrado" : "Registrar entrega"}
             </button>
           </div>
+          {errorBoton && <p className="text-sm text-red-600">{errorBoton}</p>}
         </div>
         {ultimasEntregasBoton.length > 0 && (
           <div className="mt-3 pt-3 border-t border-gray-100 space-y-1">
