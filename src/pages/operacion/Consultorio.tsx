@@ -427,6 +427,8 @@ function ModalAtencion({
   const [motivoCero, setMotivoCero] = useState("");
   const [proximaCita, setProximaCita] = useState("");
   const [rxTomada, setRxTomada] = useState(false);
+  const [botonTraccion, setBotonTraccion] = useState(false);
+  const [botonConCadeneta, setBotonConCadeneta] = useState(false);
   const [insumos, setInsumos] = useState<Record<string, boolean>>({});
   const [precios, setPrecios] = useState<Record<string, number>>({});
   const [enviarLab, setEnviarLab] = useState(false);
@@ -440,6 +442,7 @@ function ModalAtencion({
   const [interconsulta, setInterconsulta] = useState(false);
   const [interconsultaEspecialidad, setInterconsultaEspecialidad] = useState("");
   const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -474,7 +477,7 @@ function ModalAtencion({
     })();
   }, [visitaId]);
 
-  const sinCargo = !(Number(valorTratamiento) > 0) && !rxTomada;
+  const sinCargo = !(Number(valorTratamiento) > 0) && !rxTomada && !botonTraccion;
 
   function agregarEnvioLab() {
     const lab = laboratorios.find((l) => l.id === laboratorioId);
@@ -493,6 +496,7 @@ function ModalAtencion({
   async function guardar() {
     if (sinCargo && !motivoCero.trim()) return;
     setGuardando(true);
+    setError(null);
     const { data: visita } = await supabase.from("visitas").select("doctora_id, paciente_id, fecha").eq("id", visitaId).single();
     if (!visita) {
       setGuardando(false);
@@ -516,6 +520,28 @@ function ModalAtencion({
         valor: precios["rx"] ?? 0,
         registrado_en: "consultorio",
       });
+    }
+    if (botonTraccion) {
+      // Se cobra al paciente (concepto_administrativo, como GUM/RX) pero no
+      // resta de la liquidación de honorarios de la doctora. También queda
+      // en entregas_boton para llevar el inventario, igual que si se
+      // registrara desde la pantalla de Inventario.
+      const { error: errorCargoBoton } = await supabase.from("cargos").insert({
+        visita_id: visitaId,
+        categoria: "concepto_administrativo",
+        concepto: "Botón de tracción",
+        valor: precios["boton_traccion"] ?? 0,
+        registrado_en: "consultorio",
+      });
+      if (errorCargoBoton) setError(errorCargoBoton.message);
+      const { error: errorEntregaBoton } = await supabase.from("entregas_boton").insert({
+        sede_id: sedeId,
+        paciente_id: visita.paciente_id,
+        doctora_id: visita.doctora_id,
+        fecha: visita.fecha,
+        con_cadeneta: botonConCadeneta,
+      });
+      if (errorEntregaBoton) setError(errorEntregaBoton.message);
     }
     for (const tipo of Object.keys(insumos).filter((k) => insumos[k])) {
       await supabase.from("insumos_consulta").insert({
@@ -629,6 +655,19 @@ function ModalAtencion({
         </label>
 
         <div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={botonTraccion} onChange={(e) => setBotonTraccion(e.target.checked)} />
+            Botón de tracción entregado {precios["boton_traccion"] ? `(${fmtCOP(precios["boton_traccion"])})` : ""}
+          </label>
+          {botonTraccion && (
+            <label className="flex items-center gap-2 text-sm mt-1.5 ml-6 text-gray-500">
+              <input type="checkbox" checked={botonConCadeneta} onChange={(e) => setBotonConCadeneta(e.target.checked)} />
+              Con cadeneta
+            </label>
+          )}
+        </div>
+
+        <div>
           <label className="flex items-center gap-2 text-sm mb-2">
             <input type="checkbox" checked={remitido} onChange={(e) => setRemitido(e.target.checked)} />
             Remisión a otra especialidad
@@ -733,6 +772,7 @@ function ModalAtencion({
           )}
         </div>
 
+        {error && <p className="text-sm text-red-600">{error}</p>}
         <button
           onClick={guardar}
           disabled={guardando || (sinCargo && !motivoCero.trim())}
