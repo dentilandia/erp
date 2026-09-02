@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Check, X, Trash2 } from "lucide-react";
+import { Plus, Check, X, Trash2, Bell } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
 import { MOTIVOS_SALDO_FAVOR, type Doctora, type Sede, type Paciente, type SaldoFavor } from "../lib/types";
@@ -22,9 +22,17 @@ const ETIQUETAS_PRECIOS: Record<string, string> = {
   porcentaje_honorario: "% honorario doctora (Odontopediatra)",
 };
 
+interface PedidoPendiente {
+  sedeNombre: string;
+  categoria: string;
+  nombre: string;
+  pedido: number;
+}
+
 export function Parametros() {
   const { perfil } = useAuth();
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
+  const [pedidosPendientes, setPedidosPendientes] = useState<PedidoPendiente[]>([]);
   const [precios, setPrecios] = useState<{ clave: string; valor: number }[]>([]);
   const [nuevoNombre, setNuevoNombre] = useState("");
   const [nuevoColor, setNuevoColor] = useState(PALETA_SUGERIDA[0]);
@@ -56,8 +64,46 @@ export function Parametros() {
     if (s && s.length > 0) setSedeSaldoId((prev) => prev || s[0].id);
   }
 
+  // Últimos pedidos de bodega pendientes de las dos sedes — el período más
+  // reciente de cada sede, ítems con pedido > 0. Sirve como "notificación"
+  // visible ya que el sistema no manda avisos push ni por correo.
+  async function cargarPedidosPendientes() {
+    type PeriodoConSede = { id: string; sede_id: string; fecha_inicio: string; sedes: { nombre: string } | null };
+    const { data: periodosData } = await supabase
+      .from("insumos_generales_periodos")
+      .select("id, sede_id, fecha_inicio, sedes(nombre)")
+      .order("fecha_inicio", { ascending: false });
+    const masRecientePorSede = new Map<string, { periodoId: string; sedeNombre: string }>();
+    for (const p of (periodosData as unknown as PeriodoConSede[]) ?? []) {
+      if (!masRecientePorSede.has(p.sede_id)) {
+        masRecientePorSede.set(p.sede_id, { periodoId: p.id, sedeNombre: p.sedes?.nombre ?? "—" });
+      }
+    }
+    const periodoASede = new Map(Array.from(masRecientePorSede.values()).map((v) => [v.periodoId, v.sedeNombre]));
+    const periodoIds = Array.from(periodoASede.keys());
+    if (periodoIds.length === 0) {
+      setPedidosPendientes([]);
+      return;
+    }
+    type MovConCatalogo = { periodo_id: string; pedido: number; insumos_generales_catalogo: { categoria: string; nombre: string } | null };
+    const { data: movs } = await supabase
+      .from("insumos_generales_movimientos")
+      .select("periodo_id, pedido, insumos_generales_catalogo(categoria, nombre)")
+      .in("periodo_id", periodoIds)
+      .gt("pedido", 0);
+    setPedidosPendientes(
+      ((movs as unknown as MovConCatalogo[]) ?? []).map((m) => ({
+        sedeNombre: periodoASede.get(m.periodo_id) ?? "—",
+        categoria: m.insumos_generales_catalogo?.categoria ?? "—",
+        nombre: m.insumos_generales_catalogo?.nombre ?? "—",
+        pedido: m.pedido,
+      })),
+    );
+  }
+
   useEffect(() => {
     cargar();
+    cargarPedidosPendientes();
   }, []);
 
   async function actualizarDoctora(id: string, cambios: Partial<Doctora>) {
@@ -145,6 +191,25 @@ export function Parametros() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      {pedidosPendientes.length > 0 && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <div className="flex items-center gap-2 text-amber-800 font-semibold text-sm mb-2">
+            <Bell size={16} /> Pedidos de bodega pendientes ({pedidosPendientes.length})
+          </div>
+          <p className="text-xs text-amber-700 mb-2">
+            Del período más reciente de cada sede, en Operación → Inventario → Insumos generales.
+          </p>
+          <div className="space-y-0.5">
+            {pedidosPendientes.map((p, i) => (
+              <p key={i} className="text-sm text-amber-800">
+                <span className="font-medium">{p.sedeNombre}</span> · {p.categoria} · {p.nombre}:{" "}
+                <span className="font-semibold">pedir {p.pedido}</span>
+              </p>
+            ))}
+          </div>
+        </div>
+      )}
+
       <section className="bg-white rounded-xl border border-gray-200 p-4">
         <h2 className="font-semibold text-tinta mb-3">Doctoras</h2>
         <div className="divide-y divide-gray-100">
