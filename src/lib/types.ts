@@ -119,7 +119,20 @@ export const MOTIVOS_SALDO_FAVOR = [
   "Tratamiento odontológico",
 ];
 
-export const CONCEPTOS_ADMINISTRATIVOS = ["GUM", "Caja aparato", "Llave de aparato"];
+// "Sedación intravenosa" y "Sedación óxido nitroso" son el cobro real del
+// procedimiento (el saldo restante tras aplicar el anticipo, si lo hubo) —
+// el nombre exacto tiene que coincidir con CONCEPTOS_SEDACION en
+// Liquidaciones.tsx para que ese reporte los encuentre. El anticipo/pago
+// adelantado sigue siendo saldo a favor (motivo "Anticipo sedación"/"Pago
+// sedación"), no un concepto administrativo — solo el cobro del día del
+// procedimiento pasa por aquí.
+export const CONCEPTOS_ADMINISTRATIVOS = [
+  "GUM",
+  "Caja aparato",
+  "Llave de aparato",
+  "Sedación intravenosa",
+  "Sedación óxido nitroso",
+];
 
 export const TIPOS_INSUMO_CONSULTA: { value: string; label: string }[] = [
   { value: "mascara_facial", label: "Máscara facial" },
