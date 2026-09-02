@@ -26,7 +26,6 @@ export function CajaMenor() {
   const [pagadoA, setPagadoA] = useState("");
   const [concepto, setConcepto] = useState("");
   const [valorFactura, setValorFactura] = useState("");
-  const [iva, setIva] = useState("0");
   const [guardando, setGuardando] = useState(false);
 
   async function cargar() {
@@ -104,8 +103,11 @@ export function CajaMenor() {
     setPeriodo({ ...p, reembolsado, fecha_reembolso: reembolsado ? today() : null });
   }
 
+  const formularioIncompleto =
+    !fecha || !facturaNumero.trim() || !nitCedula.trim() || !pagadoA.trim() || !concepto.trim() || !Number(valorFactura);
+
   async function agregarMovimiento() {
-    if (!pagadoA.trim() || !concepto.trim() || !Number(valorFactura)) return;
+    if (formularioIncompleto) return;
     setGuardando(true);
     setError(null);
     const p = await asegurarPeriodo();
@@ -116,12 +118,12 @@ export function CajaMenor() {
     const { error: errorInsert } = await supabase.from("caja_menor_movimientos").insert({
       periodo_id: p.id,
       fecha,
-      factura_numero: facturaNumero.trim() || null,
-      nit_cedula: nitCedula.trim() || null,
+      factura_numero: facturaNumero.trim(),
+      nit_cedula: nitCedula.trim(),
       pagado_a: pagadoA.trim(),
       concepto: concepto.trim(),
       valor_factura: Number(valorFactura) || 0,
-      iva: Number(iva) || 0,
+      iva: 0,
     });
     setGuardando(false);
     if (errorInsert) {
@@ -134,7 +136,6 @@ export function CajaMenor() {
     setPagadoA("");
     setConcepto("");
     setValorFactura("");
-    setIva("0");
     cargar();
   }
 
@@ -148,14 +149,14 @@ export function CajaMenor() {
     cargar();
   }
 
-  const totalGastado = movimientos.reduce((a, m) => a + Number(m.valor_factura) + Number(m.iva), 0);
+  const totalGastado = movimientos.reduce((a, m) => a + Number(m.valor_factura), 0);
   const montoAsignado = periodo?.monto_asignado ?? (Number(montoInput) || 0);
   const saldoDisponible = montoAsignado - totalGastado;
 
   function exportarCSV() {
-    const encabezado = ["Fecha", "Factura", "NIT/Cédula", "Pagado a", "Concepto", "Valor factura", "IVA", "Neto pagado"];
+    const encabezado = ["Fecha", "Factura", "NIT/Cédula", "Pagado a", "Concepto", "Valor"];
     const lineas = movimientos.map((m) =>
-      [m.fecha, m.factura_numero ?? "", m.nit_cedula ?? "", m.pagado_a, m.concepto, m.valor_factura, m.iva, Number(m.valor_factura) + Number(m.iva)]
+      [m.fecha, m.factura_numero ?? "", m.nit_cedula ?? "", m.pagado_a, m.concepto, m.valor_factura]
         .map((v) => `"${String(v).replace(/"/g, '""')}"`)
         .join(","),
     );
@@ -175,9 +176,7 @@ export function CajaMenor() {
         (m) =>
           `<tr><td>${esc(m.fecha)}</td><td>${esc(m.factura_numero ?? "—")}</td><td>${esc(m.nit_cedula ?? "—")}</td><td>${esc(
             m.pagado_a,
-          )}</td><td>${esc(m.concepto)}</td><td class="num">${esc(fmtCOP(m.valor_factura))}</td><td class="num">${esc(
-            fmtCOP(m.iva),
-          )}</td><td class="num">${esc(fmtCOP(Number(m.valor_factura) + Number(m.iva)))}</td></tr>`,
+          )}</td><td>${esc(m.concepto)}</td><td class="num">${esc(fmtCOP(m.valor_factura))}</td></tr>`,
       )
       .join("");
     const html = `<!doctype html>
@@ -212,9 +211,9 @@ export function CajaMenor() {
     <div>Saldo disponible<div class="valor">${esc(fmtCOP(saldoDisponible))}</div></div>
   </div>
   <table>
-    <thead><tr><th>Fecha</th><th>Factura</th><th>NIT/Cédula</th><th>Pagado a</th><th>Concepto</th><th class="num">Valor</th><th class="num">IVA</th><th class="num">Neto</th></tr></thead>
-    <tbody>${filasHtml || `<tr><td colspan="8">Sin gastos registrados este mes.</td></tr>`}</tbody>
-    <tfoot><tr><td colspan="7">Total</td><td class="num">${esc(fmtCOP(totalGastado))}</td></tr></tfoot>
+    <thead><tr><th>Fecha</th><th>Factura</th><th>NIT/Cédula</th><th>Pagado a</th><th>Concepto</th><th class="num">Valor</th></tr></thead>
+    <tbody>${filasHtml || `<tr><td colspan="6">Sin gastos registrados este mes.</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="5">Total</td><td class="num">${esc(fmtCOP(totalGastado))}</td></tr></tfoot>
   </table>
 </body></html>`;
     const ventana = window.open("", "_blank");
@@ -290,13 +289,13 @@ export function CajaMenor() {
           <input
             value={facturaNumero}
             onChange={(e) => setFacturaNumero(e.target.value)}
-            placeholder="N° factura (opcional)"
+            placeholder="N° factura"
             className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
           />
           <input
             value={nitCedula}
             onChange={(e) => setNitCedula(e.target.value)}
-            placeholder="NIT o cédula (opcional)"
+            placeholder="NIT o cédula"
             className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
           />
           <input
@@ -304,19 +303,13 @@ export function CajaMenor() {
             value={valorFactura}
             onChange={(e) => setValorFactura(e.target.value)}
             placeholder="Valor factura"
-            className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-          />
-          <input
-            type="number"
-            value={iva}
-            onChange={(e) => setIva(e.target.value)}
-            placeholder="IVA"
-            className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            className="sm:col-span-2 rounded-lg border border-gray-300 px-3 py-2 text-sm"
           />
         </div>
+        <p className="text-xs text-gray-400 mb-2">Todos los campos son obligatorios.</p>
         <button
           onClick={agregarMovimiento}
-          disabled={!pagadoA.trim() || !concepto.trim() || !Number(valorFactura) || guardando}
+          disabled={formularioIncompleto || guardando}
           className="flex items-center gap-2 rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
         >
           <Plus size={16} /> {guardando ? "Guardando…" : "Registrar gasto"}
@@ -329,11 +322,10 @@ export function CajaMenor() {
             <tr className="bg-gray-50 text-left text-gray-500">
               <th className="px-3 py-2">Fecha</th>
               <th className="px-3 py-2">Factura</th>
+              <th className="px-3 py-2">NIT/Cédula</th>
               <th className="px-3 py-2">Pagado a</th>
               <th className="px-3 py-2">Concepto</th>
               <th className="px-3 py-2 text-right">Valor</th>
-              <th className="px-3 py-2 text-right">IVA</th>
-              <th className="px-3 py-2 text-right">Neto</th>
               <th className="px-3 py-2"></th>
             </tr>
           </thead>
@@ -342,11 +334,10 @@ export function CajaMenor() {
               <tr key={m.id} className="border-t border-gray-100">
                 <td className="px-3 py-2">{m.fecha}</td>
                 <td className="px-3 py-2">{m.factura_numero ?? "—"}</td>
+                <td className="px-3 py-2">{m.nit_cedula ?? "—"}</td>
                 <td className="px-3 py-2">{m.pagado_a}</td>
                 <td className="px-3 py-2">{m.concepto}</td>
-                <td className="px-3 py-2 text-right">{fmtCOP(m.valor_factura)}</td>
-                <td className="px-3 py-2 text-right">{fmtCOP(m.iva)}</td>
-                <td className="px-3 py-2 text-right font-medium">{fmtCOP(Number(m.valor_factura) + Number(m.iva))}</td>
+                <td className="px-3 py-2 text-right font-medium">{fmtCOP(m.valor_factura)}</td>
                 <td className="px-3 py-2 text-right">
                   <button onClick={() => eliminarMovimiento(m.id)} className="text-gray-300 hover:text-red-500">
                     <Trash2 size={14} />
@@ -356,7 +347,7 @@ export function CajaMenor() {
             ))}
             {movimientos.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-4 text-center text-gray-400">
+                <td colSpan={7} className="px-3 py-4 text-center text-gray-400">
                   Sin gastos registrados este mes.
                 </td>
               </tr>
@@ -365,7 +356,7 @@ export function CajaMenor() {
           {movimientos.length > 0 && (
             <tfoot>
               <tr className="border-t border-gray-200 bg-gray-50 font-semibold">
-                <td colSpan={6} className="px-3 py-2">
+                <td colSpan={5} className="px-3 py-2">
                   Total
                 </td>
                 <td className="px-3 py-2 text-right">{fmtCOP(totalGastado)}</td>

@@ -12,6 +12,10 @@ interface VisitaRow {
   doctoras: { nombre: string; color_pastel: string };
 }
 
+interface VisitaPorCobrar extends VisitaRow {
+  tratamiento: string | null;
+}
+
 interface LabPendienteInstalar {
   id: string;
   paciente_id: string;
@@ -35,6 +39,8 @@ export function Consultorio() {
   const [fecha, setFecha] = useState(today());
   const [enEsperaTodas, setEnEsperaTodas] = useState<VisitaRow[]>([]);
   const [atendiendoId, setAtendiendoId] = useState<string | null>(null);
+  const [porCobrarTodas, setPorCobrarTodas] = useState<VisitaPorCobrar[]>([]);
+  const [editandoValorId, setEditandoValorId] = useState<string | null>(null);
   const [buscarInstalar, setBuscarInstalar] = useState("");
   const [pendientesInstalar, setPendientesInstalar] = useState<LabPendienteInstalar[]>([]);
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
@@ -93,11 +99,28 @@ export function Consultorio() {
 
   const enEspera = filtroDoctora ? enEsperaTodas.filter((v) => v.doctora_id === filtroDoctora) : enEsperaTodas;
 
+  async function cargarPorCobrar() {
+    const { data } = await supabase
+      .from("visitas")
+      .select("id, doctora_id, tratamiento, pacientes(nombre), doctoras(nombre, color_pastel)")
+      .eq("sede_id", sedeActiva.id)
+      .eq("fecha", fecha)
+      .eq("estado", "consulta")
+      .order("updated_at", { ascending: false });
+    setPorCobrarTodas((data as unknown as VisitaPorCobrar[]) ?? []);
+  }
+
+  const porCobrar = filtroDoctora ? porCobrarTodas.filter((v) => v.doctora_id === filtroDoctora) : porCobrarTodas;
+
   useEffect(() => {
     cargarEnEspera();
+    cargarPorCobrar();
     const channel = supabase
       .channel(`consultorio-${sedeActiva.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "visitas", filter: `sede_id=eq.${sedeActiva.id}` }, cargarEnEspera)
+      .on("postgres_changes", { event: "*", schema: "public", table: "visitas", filter: `sede_id=eq.${sedeActiva.id}` }, () => {
+        cargarEnEspera();
+        cargarPorCobrar();
+      })
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
@@ -186,6 +209,31 @@ export function Consultorio() {
             </button>
           ))}
           {enEspera.length === 0 && <p className="text-sm text-gray-400">Nadie en espera.</p>}
+        </div>
+      </section>
+
+      <section>
+        <h3 className="text-sm font-semibold text-gray-500 mb-2">Por cobrar — corregir valor ({porCobrar.length})</h3>
+        <p className="text-xs text-gray-400 mb-2">
+          Si te das cuenta de que el valor quedó mal antes de que recepción cobre, corrígelo aquí.
+        </p>
+        <div className="space-y-2">
+          {porCobrar.map((v) => (
+            <button
+              key={v.id}
+              onClick={() => setEditandoValorId(v.id)}
+              className="w-full flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-left hover:shadow-sm"
+            >
+              <span>
+                <span className="font-medium text-tinta">{v.pacientes?.nombre}</span>
+                {v.tratamiento && <span className="text-gray-400 text-sm"> · {v.tratamiento}</span>}
+              </span>
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: v.doctoras?.color_pastel + "40" }}>
+                {v.doctoras?.nombre}
+              </span>
+            </button>
+          ))}
+          {porCobrar.length === 0 && <p className="text-sm text-gray-400">Nadie pendiente de cobro todavía.</p>}
         </div>
       </section>
 
@@ -340,6 +388,17 @@ export function Consultorio() {
           onGuardado={() => {
             setAtendiendoId(null);
             cargarEnEspera();
+          }}
+        />
+      )}
+
+      {editandoValorId && (
+        <ModalEditarValor
+          visitaId={editandoValorId}
+          onClose={() => setEditandoValorId(null)}
+          onGuardado={() => {
+            setEditandoValorId(null);
+            cargarPorCobrar();
           }}
         />
       )}
@@ -681,6 +740,127 @@ function ModalAtencion({
         >
           {guardando ? "Guardando…" : "Guardar y pasar a cobro"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/** Corrección de valor desde consultorio para una visita que ya pasó a "por
+ *  cobrar" pero todavía no se le ha aplicado el pago — para cuando la
+ *  doctora se da cuenta de que el valor quedó mal antes de que recepción
+ *  cobre. Solo corrige el cargo de procedimiento existente, no crea uno
+ *  nuevo (eso sigue siendo tarea de "Guardar y pasar a cobro"). */
+function ModalEditarValor({
+  visitaId,
+  onClose,
+  onGuardado,
+}: {
+  visitaId: string;
+  onClose: () => void;
+  onGuardado: () => void;
+}) {
+  const [pacienteNombre, setPacienteNombre] = useState("");
+  const [tratamiento, setTratamiento] = useState("");
+  const [cargoId, setCargoId] = useState<string | null>(null);
+  const [valor, setValor] = useState("");
+  const [cargando, setCargando] = useState(true);
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data: v } = await supabase.from("visitas").select("tratamiento, pacientes(nombre)").eq("id", visitaId).single();
+      const visita = v as unknown as { tratamiento: string | null; pacientes: { nombre: string } } | null;
+      setPacienteNombre(visita?.pacientes?.nombre ?? "");
+      setTratamiento(visita?.tratamiento ?? "");
+      const { data: cargo } = await supabase
+        .from("cargos")
+        .select("id, valor")
+        .eq("visita_id", visitaId)
+        .eq("categoria", "procedimiento")
+        .maybeSingle();
+      if (cargo) {
+        setCargoId(cargo.id);
+        setValor(String(cargo.valor));
+      }
+      setCargando(false);
+    })();
+  }, [visitaId]);
+
+  async function guardar() {
+    setGuardando(true);
+    setError(null);
+    const { error: errorVisita } = await supabase
+      .from("visitas")
+      .update({ tratamiento, updated_at: new Date().toISOString() })
+      .eq("id", visitaId);
+    if (errorVisita) {
+      setGuardando(false);
+      setError(errorVisita.message);
+      return;
+    }
+    if (cargoId) {
+      const { error: errorCargo } = await supabase
+        .from("cargos")
+        .update({ concepto: tratamiento || "Procedimiento", valor: Number(valor) || 0 })
+        .eq("id", cargoId);
+      if (errorCargo) {
+        setGuardando(false);
+        setError(errorCargo.message);
+        return;
+      }
+    }
+    setGuardando(false);
+    onGuardado();
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-20">
+      <div className="bg-white rounded-xl max-w-md w-full p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-tinta">Corregir — {pacienteNombre}</h3>
+          <button onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+        {cargando ? (
+          <p className="text-sm text-gray-400">Cargando…</p>
+        ) : (
+          <>
+            <div>
+              <label className="block text-sm font-medium mb-1">Tratamiento</label>
+              <input
+                value={tratamiento}
+                onChange={(e) => setTratamiento(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            </div>
+            {cargoId ? (
+              <div>
+                <label className="block text-sm font-medium mb-1">Valor de venta</label>
+                <input
+                  type="number"
+                  value={valor}
+                  onChange={(e) => setValor(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                />
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400">
+                Este paciente quedó sin cargo (cobro $0) — el valor solo se puede corregir aquí si ya existe un cargo
+                de procedimiento.
+              </p>
+            )}
+            {error && <p className="text-sm text-red-600">{error}</p>}
+            <button
+              onClick={guardar}
+              disabled={guardando}
+              className="w-full rounded-lg bg-[var(--acento)] text-white py-2.5 text-sm font-medium disabled:opacity-40"
+            >
+              {guardando ? "Guardando…" : "Guardar corrección"}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
