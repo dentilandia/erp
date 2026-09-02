@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
 import { MOTIVOS_SALDO_FAVOR, type Doctora, type Sede, type Paciente, type SaldoFavor } from "../lib/types";
 import { PacienteAutocomplete } from "../components/PacienteAutocomplete";
+import { useAuth } from "../auth/AuthContext";
 
 const PALETA_SUGERIDA = [
   "#B08FC7", "#7FCBC4", "#F0C48A", "#E39B9B", "#8FBFA8", "#A8A0D8",
@@ -22,6 +23,7 @@ const ETIQUETAS_PRECIOS: Record<string, string> = {
 };
 
 export function Parametros() {
+  const { perfil } = useAuth();
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
   const [precios, setPrecios] = useState<{ clave: string; valor: number }[]>([]);
   const [nuevoNombre, setNuevoNombre] = useState("");
@@ -94,6 +96,7 @@ export function Parametros() {
       valor_disponible: valor,
       medio_origen: "ajuste_manual",
       motivo: motivoSaldo,
+      registrado_por: perfil?.id ?? null,
       fecha: fechaSaldo,
       notas: notasSaldo.trim() || null,
     });

@@ -15,6 +15,7 @@ import {
   type CategoriaCargo,
 } from "../../lib/types";
 import { PacienteAutocomplete } from "../../components/PacienteAutocomplete";
+import { useAuth } from "../../auth/AuthContext";
 
 const CONCEPTO_PRECIO_CLAVE: Record<string, string> = {
   GUM: "gum",
@@ -60,6 +61,7 @@ interface CargoEdit {
 
 export function Recepcion() {
   const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
+  const { perfil } = useAuth();
   const [fecha, setFecha] = useState(today());
 
   const [visitas, setVisitas] = useState<VisitaRow[]>([]);
@@ -162,6 +164,7 @@ export function Recepcion() {
       valor_disponible: valor,
       medio_origen: medioSaldoExterno,
       motivo: motivoSaldoExterno,
+      registrado_por: perfil?.id ?? null,
       fecha,
       notas: notaSaldoExterno.trim() || null,
     });
@@ -672,6 +675,7 @@ function ModalCobro({
   onClose: () => void;
   onConfirmado: () => void;
 }) {
+  const { perfil } = useAuth();
   const [pacienteId, setPacienteId] = useState<string | null>(null);
   const [pacienteNombre, setPacienteNombre] = useState("");
   const [estadoVisita, setEstadoVisita] = useState<"espera" | "consulta" | "cobrado">("consulta");
@@ -930,6 +934,7 @@ function ModalCobro({
           valor_disponible: e.valor,
           medio_origen: e.medio,
           motivo: e.motivo,
+          registrado_por: perfil?.id ?? null,
           fecha: visitaFecha,
         });
         if (error) throw error;
@@ -941,6 +946,7 @@ function ModalCobro({
           estado: "cobrado",
           motivo_valor_cero: cargos.length === 0 ? motivoCero.trim() : null,
           proxima_cita: proximaCita || null,
+          cobrado_por: perfil?.id ?? null,
           updated_at: new Date().toISOString(),
         })
         .eq("id", visitaId);

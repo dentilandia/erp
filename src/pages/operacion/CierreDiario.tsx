@@ -12,7 +12,7 @@ interface CargoPagoFila {
     categoria: string;
     concepto: string;
     doctoras: { nombre: string } | null;
-    visitas: { pacientes: { nombre: string } | null } | null;
+    visitas: { pacientes: { nombre: string } | null; cobrado_por: string | null; perfiles: { nombre: string } | null } | null;
   };
 }
 
@@ -22,16 +22,26 @@ interface OtroIngresoAuto {
   medio: string;
   paciente: string;
   concepto: string;
+  cajeraId: string | null;
+  cajeraNombre: string;
 }
+
+interface Cajera {
+  id: string;
+  nombre: string;
+}
+
+const SIN_ASIGNAR = "__sin_asignar__";
 
 const ETIQUETAS_MEDIO: Record<string, string> = Object.fromEntries(MEDIOS_PAGO.map((m) => [m.value, m.label]));
 
 export function CierreDiario() {
   const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
   const [fecha, setFecha] = useState(today());
-  const [filas, setFilas] = useState<CargoPagoFila[]>([]);
-  const [otrosCargos, setOtrosCargos] = useState<OtroIngresoAuto[]>([]);
-  const [otrosSaldos, setOtrosSaldos] = useState<OtroIngresoAuto[]>([]);
+  const [filasRaw, setFilasRaw] = useState<CargoPagoFila[]>([]);
+  const [otrosCargosRaw, setOtrosCargosRaw] = useState<OtroIngresoAuto[]>([]);
+  const [otrosSaldosRaw, setOtrosSaldosRaw] = useState<OtroIngresoAuto[]>([]);
+  const [cajeraFiltro, setCajeraFiltro] = useState("");
   const [cierre, setCierre] = useState<CierreDiarioRow | null>(null);
   const [gasto, setGasto] = useState("0");
   const [subiendo, setSubiendo] = useState(false);
@@ -41,15 +51,15 @@ export function CierreDiario() {
       const { data } = await supabase
         .from("cargo_pagos")
         .select(
-          "medio_pago, valor, cargos!inner(categoria, concepto, sede_id, fecha, doctoras(nombre), visitas(pacientes(nombre)))",
+          "medio_pago, valor, cargos!inner(categoria, concepto, sede_id, fecha, doctoras(nombre), visitas(pacientes(nombre), cobrado_por, perfiles(nombre)))",
         )
         .eq("cargos.sede_id", sedeActiva.id)
         .eq("cargos.fecha", fecha);
       const todas = (data as unknown as CargoPagoFila[]) ?? [];
       // Solo "procedimiento" cuenta como venta de la doctora (honorario). RX y
       // conceptos administrativos (GUM, sedación, anticipos...) van a "otros ingresos".
-      setFilas(todas.filter((f) => f.cargos.categoria === "procedimiento"));
-      setOtrosCargos(
+      setFilasRaw(todas.filter((f) => f.cargos.categoria === "procedimiento"));
+      setOtrosCargosRaw(
         todas
           // Un pago con saldo a favor es dinero que ya se contó el día que se generó
           // ese saldo — contarlo otra vez aquí duplicaría el ingreso del día.
@@ -60,27 +70,34 @@ export function CierreDiario() {
             medio: f.medio_pago,
             paciente: f.cargos.visitas?.pacientes?.nombre ?? "—",
             concepto: f.cargos.concepto,
+            cajeraId: f.cargos.visitas?.cobrado_por ?? null,
+            cajeraNombre: f.cargos.visitas?.perfiles?.nombre ?? "—",
           })),
       );
 
       const { data: saldosData } = await supabase
         .from("saldos_favor")
-        .select("id, valor, medio_origen, pacientes(nombre)")
+        .select("id, valor, medio_origen, pacientes(nombre), registrado_por, perfiles(nombre)")
         .eq("sede_origen_id", sedeActiva.id)
         .eq("fecha", fecha)
         // Los saldos registrados manualmente desde Parámetros (traslado de un saldo
         // previo, corrección) no son plata recibida ese día — no deben sumar al cierre.
         .neq("medio_origen", "ajuste_manual");
-      setOtrosSaldos(
-        ((saldosData as unknown as { id: string; valor: number; medio_origen: string; pacientes: { nombre: string } | null }[]) ?? []).map(
-          (s) => ({
-            id: s.id,
-            valor: Number(s.valor),
-            medio: s.medio_origen,
-            paciente: s.pacientes?.nombre ?? "—",
-            concepto: "Anticipo / saldo a favor",
-          }),
-        ),
+      setOtrosSaldosRaw(
+        (
+          (saldosData as unknown as {
+            id: string; valor: number; medio_origen: string;
+            pacientes: { nombre: string } | null; registrado_por: string | null; perfiles: { nombre: string } | null;
+          }[]) ?? []
+        ).map((s) => ({
+          id: s.id,
+          valor: Number(s.valor),
+          medio: s.medio_origen,
+          paciente: s.pacientes?.nombre ?? "—",
+          concepto: "Anticipo / saldo a favor",
+          cajeraId: s.registrado_por ?? null,
+          cajeraNombre: s.perfiles?.nombre ?? "—",
+        })),
       );
 
       const { data: cierreRow } = await supabase
@@ -93,6 +110,54 @@ export function CierreDiario() {
       setGasto(String(cierreRow?.gasto ?? 0));
     })();
   }, [sedeActiva.id, fecha]);
+
+  // Quiénes registraron algo este día — para las pastillas de filtro. Se
+  // limpia el filtro elegido si esa persona ya no aparece en los datos del
+  // nuevo día/sede (evita quedar "atascado" en un filtro vacío).
+  const cajeras = useMemo(() => {
+    const map = new Map<string, string>();
+    let haySinAsignar = false;
+    for (const f of filasRaw) {
+      const id = f.cargos.visitas?.cobrado_por ?? null;
+      if (id) map.set(id, f.cargos.visitas?.perfiles?.nombre ?? "—");
+      else haySinAsignar = true;
+    }
+    for (const o of [...otrosCargosRaw, ...otrosSaldosRaw]) {
+      if (o.cajeraId) map.set(o.cajeraId, o.cajeraNombre);
+      else haySinAsignar = true;
+    }
+    const lista: Cajera[] = Array.from(map.entries())
+      .map(([id, nombre]) => ({ id, nombre }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+    if (haySinAsignar) lista.push({ id: SIN_ASIGNAR, nombre: "Sin asignar" });
+    return lista;
+  }, [filasRaw, otrosCargosRaw, otrosSaldosRaw]);
+
+  useEffect(() => {
+    if (cajeraFiltro && !cajeras.some((c) => c.id === cajeraFiltro)) setCajeraFiltro("");
+  }, [cajeras, cajeraFiltro]);
+
+  function coincideCajera(id: string | null): boolean {
+    if (!cajeraFiltro) return true;
+    if (cajeraFiltro === SIN_ASIGNAR) return id === null;
+    return id === cajeraFiltro;
+  }
+
+  const filas = useMemo(
+    () => filasRaw.filter((f) => coincideCajera(f.cargos.visitas?.cobrado_por ?? null)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filasRaw, cajeraFiltro],
+  );
+  const otrosCargos = useMemo(
+    () => otrosCargosRaw.filter((o) => coincideCajera(o.cajeraId)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [otrosCargosRaw, cajeraFiltro],
+  );
+  const otrosSaldos = useMemo(
+    () => otrosSaldosRaw.filter((o) => coincideCajera(o.cajeraId)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [otrosSaldosRaw, cajeraFiltro],
+  );
 
   const doctoras = useMemo(
     () => Array.from(new Set(filas.map((f) => f.cargos.doctoras?.nombre ?? "—"))).sort(),
@@ -117,16 +182,24 @@ export function CierreDiario() {
 
   const otrosIngresosAuto = useMemo(() => [...otrosCargos, ...otrosSaldos], [otrosCargos, otrosSaldos]);
 
-  const totalOtrosAutoPorMedio = useMemo(() => {
-    const totales: Record<string, number> = {};
-    for (const o of otrosIngresosAuto) totales[o.medio] = (totales[o.medio] ?? 0) + o.valor;
-    return totales;
-  }, [otrosIngresosAuto]);
-
   const totalOtrosAuto = otrosIngresosAuto.reduce((a, o) => a + o.valor, 0);
 
+  // El cierre de efectivo/gasto es del día completo, sin importar el filtro
+  // de cajera — el gasto no se puede repartir por persona, y "cuánto debe
+  // quedar en caja" siempre es una cifra de todo el día.
+  const totalPorMedioTodos = useMemo(() => {
+    const totales: Record<string, number> = {};
+    for (const f of filasRaw) totales[f.medio_pago] = (totales[f.medio_pago] ?? 0) + Number(f.valor);
+    return totales;
+  }, [filasRaw]);
+  const totalOtrosAutoPorMedioTodos = useMemo(() => {
+    const totales: Record<string, number> = {};
+    for (const o of [...otrosCargosRaw, ...otrosSaldosRaw]) totales[o.medio] = (totales[o.medio] ?? 0) + o.valor;
+    return totales;
+  }, [otrosCargosRaw, otrosSaldosRaw]);
+
   const totalEfectivoCierre =
-    (totalPorMedio["efectivo"] ?? 0) + (totalOtrosAutoPorMedio["efectivo"] ?? 0) - Number(gasto || 0);
+    (totalPorMedioTodos["efectivo"] ?? 0) + (totalOtrosAutoPorMedioTodos["efectivo"] ?? 0) - Number(gasto || 0);
 
   async function guardarManual() {
     await supabase.from("cierres_diarios").upsert(
@@ -247,16 +320,18 @@ export function CierreDiario() {
       otrosIngresosAuto.length > 0
         ? `<h3>Otros ingresos</h3>
            <table>
-             <thead><tr><th>Paciente</th><th>Concepto</th><th>Medio</th><th style="text-align:right">Valor</th></tr></thead>
+             <thead><tr><th>Paciente</th><th>Concepto</th><th>Medio</th><th>Cajera</th><th style="text-align:right">Valor</th></tr></thead>
              <tbody>${otrosIngresosAuto
                .map(
                  (o) =>
-                   `<tr><td>${o.paciente}</td><td>${o.concepto}</td><td>${ETIQUETAS_MEDIO[o.medio] ?? o.medio}</td><td style="text-align:right">${fmtCOP(o.valor)}</td></tr>`,
+                   `<tr><td>${o.paciente}</td><td>${o.concepto}</td><td>${ETIQUETAS_MEDIO[o.medio] ?? o.medio}</td><td>${o.cajeraNombre}</td><td style="text-align:right">${fmtCOP(o.valor)}</td></tr>`,
                )
                .join("")}</tbody>
            </table>
            <p style="text-align:right;font-weight:600">Total otros ingresos: ${fmtCOP(totalOtrosAuto)}</p>`
         : "";
+
+    const cajeraNombreFiltro = cajeraFiltro ? cajeras.find((c) => c.id === cajeraFiltro)?.nombre ?? "" : "";
 
     const win = window.open("", "_blank");
     if (!win) return;
@@ -280,7 +355,7 @@ export function CierreDiario() {
         </head>
         <body>
           <h2>Cierre diario — ${sedeActiva.nombre}</h2>
-          <p>Fecha: ${fecha}</p>
+          <p>Fecha: ${fecha}${cajeraNombreFiltro ? ` — filtrado por: ${cajeraNombreFiltro}` : ""}</p>
           <table>
             <thead>
               <tr><th>Doctora</th>${MEDIOS_PAGO.map((m) => `<th style="text-align:right">${m.label}</th>`).join("")}<th style="text-align:right">Total</th></tr>
@@ -340,6 +415,30 @@ export function CierreDiario() {
           </button>
         </div>
       </div>
+
+      {cajeras.length > 1 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button
+            onClick={() => setCajeraFiltro("")}
+            className={`text-xs font-semibold px-3 py-1.5 rounded-full border-2 transition-colors ${
+              cajeraFiltro === "" ? "bg-[var(--acento)] border-[var(--acento)] text-white" : "border-gray-300 text-gray-500"
+            }`}
+          >
+            Consolidado
+          </button>
+          {cajeras.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => setCajeraFiltro(c.id)}
+              className={`text-xs font-semibold px-3 py-1.5 rounded-full border-2 transition-colors ${
+                cajeraFiltro === c.id ? "bg-[var(--acento)] border-[var(--acento)] text-white" : "border-gray-300 text-gray-500"
+              }`}
+            >
+              {c.nombre}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
         <table className="w-full text-sm">
@@ -403,7 +502,10 @@ export function CierreDiario() {
             {otrosIngresosAuto.map((o) => (
               <div key={o.id} className="flex items-center justify-between py-1.5">
                 <span>
-                  {o.paciente} <span className="text-gray-400">· {o.concepto} · {ETIQUETAS_MEDIO[o.medio] ?? o.medio}</span>
+                  {o.paciente}{" "}
+                  <span className="text-gray-400">
+                    · {o.concepto} · {ETIQUETAS_MEDIO[o.medio] ?? o.medio} · {o.cajeraNombre}
+                  </span>
                 </span>
                 <span className="font-medium">{fmtCOP(o.valor)}</span>
               </div>
@@ -428,7 +530,10 @@ export function CierreDiario() {
           />
         </div>
         <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-          <span className="text-sm text-gray-500">Total efectivo (Cierre)</span>
+          <span className="text-sm text-gray-500">
+            Total efectivo (Cierre)
+            {cajeraFiltro && <span className="block text-xs text-gray-400">Del día completo — no cambia con el filtro de arriba.</span>}
+          </span>
           <span className="font-semibold">{fmtCOP(totalEfectivoCierre)}</span>
         </div>
       </div>
