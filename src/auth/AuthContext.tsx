@@ -53,7 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (async () => {
       const { data: perfilRow, error: perfilError } = await supabase
         .from("perfiles")
-        .select("id, nombre, rol, sede_id")
+        .select("id, nombre, rol, sede_id, puede_caja_menor")
         .eq("id", session.user.id)
         .single();
       if (cancelled) return;

@@ -11,6 +11,7 @@ import { LaboratorioOperativo } from "./pages/operacion/LaboratorioOperativo";
 import { Inventario } from "./pages/operacion/Inventario";
 import { Historial } from "./pages/operacion/Historial";
 import { ComprobantesFinanciacion } from "./pages/operacion/ComprobantesFinanciacion";
+import { CajaMenor } from "./pages/operacion/CajaMenor";
 import { Liquidaciones } from "./pages/Liquidaciones";
 import { Financiacion } from "./pages/Financiacion";
 import { CierreCaja } from "./pages/CierreCaja";
@@ -22,6 +23,14 @@ import { Parametros } from "./pages/Parametros";
 function SoloAdmin({ children }: { children: React.ReactNode }) {
   const { perfil } = useAuth();
   if (perfil?.rol !== "admin") return <Navigate to="/operacion/recepcion" replace />;
+  return <>{children}</>;
+}
+
+/** Caja menor no es para todo el equipo de operación — solo admin y quien
+ *  tenga perfiles.puede_caja_menor marcado en su sede. */
+function SoloCajaMenor({ children }: { children: React.ReactNode }) {
+  const { perfil } = useAuth();
+  if (perfil?.rol !== "admin" && !perfil?.puede_caja_menor) return <Navigate to="/operacion/recepcion" replace />;
   return <>{children}</>;
 }
 
@@ -143,6 +152,7 @@ function App() {
               <Route path="operacion/inventario" element={<Inventario />} />
               <Route path="operacion/historial" element={<Historial />} />
               <Route path="operacion/comprobantes" element={<ComprobantesFinanciacion />} />
+              <Route path="operacion/caja-menor" element={<SoloCajaMenor><CajaMenor /></SoloCajaMenor>} />
               <Route path="administracion/liquidaciones" element={<SoloAdmin><Liquidaciones /></SoloAdmin>} />
               <Route path="administracion/financiacion" element={<SoloAdmin><Financiacion /></SoloAdmin>} />
               <Route path="administracion/cierre-caja" element={<SoloAdmin><CierreCaja /></SoloAdmin>} />

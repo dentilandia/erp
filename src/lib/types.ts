@@ -5,6 +5,7 @@ export interface Perfil {
   nombre: string;
   rol: Rol;
   sede_id: string | null;
+  puede_caja_menor: boolean;
 }
 
 export interface Sede {
@@ -140,6 +141,59 @@ export interface InventarioStock {
   tipo: string;
   cantidad: number;
   umbral_alerta: number;
+}
+
+/** Insumos generales (hotelería/bodega) — catálogo de ~170 ítems por
+ *  categoría, con conteo por sede y por período (réplica del Excel). */
+export interface InsumoGeneralCatalogo {
+  id: string;
+  categoria: string;
+  nombre: string;
+  orden: number;
+  activo: boolean;
+}
+
+export interface InsumoGeneralPeriodo {
+  id: string;
+  sede_id: string;
+  etiqueta: string;
+  fecha_inicio: string;
+  fecha_fin: string | null;
+  cerrado: boolean;
+}
+
+export interface InsumoGeneralMovimiento {
+  id: string;
+  periodo_id: string;
+  catalogo_id: string;
+  inventario_inicial: number;
+  entrega1: number;
+  entrega2: number;
+  entradas: number;
+  pedido: number;
+}
+
+/** Caja menor por sede — acceso restringido a admin y a quien tenga
+ *  perfiles.puede_caja_menor en esa sede. */
+export interface CajaMenorPeriodo {
+  id: string;
+  sede_id: string;
+  mes: string;
+  monto_asignado: number;
+  reembolsado: boolean;
+  fecha_reembolso: string | null;
+}
+
+export interface CajaMenorMovimiento {
+  id: string;
+  periodo_id: string;
+  fecha: string;
+  factura_numero: string | null;
+  nit_cedula: string | null;
+  pagado_a: string;
+  concepto: string;
+  valor_factura: number;
+  iva: number;
 }
 
 export const TIPOS_SERVICIO_LAB: { value: string; label: string }[] = [

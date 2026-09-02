@@ -17,6 +17,7 @@ import {
   BarChart3,
   GraduationCap,
   Boxes,
+  PiggyBank,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -30,6 +31,7 @@ const TABS = [
   { to: "/operacion/inventario", label: "Inventario", icon: Boxes },
   { to: "/operacion/comprobantes", label: "Financiación", icon: Paperclip },
   { to: "/operacion/historial", label: "Historial", icon: History },
+  { to: "/operacion/caja-menor", label: "Caja menor", icon: PiggyBank, soloCajaMenor: true },
 ];
 
 const SECCIONES = [
@@ -184,7 +186,7 @@ export function Layout() {
 
       {enOperacion && (
         <nav className="flex gap-1 px-4 py-2 bg-white border-b border-gray-200 overflow-x-auto">
-          {TABS.map((t) => (
+          {TABS.filter((t) => !t.soloCajaMenor || perfil?.rol === "admin" || perfil?.puede_caja_menor).map((t) => (
             <NavLink
               key={t.to}
               to={t.to}
