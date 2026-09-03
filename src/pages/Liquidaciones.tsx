@@ -968,22 +968,6 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
     return f.valor_factura >= umbralRetencionLab(f.fecha) ? f.valor_factura * PCT_RETENCION_LAB : 0;
   }
 
-  const [errorFactura, setErrorFactura] = useState<string | null>(null);
-
-  // El número de factura se puede editar acá porque el laboratorio a veces
-  // hace notas crédito y hay que corregirlo — el cambio queda en lab_ordenes,
-  // así que se refleja solo en todas las tablas/exportes que lean de ahí.
-  async function actualizarFacturaNumero(id: string, valor: string) {
-    const nuevo = valor.trim() || null;
-    const { error } = await supabase.from("lab_ordenes").update({ factura_numero: nuevo }).eq("id", id);
-    if (error) {
-      setErrorFactura(error.message);
-      return;
-    }
-    setErrorFactura(null);
-    setFilas((prev) => prev.map((f) => (f.id === id ? { ...f, factura_numero: nuevo } : f)));
-  }
-
   const totalesPorLab = useMemo(() => {
     const t: Record<string, { facturado: number; retencion: number }> = {};
     for (const f of filas) {
@@ -1104,7 +1088,6 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
           <Download size={16} /> Generar PDF
         </button>
       </div>
-      {errorFactura && <p className="text-sm text-red-600">{errorFactura}</p>}
       <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -1133,16 +1116,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
                     {f.doctoraInstala && <span className="text-gray-400"> + {f.doctoraInstala} (50/50)</span>}
                   </td>
                   <td className="px-3 py-2">{f.laboratorio}</td>
-                  <td className="px-3 py-2">
-                    <input
-                      defaultValue={f.factura_numero ?? ""}
-                      onBlur={(e) => {
-                        if (e.target.value.trim() !== (f.factura_numero ?? "")) actualizarFacturaNumero(f.id, e.target.value);
-                      }}
-                      placeholder="—"
-                      className="w-24 rounded-md border border-gray-200 px-1.5 py-1 text-sm"
-                    />
-                  </td>
+                  <td className="px-3 py-2">{f.factura_numero ?? "—"}</td>
                   <td className="px-3 py-2 text-right">{fmtCOP(f.valor_factura)}</td>
                   <td className="px-3 py-2 text-right">{fmtCOP(ret)}</td>
                   <td className="px-3 py-2 text-right font-medium">{fmtCOP(f.valor_factura - ret)}</td>
