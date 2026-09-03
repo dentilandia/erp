@@ -44,6 +44,7 @@ export function CierreDiario() {
   const [cajeraFiltro, setCajeraFiltro] = useState("");
   const [cierre, setCierre] = useState<CierreDiarioRow | null>(null);
   const [gasto, setGasto] = useState("0");
+  const [gastoConcepto, setGastoConcepto] = useState("");
   const [subiendo, setSubiendo] = useState(false);
 
   useEffect(() => {
@@ -108,6 +109,7 @@ export function CierreDiario() {
         .maybeSingle();
       setCierre((cierreRow as CierreDiarioRow) ?? null);
       setGasto(String(cierreRow?.gasto ?? 0));
+      setGastoConcepto(cierreRow?.gasto_concepto ?? "");
     })();
   }, [sedeActiva.id, fecha]);
 
@@ -207,6 +209,7 @@ export function CierreDiario() {
         sede_id: sedeActiva.id,
         fecha,
         gasto: Number(gasto) || 0,
+        gasto_concepto: gastoConcepto.trim() || null,
         consignado: cierre?.consignado ?? false,
         comprobante_url: cierre?.comprobante_url ?? null,
         fecha_consignacion: cierre?.fecha_consignacion ?? null,
@@ -229,6 +232,7 @@ export function CierreDiario() {
           sede_id: sedeActiva.id,
           fecha,
           gasto: Number(gasto) || 0,
+          gasto_concepto: gastoConcepto.trim() || null,
           consignado,
           fecha_consignacion: consignado ? today() : null,
           comprobante_url: cierre?.comprobante_url ?? null,
@@ -252,6 +256,7 @@ export function CierreDiario() {
           sede_id: sedeActiva.id,
           fecha,
           gasto: Number(gasto) || 0,
+          gasto_concepto: gastoConcepto.trim() || null,
           consignado: cierre?.consignado ?? false,
           comprobante_url: cierre?.comprobante_url ?? null,
           fecha_consignacion: cierre?.fecha_consignacion ?? null,
@@ -281,6 +286,7 @@ export function CierreDiario() {
           sede_id: sedeActiva.id,
           fecha,
           gasto: Number(gasto) || 0,
+          gasto_concepto: gastoConcepto.trim() || null,
           consignado: cierre?.consignado ?? false,
           comprobante_url: path,
           fecha_consignacion: cierre?.fecha_consignacion ?? null,
@@ -367,7 +373,7 @@ export function CierreDiario() {
           </table>
           ${otrosHtml}
           <div class="resumen">
-            <p>Gasto del día: ${fmtCOP(Number(gasto) || 0)}</p>
+            <p>Gasto del día: ${fmtCOP(Number(gasto) || 0)}${gastoConcepto.trim() ? ` — ${gastoConcepto.trim()}` : ""}</p>
             <p><strong>Total efectivo (Cierre): ${fmtCOP(totalEfectivoCierre)}</strong></p>
             <p>Día consignado: ${cierre?.consignado ? "Sí" : "No"}</p>
             <p>Entregado a la administración: ${cierre?.entregado_admin ? "Sí" : "No"}</p>
@@ -521,13 +527,22 @@ export function CierreDiario() {
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
         <div>
           <label className="block text-sm font-medium mb-1">Gasto del día</label>
-          <input
-            type="number"
-            value={gasto}
-            onChange={(e) => setGasto(e.target.value)}
-            onBlur={guardarManual}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-          />
+          <div className="flex gap-2">
+            <input
+              type="number"
+              value={gasto}
+              onChange={(e) => setGasto(e.target.value)}
+              onBlur={guardarManual}
+              className="w-32 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <input
+              value={gastoConcepto}
+              onChange={(e) => setGastoConcepto(e.target.value)}
+              onBlur={guardarManual}
+              placeholder="Concepto — a qué corresponde este gasto"
+              className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          </div>
         </div>
         <div className="flex items-center justify-between pt-2 border-t border-gray-100">
           <span className="text-sm text-gray-500">

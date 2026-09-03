@@ -299,6 +299,7 @@ export interface CierreDiario {
   fecha: string;
   otros_ingresos: number;
   gasto: number;
+  gasto_concepto: string | null;
   consignado: boolean;
   comprobante_url: string | null;
   fecha_consignacion: string | null;

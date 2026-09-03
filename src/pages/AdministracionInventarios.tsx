@@ -12,6 +12,12 @@ interface EntregaHistorial extends InsumoGeneralEntrega {
   insumos_generales_periodos: { etiqueta: string } | null;
 }
 
+function etiquetaMesActual(): string {
+  const d = new Date();
+  const mes = d.toLocaleDateString("es-CO", { month: "long" });
+  return `${mes.charAt(0).toUpperCase()}${mes.slice(1)} ${d.getFullYear()}`;
+}
+
 export function AdministracionInventarios() {
   const { perfil } = useAuth();
   const [sedes, setSedes] = useState<Sede[]>([]);
@@ -76,7 +82,7 @@ export function AdministracionInventarios() {
     if (!sedeIdEntrega || !catalogoIdEntrega || !Number(cantidadEntrega)) return;
     setGuardandoEntrega(true);
     setErrorEntrega(null);
-    const { data: periodo } = await supabase
+    let { data: periodo } = await supabase
       .from("insumos_generales_periodos")
       .select("id")
       .eq("sede_id", sedeIdEntrega)
@@ -84,9 +90,20 @@ export function AdministracionInventarios() {
       .limit(1)
       .maybeSingle();
     if (!periodo) {
-      setGuardandoEntrega(false);
-      setErrorEntrega("Esa sede todavía no tiene un período de inventario abierto — hay que crear uno primero desde Operación → Inventario → Insumos generales.");
-      return;
+      // La bodega administrativa se maneja de forma continua — no debe
+      // bloquear la entrega porque la sede aún no abrió su período
+      // operativo a mano, así que se crea uno solo.
+      const { data: nuevo, error: errorPeriodo } = await supabase
+        .from("insumos_generales_periodos")
+        .insert({ sede_id: sedeIdEntrega, etiqueta: etiquetaMesActual(), fecha_inicio: today() })
+        .select("id")
+        .single();
+      if (errorPeriodo || !nuevo) {
+        setGuardandoEntrega(false);
+        setErrorEntrega(errorPeriodo?.message ?? "No se pudo crear el período de esa sede.");
+        return;
+      }
+      periodo = nuevo;
     }
     const { error } = await supabase.from("insumos_generales_entregas").insert({
       catalogo_id: catalogoIdEntrega,
