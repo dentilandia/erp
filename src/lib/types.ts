@@ -182,8 +182,23 @@ export interface InsumoGeneralMovimiento {
   inventario_inicial: number;
   entrega1: number;
   entrega2: number;
+  salidas: number;
   entradas: number;
   pedido: number;
+}
+
+/** Salida formal de la bodega operativa de una sede (hacia consultorio/uso
+ *  clínico) — la registra la propia sede, a diferencia de InsumoGeneralEntrega
+ *  que es de la bodega administrativa hacia la sede y la registra admin. */
+export interface InsumoGeneralSalida {
+  id: string;
+  sede_id: string;
+  periodo_id: string;
+  catalogo_id: string;
+  cantidad: number;
+  fecha: string;
+  motivo: string | null;
+  created_at: string;
 }
 
 /** Bodega administrativa central (una sola, no por sede) — donde llega lo

@@ -1,30 +1,51 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
-import type { InsumoGeneralCatalogo, InsumoGeneralPeriodo, InsumoGeneralMovimiento, InsumoGeneralEntrega } from "../lib/types";
+import { useAuth } from "../auth/AuthContext";
+import type {
+  InsumoGeneralCatalogo,
+  InsumoGeneralPeriodo,
+  InsumoGeneralMovimiento,
+  InsumoGeneralEntrega,
+  InsumoGeneralSalida,
+} from "../lib/types";
 
 interface EntregaConCatalogo extends InsumoGeneralEntrega {
   insumos_generales_catalogo: { nombre: string } | null;
 }
 
+interface SalidaConCatalogo extends InsumoGeneralSalida {
+  insumos_generales_catalogo: { nombre: string } | null;
+}
+
 /** Bodega operativa de una sede — réplica del Excel: catálogo compartido de
  *  172 ítems por categoría, con un período de conteo a la vez (inventario
- *  inicial, entrega 1/2, entradas, pedido → inventario final). Se usa tanto
- *  en Operación (atada a la sede activa) como en Administración (con
- *  selector de sede) — por eso recibe sedeId como prop en vez de leerlo del
- *  contexto de la ruta. */
+ *  inicial, entrega 1/2, salidas, entradas, pedido → inventario final). Se
+ *  usa tanto en Operación (atada a la sede activa) como en Administración
+ *  (con selector de sede) — por eso recibe sedeId como prop en vez de
+ *  leerlo del contexto de la ruta. */
 export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
+  const { perfil } = useAuth();
   const [catalogo, setCatalogo] = useState<InsumoGeneralCatalogo[]>([]);
   const [periodos, setPeriodos] = useState<InsumoGeneralPeriodo[]>([]);
   const [periodoId, setPeriodoId] = useState("");
   const [movimientos, setMovimientos] = useState<Record<string, InsumoGeneralMovimiento>>({});
   const [entregasRecibidas, setEntregasRecibidas] = useState<EntregaConCatalogo[]>([]);
+  const [salidasRegistradas, setSalidasRegistradas] = useState<SalidaConCatalogo[]>([]);
   const [cargando, setCargando] = useState(true);
   const [categoriasAbiertas, setCategoriasAbiertas] = useState<Record<string, boolean>>({});
   const [nuevaEtiqueta, setNuevaEtiqueta] = useState("");
   const [creandoPeriodo, setCreandoPeriodo] = useState(false);
   const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
+
+  const [catalogoIdSalida, setCatalogoIdSalida] = useState("");
+  const [cantidadSalida, setCantidadSalida] = useState("");
+  const [fechaSalida, setFechaSalida] = useState(today());
+  const [motivoSalida, setMotivoSalida] = useState("");
+  const [guardandoSalida, setGuardandoSalida] = useState(false);
+  const [salidaOk, setSalidaOk] = useState(false);
+  const [errorSalida, setErrorSalida] = useState<string | null>(null);
 
   useEffect(() => {
     supabase
@@ -32,7 +53,11 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
       .select("*")
       .eq("activo", true)
       .order("orden")
-      .then(({ data }) => setCatalogo((data as InsumoGeneralCatalogo[]) ?? []));
+      .then(({ data }) => {
+        const filas = (data as InsumoGeneralCatalogo[]) ?? [];
+        setCatalogo(filas);
+        if (filas.length > 0) setCatalogoIdSalida((prev) => prev || filas[0].id);
+      });
   }, []);
 
   async function cargarPeriodos() {
@@ -58,26 +83,38 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     setEntregasRecibidas((data as unknown as EntregaConCatalogo[]) ?? []);
   }
 
+  async function cargarSalidas() {
+    const { data } = await supabase
+      .from("insumos_generales_salidas")
+      .select("*, insumos_generales_catalogo(nombre)")
+      .eq("sede_id", sedeId)
+      .order("fecha", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(10);
+    setSalidasRegistradas((data as unknown as SalidaConCatalogo[]) ?? []);
+  }
+
   useEffect(() => {
     setCargando(true);
     cargarPeriodos();
     cargarEntregasRecibidas();
+    cargarSalidas();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sedeId]);
 
-  useEffect(() => {
+  async function cargarMovimientos() {
     if (!periodoId) {
       setMovimientos({});
       return;
     }
-    supabase
-      .from("insumos_generales_movimientos")
-      .select("*")
-      .eq("periodo_id", periodoId)
-      .then(({ data }) => {
-        const filas = (data as InsumoGeneralMovimiento[]) ?? [];
-        setMovimientos(Object.fromEntries(filas.map((m) => [m.catalogo_id, m])));
-      });
+    const { data } = await supabase.from("insumos_generales_movimientos").select("*").eq("periodo_id", periodoId);
+    const filas = (data as InsumoGeneralMovimiento[]) ?? [];
+    setMovimientos(Object.fromEntries(filas.map((m) => [m.catalogo_id, m])));
+  }
+
+  useEffect(() => {
+    cargarMovimientos();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [periodoId]);
 
   const categorias = useMemo(() => Array.from(new Set(catalogo.map((c) => c.categoria))), [catalogo]);
@@ -108,7 +145,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
       inicialPorCatalogo = Object.fromEntries(
         ((movsAnterior as InsumoGeneralMovimiento[]) ?? []).map((m) => [
           m.catalogo_id,
-          m.inventario_inicial - m.entrega1 - m.entrega2 + m.entradas,
+          m.inventario_inicial - m.entrega1 - m.entrega2 - m.salidas + m.entradas,
         ]),
       );
     }
@@ -128,7 +165,11 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     setPeriodoId(nuevo.id);
   }
 
-  function actualizarCampo(catalogoId: string, campo: "inventario_inicial" | "entrega1" | "entrega2" | "entradas" | "pedido", valor: number) {
+  function actualizarCampo(
+    catalogoId: string,
+    campo: "inventario_inicial" | "entrega1" | "entrega2" | "salidas" | "entradas" | "pedido",
+    valor: number,
+  ) {
     setMovimientos((prev) => {
       const actual = prev[catalogoId];
       if (!actual) return prev;
@@ -140,6 +181,34 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     const mov = movimientos[catalogoId];
     if (!mov) return;
     await supabase.from("insumos_generales_movimientos").update({ [campo]: valor }).eq("id", mov.id);
+  }
+
+  async function registrarSalida() {
+    if (!periodoId || !catalogoIdSalida || !Number(cantidadSalida)) return;
+    setGuardandoSalida(true);
+    setErrorSalida(null);
+    const { error } = await supabase.from("insumos_generales_salidas").insert({
+      sede_id: sedeId,
+      periodo_id: periodoId,
+      catalogo_id: catalogoIdSalida,
+      cantidad: Number(cantidadSalida),
+      fecha: fechaSalida,
+      motivo: motivoSalida.trim() || null,
+      created_by: perfil?.id ?? null,
+    });
+    setGuardandoSalida(false);
+    if (error) {
+      setErrorSalida(error.message);
+      return;
+    }
+    setCantidadSalida("");
+    setMotivoSalida("");
+    setSalidaOk(true);
+    setTimeout(() => setSalidaOk(false), 2000);
+    const categoria = catalogo.find((c) => c.id === catalogoIdSalida)?.categoria;
+    if (categoria) setCategoriasAbiertas((prev) => ({ ...prev, [categoria]: true }));
+    cargarMovimientos();
+    cargarSalidas();
   }
 
   const periodoActivo = periodos.find((p) => p.id === periodoId);
@@ -180,21 +249,95 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
         {errorPeriodo && <p className="text-sm text-red-600">{errorPeriodo}</p>}
         <p className="text-xs text-gray-400">
           El inventario inicial de un período nuevo parte del inventario final del período anterior de esta sede. La
-          columna "Entradas" también se llena sola cuando administración registra una entrega desde la bodega
-          administrativa central.
+          columna "Entradas" se llena sola cuando administración registra una entrega desde la bodega administrativa;
+          "Salidas" se llena con el formulario de abajo.
         </p>
       </section>
 
-      {entregasRecibidas.length > 0 && (
+      {periodoActivo && (
         <section className="bg-white rounded-xl border border-gray-200 p-4">
-          <p className="text-xs font-medium text-gray-400 mb-1.5">Últimas entregas recibidas de la bodega administrativa</p>
-          <div className="space-y-1">
-            {entregasRecibidas.map((e) => (
-              <div key={e.id} className="text-xs text-gray-500">
-                {e.fecha} · {e.insumos_generales_catalogo?.nombre ?? "—"} · <span className="font-medium">{e.cantidad}</span>
-              </div>
-            ))}
+          <h2 className="font-semibold text-tinta mb-1">Registrar salida</h2>
+          <p className="text-xs text-gray-400 mb-3">
+            Para cuando sale mercancía de esta bodega hacia consultorio o uso clínico — queda registrada con fecha e
+            ítem, y suma a "Salidas" del período activo.
+          </p>
+          <div className="flex items-end gap-2 flex-wrap">
+            <select
+              value={catalogoIdSalida}
+              onChange={(e) => setCatalogoIdSalida(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm min-w-[200px]"
+            >
+              {categorias.map((categoria) => (
+                <optgroup key={categoria} label={categoria}>
+                  {catalogo
+                    .filter((c) => c.categoria === categoria)
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.nombre}
+                      </option>
+                    ))}
+                </optgroup>
+              ))}
+            </select>
+            <input
+              type="date"
+              value={fechaSalida}
+              onChange={(e) => setFechaSalida(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <input
+              type="number"
+              value={cantidadSalida}
+              onChange={(e) => setCantidadSalida(e.target.value)}
+              placeholder="Cantidad"
+              className="w-28 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <input
+              value={motivoSalida}
+              onChange={(e) => setMotivoSalida(e.target.value)}
+              placeholder="Motivo (opcional)"
+              className="flex-1 min-w-[160px] rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <button
+              onClick={registrarSalida}
+              disabled={!cantidadSalida || guardandoSalida}
+              className="flex items-center gap-2 rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+            >
+              {salidaOk ? <Check size={16} /> : <Plus size={16} />}
+              {guardandoSalida ? "Guardando…" : salidaOk ? "Registrado" : "Registrar"}
+            </button>
           </div>
+          {errorSalida && <p className="text-sm text-red-600 mt-2">{errorSalida}</p>}
+        </section>
+      )}
+
+      {(entregasRecibidas.length > 0 || salidasRegistradas.length > 0) && (
+        <section className="bg-white rounded-xl border border-gray-200 p-4 grid sm:grid-cols-2 gap-4">
+          {entregasRecibidas.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-gray-400 mb-1.5">Últimas entregas recibidas de la bodega administrativa</p>
+              <div className="space-y-1">
+                {entregasRecibidas.map((e) => (
+                  <div key={e.id} className="text-xs text-gray-500">
+                    {e.fecha} · {e.insumos_generales_catalogo?.nombre ?? "—"} · <span className="font-medium">{e.cantidad}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {salidasRegistradas.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-gray-400 mb-1.5">Últimas salidas registradas</p>
+              <div className="space-y-1">
+                {salidasRegistradas.map((s) => (
+                  <div key={s.id} className="text-xs text-gray-500">
+                    {s.fecha} · {s.insumos_generales_catalogo?.nombre ?? "—"} · <span className="font-medium">{s.cantidad}</span>
+                    {s.motivo ? ` · ${s.motivo}` : ""}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
       )}
 
@@ -222,6 +365,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                         <th className="px-2 py-1.5 text-right">Inicial</th>
                         <th className="px-2 py-1.5 text-right">Entrega 1</th>
                         <th className="px-2 py-1.5 text-right">Entrega 2</th>
+                        <th className="px-2 py-1.5 text-right">Salidas</th>
                         <th className="px-2 py-1.5 text-right">Consumo</th>
                         <th className="px-2 py-1.5 text-right">Entradas</th>
                         <th className="px-2 py-1.5 text-right">Final</th>
@@ -232,7 +376,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                       {items.map((item) => {
                         const mov = movimientos[item.id];
                         if (!mov) return null;
-                        const consumo = mov.entrega1 + mov.entrega2;
+                        const consumo = mov.entrega1 + mov.entrega2 + mov.salidas;
                         const final = mov.inventario_inicial - consumo + mov.entradas;
                         return (
                           <tr key={item.id} className="border-t border-gray-100">
@@ -251,6 +395,18 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                                 />
                               </td>
                             ))}
+                            <td className="px-2 py-1.5 text-right">
+                              <input
+                                type="number"
+                                defaultValue={mov.salidas}
+                                onBlur={(e) => {
+                                  const v = Number(e.target.value) || 0;
+                                  actualizarCampo(item.id, "salidas", v);
+                                  guardarCampo(item.id, "salidas", v);
+                                }}
+                                className="w-16 rounded-md border border-gray-200 px-1.5 py-1 text-right"
+                              />
+                            </td>
                             <td className="px-2 py-1.5 text-right text-gray-500">{consumo}</td>
                             <td className="px-2 py-1.5 text-right">
                               <input
