@@ -18,6 +18,7 @@ import {
   GraduationCap,
   Boxes,
   PiggyBank,
+  Warehouse,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -45,6 +46,7 @@ const ADMIN_TABS = [
   { to: "/administracion/financiacion", label: "Financiación", icon: CreditCard },
   { to: "/administracion/cierre-caja", label: "Cierre de Caja", icon: Landmark },
   { to: "/administracion/reportes", label: "Reportes", icon: BarChart3 },
+  { to: "/administracion/inventarios", label: "Inventarios", icon: Warehouse },
 ];
 
 /** Sede sobre la que trabaja la pantalla: fija si el perfil es de operación,

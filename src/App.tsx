@@ -16,6 +16,7 @@ import { Liquidaciones } from "./pages/Liquidaciones";
 import { Financiacion } from "./pages/Financiacion";
 import { CierreCaja } from "./pages/CierreCaja";
 import { Reportes } from "./pages/Reportes";
+import { AdministracionInventarios } from "./pages/AdministracionInventarios";
 import { Parametros } from "./pages/Parametros";
 
 /** Bloquea de verdad las rutas de administración/parámetros para el equipo de
@@ -157,6 +158,7 @@ function App() {
               <Route path="administracion/financiacion" element={<SoloAdmin><Financiacion /></SoloAdmin>} />
               <Route path="administracion/cierre-caja" element={<SoloAdmin><CierreCaja /></SoloAdmin>} />
               <Route path="administracion/reportes" element={<SoloAdmin><Reportes /></SoloAdmin>} />
+              <Route path="administracion/inventarios" element={<SoloAdmin><AdministracionInventarios /></SoloAdmin>} />
               <Route path="parametros" element={<SoloAdmin><Parametros /></SoloAdmin>} />
             </Route>
           </Routes>

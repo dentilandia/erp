@@ -186,6 +186,27 @@ export interface InsumoGeneralMovimiento {
   pedido: number;
 }
 
+/** Bodega administrativa central (una sola, no por sede) — donde llega lo
+ *  que se compra. Desde ahí administración le entrega formalmente a cada
+ *  sede (InsumoGeneralEntrega), lo que suma como "entradas" del período
+ *  activo de esa sede y queda como histórico real de consumo. */
+export interface InsumoGeneralBodegaAdmin {
+  id: string;
+  catalogo_id: string;
+  cantidad: number;
+  updated_at: string;
+}
+
+export interface InsumoGeneralEntrega {
+  id: string;
+  catalogo_id: string;
+  sede_id: string;
+  periodo_id: string;
+  cantidad: number;
+  fecha: string;
+  created_at: string;
+}
+
 /** Caja menor por sede — acceso restringido a admin y a quien tenga
  *  perfiles.puede_caja_menor en esa sede. */
 export interface CajaMenorPeriodo {
