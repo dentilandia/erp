@@ -424,7 +424,7 @@ function ModalAtencion({
   const [fechaObservacionAnterior, setFechaObservacionAnterior] = useState<string | null>(null);
   const [tratamiento, setTratamiento] = useState("");
   const [valorTratamiento, setValorTratamiento] = useState("");
-  const [motivoCero, setMotivoCero] = useState("");
+  const [observacion, setObservacion] = useState("");
   const [proximaCita, setProximaCita] = useState("");
   const [rxTomada, setRxTomada] = useState(false);
   const [botonTraccion, setBotonTraccion] = useState(false);
@@ -477,8 +477,6 @@ function ModalAtencion({
     })();
   }, [visitaId]);
 
-  const sinCargo = !(Number(valorTratamiento) > 0) && !rxTomada && !botonTraccion;
-
   function agregarEnvioLab() {
     const lab = laboratorios.find((l) => l.id === laboratorioId);
     const doctora = doctoras.find((d) => d.id === envioDoctoraId);
@@ -494,7 +492,6 @@ function ModalAtencion({
   }
 
   async function guardar() {
-    if (sinCargo && !motivoCero.trim()) return;
     setGuardando(true);
     setError(null);
     const { data: visita } = await supabase.from("visitas").select("doctora_id, paciente_id, fecha").eq("id", visitaId).single();
@@ -582,7 +579,7 @@ function ModalAtencion({
         estado: "consulta",
         tratamiento,
         proxima_cita: proximaCita || null,
-        motivo_valor_cero: sinCargo ? motivoCero.trim() : null,
+        observacion: observacion.trim() || null,
         remision_especialidad: remitido ? remisionEspecialidad.trim() || null : null,
         updated_at: new Date().toISOString(),
       })
@@ -627,17 +624,15 @@ function ModalAtencion({
           />
         </div>
 
-        {sinCargo && (
-          <div>
-            <label className="block text-sm font-medium mb-1">Motivo para no cobrar (paciente sin cargo)</label>
-            <input
-              value={motivoCero}
-              onChange={(e) => setMotivoCero(e.target.value)}
-              placeholder="Ej: revisión de cortesía, ajuste sin costo"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            />
-          </div>
-        )}
+        <div>
+          <label className="block text-sm font-medium mb-1">Observación (opcional)</label>
+          <input
+            value={observacion}
+            onChange={(e) => setObservacion(e.target.value)}
+            placeholder="Ej: el paciente debe dejar saldo a favor de $50.000"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          />
+        </div>
         <div>
           <label className="block text-sm font-medium mb-1">Próxima cita</label>
           <input
@@ -775,7 +770,7 @@ function ModalAtencion({
         {error && <p className="text-sm text-red-600">{error}</p>}
         <button
           onClick={guardar}
-          disabled={guardando || (sinCargo && !motivoCero.trim())}
+          disabled={guardando}
           className="w-full rounded-lg bg-[var(--acento)] text-white py-2.5 text-sm font-medium disabled:opacity-40"
         >
           {guardando ? "Guardando…" : "Guardar y pasar a cobro"}
