@@ -44,6 +44,7 @@ export function Historial() {
   const [soloRemisiones, setSoloRemisiones] = useState(false);
   const [insumoFiltro, setInsumoFiltro] = useState("");
   const [medioPagoFiltro, setMedioPagoFiltro] = useState("");
+  const [valorFiltro, setValorFiltro] = useState("");
   const [buscarPaciente, setBuscarPaciente] = useState("");
   const [visitas, setVisitas] = useState<VisitaRow[]>([]);
 
@@ -85,14 +86,23 @@ export function Historial() {
             porMedio[p.medio_pago] = (porMedio[p.medio_pago] ?? 0) + Number(p.valor);
           }
         }
-        return { ...v, porMedio };
+        const totalCargos = v.cargos.reduce((a, c) => a + Number(c.valor), 0);
+        const totalPagado = Object.values(porMedio).reduce((a, x) => a + x, 0);
+        return { ...v, porMedio, totalCargos, totalPagado };
       }),
     [visitas],
   );
-  const visitasFiltradas = useMemo(
-    () => (medioPagoFiltro ? visitasConMedios.filter((v) => medioPagoFiltro in v.porMedio) : visitasConMedios),
-    [visitasConMedios, medioPagoFiltro],
-  );
+  const visitasFiltradas = useMemo(() => {
+    let filas = visitasConMedios;
+    if (medioPagoFiltro) filas = filas.filter((v) => medioPagoFiltro in v.porMedio);
+    const valorNum = Math.round(Number(valorFiltro));
+    if (valorFiltro.trim() && valorNum > 0) {
+      filas = filas.filter(
+        (v) => Math.round(v.totalCargos) === valorNum || Object.values(v.porMedio).some((x) => Math.round(x) === valorNum),
+      );
+    }
+    return filas;
+  }, [visitasConMedios, medioPagoFiltro, valorFiltro]);
 
   // Facturación por día para control de honorarios: solo procedimiento/tratamiento
   // (no RX ni conceptos administrativos), sin importar el medio de pago —
@@ -169,6 +179,13 @@ export function Historial() {
             </option>
           ))}
         </select>
+        <input
+          type="number"
+          value={valorFiltro}
+          onChange={(e) => setValorFiltro(e.target.value)}
+          placeholder="Buscar por valor, ej. 136000"
+          className="rounded-lg border border-gray-300 px-3 py-2 text-sm w-44"
+        />
       </div>
 
       {doctoraId && (
@@ -212,10 +229,8 @@ export function Historial() {
 
       <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
         {visitasFiltradas.map((v) => {
-          const totalCargos = v.cargos.reduce((a, c) => a + Number(c.valor), 0);
-          const totalPagado = v.cargos.reduce((a, c) => a + c.cargo_pagos.reduce((x, p) => x + Number(p.valor), 0), 0);
+          const { porMedio, totalCargos, totalPagado } = v;
           const sinCuadrar = v.estado === "cobrado" && Math.round(totalPagado) !== Math.round(totalCargos);
-          const { porMedio } = v;
           return (
             <div key={v.id} className="flex items-center justify-between px-4 py-2.5 text-sm flex-wrap gap-1">
               <div>
