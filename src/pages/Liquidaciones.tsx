@@ -3,7 +3,7 @@ import { Download, Check } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { fmtCOP, mesActual, periodoCiclo2625, periodoMesCompleto } from "../lib/format";
 import { fetchTodasLasFilas } from "../lib/db";
-import { TIPOS_INSUMO_CONSULTA, type Doctora, type Sede } from "../lib/types";
+import { TIPOS_INSUMO_CONSULTA, type Doctora, type Sede, type Laboratorio } from "../lib/types";
 
 const TIPOS_INSUMO_LABEL: Record<string, string> = Object.fromEntries(TIPOS_INSUMO_CONSULTA.map((t) => [t.value, t.label]));
 
@@ -895,6 +895,7 @@ interface FilaLab {
   doctoraId: string;
   doctora: string;
   doctoraInstala: string | null;
+  laboratorioId: string;
   laboratorio: string;
   tipo_servicio: string;
   factura_numero: string | null;
@@ -905,11 +906,14 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
   const periodo = useMemo(() => periodoCiclo2625(mes), [mes]);
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
   const [doctoraId, setDoctoraId] = useState("");
+  const [laboratorios, setLaboratorios] = useState<Laboratorio[]>([]);
+  const [laboratorioId, setLaboratorioId] = useState("");
   const [filas, setFilas] = useState<FilaLab[]>([]);
   const [cargando, setCargando] = useState(true);
 
   useEffect(() => {
     supabase.from("doctoras").select("*").order("nombre").then(({ data }) => setDoctoras((data as Doctora[]) ?? []));
+    supabase.from("laboratorios").select("*").order("nombre").then(({ data }) => setLaboratorios((data as Laboratorio[]) ?? []));
   }, []);
 
   useEffect(() => {
@@ -917,19 +921,20 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
       setCargando(true);
       type LabRowLab = {
         id: string; mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; fecha_instalado: string | null;
-        valor_factura: number; factura_numero: string | null; tipo_servicio: string; doctora_id: string;
+        valor_factura: number; factura_numero: string | null; tipo_servicio: string; doctora_id: string; laboratorio_id: string;
         pacientes: { nombre: string } | null; doctoras: { nombre: string } | null; doctora_instala: { nombre: string } | null; laboratorios: { nombre: string } | null;
       };
       const data = await fetchTodasLasFilas<LabRowLab>((desde, hasta) => {
         let q = supabase
           .from("lab_ordenes")
           .select(
-            "id, sede_id, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, valor_factura, factura_numero, tipo_servicio, doctora_id, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), doctora_instala:doctoras!lab_ordenes_doctora_instala_id_fkey(nombre), laboratorios(nombre)",
+            "id, sede_id, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, valor_factura, factura_numero, tipo_servicio, doctora_id, laboratorio_id, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), doctora_instala:doctoras!lab_ordenes_doctora_instala_id_fkey(nombre), laboratorios(nombre)",
           )
           .not("valor_factura", "is", null)
           .range(desde, hasta);
         if (sedeId) q = q.eq("sede_id", sedeId);
         if (doctoraId) q = q.or(`doctora_id.eq.${doctoraId},doctora_instala_id.eq.${doctoraId}`);
+        if (laboratorioId) q = q.eq("laboratorio_id", laboratorioId);
         return q as unknown as PromiseLike<{ data: LabRowLab[] | null }>;
       });
       const filtradas = data.filter((r) => {
@@ -946,6 +951,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
           doctoraId: r.doctora_id,
           doctora: r.doctoras?.nombre ?? "—",
           doctoraInstala: r.doctora_instala?.nombre ?? null,
+          laboratorioId: r.laboratorio_id,
           laboratorio: r.laboratorios?.nombre ?? "—",
           tipo_servicio: r.tipo_servicio,
           factura_numero: r.factura_numero,
@@ -955,7 +961,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
 
       setCargando(false);
     })();
-  }, [periodo.inicio, periodo.fin, sedeId, doctoraId]);
+  }, [periodo.inicio, periodo.fin, sedeId, doctoraId, laboratorioId]);
 
   function retencionDe(f: FilaLab): number {
     if (!f.fecha) return 0;
@@ -977,6 +983,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
   const totalNeto = total - totalRetencion;
 
   function generarPDF() {
+    const nombreLab = laboratorioId ? laboratorios.find((l) => l.id === laboratorioId)?.nombre : null;
     const filasHtml = filas
       .map((f) => {
         const ret = retencionDe(f);
@@ -997,7 +1004,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
       .join("");
     const html = `<!doctype html>
 <html><head><meta charset="utf-8" />
-<title>Liquidación laboratorios - ${mes}</title>
+<title>Liquidación laboratorios${nombreLab ? ` - ${esc(nombreLab)}` : ""} - ${mes}</title>
 <style>
   body { font-family: Arial, Helvetica, sans-serif; color: #2E253A; padding: 24px; }
   h1 { font-size: 18px; margin: 0 0 2px; }
@@ -1018,7 +1025,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
 </head>
 <body>
   <button class="btn-imprimir" onclick="window.print()">Imprimir / Guardar como PDF</button>
-  <h1>Liquidación de laboratorios</h1>
+  <h1>Liquidación de laboratorios${nombreLab ? ` — ${esc(nombreLab)}` : ""}</h1>
   <p class="periodo">Período ${periodo.inicio} a ${periodo.fin} — retención del ${PCT_RETENCION_LAB * 100}% aplicada a facturas
   que superan la cuantía mínima vigente en su fecha.</p>
 
@@ -1056,14 +1063,24 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
           Período {periodo.inicio} a {periodo.fin}. Retención del {PCT_RETENCION_LAB * 100}% sobre facturas que superan la
           cuantía mínima vigente en su fecha.
         </p>
-        <select value={doctoraId} onChange={(e) => setDoctoraId(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm">
-          <option value="">Todas las doctoras</option>
-          {doctoras.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.nombre}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <select value={doctoraId} onChange={(e) => setDoctoraId(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm">
+            <option value="">Todas las doctoras</option>
+            {doctoras.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.nombre}
+              </option>
+            ))}
+          </select>
+          <select value={laboratorioId} onChange={(e) => setLaboratorioId(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm">
+            <option value="">Todos los laboratorios</option>
+            {laboratorios.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.nombre}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-gray-500">Facturas de laboratorio</h3>
