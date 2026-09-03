@@ -8,6 +8,18 @@ import { StatTile } from "../../components/StatTile";
 
 const MEDIO_PAGO_LABEL: Record<string, string> = Object.fromEntries(MEDIOS_PAGO.map((m) => [m.value, m.label]));
 
+// Un color distinto por medio de pago, para diferenciarlos de un vistazo en
+// Historial sin tener que leer la etiqueta de cada badge.
+const MEDIO_PAGO_COLOR: Record<string, string> = {
+  efectivo: "bg-emerald-50 text-emerald-700",
+  tarjeta_debito: "bg-blue-50 text-blue-700",
+  tarjeta_credito: "bg-indigo-50 text-indigo-700",
+  transferencia_debito: "bg-cyan-50 text-cyan-700",
+  addi: "bg-pink-50 text-pink-700",
+  sistecredito: "bg-orange-50 text-orange-700",
+  saldo_favor: "bg-violet-50 text-violet-700",
+};
+
 interface VisitaRow {
   id: string;
   fecha: string;
@@ -203,7 +215,10 @@ export function Historial() {
                   </span>
                 ))}
                 {Object.entries(porMedio).map(([medio, valor]) => (
-                  <span key={medio} className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-violet-50 text-violet-700">
+                  <span
+                    key={medio}
+                    className={`ml-2 text-xs font-medium px-2 py-0.5 rounded-full ${MEDIO_PAGO_COLOR[medio] ?? "bg-gray-100 text-gray-600"}`}
+                  >
                     {MEDIO_PAGO_LABEL[medio] ?? medio}: {fmtCOP(valor)}
                   </span>
                 ))}
