@@ -43,6 +43,7 @@ export function Historial() {
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
   const [soloRemisiones, setSoloRemisiones] = useState(false);
   const [insumoFiltro, setInsumoFiltro] = useState("");
+  const [medioPagoFiltro, setMedioPagoFiltro] = useState("");
   const [buscarPaciente, setBuscarPaciente] = useState("");
   const [visitas, setVisitas] = useState<VisitaRow[]>([]);
 
@@ -71,6 +72,27 @@ export function Historial() {
       setVisitas((data as unknown as VisitaRow[]) ?? []);
     })();
   }, [sedeActiva.id, desde, hasta, doctoraId, soloRemisiones, insumoFiltro, buscarPaciente]);
+
+  // Medio de pago por visita, calculado una sola vez y reusado tanto para
+  // filtrar (buscar descuadres por medio específico) como para pintar los
+  // badges de cada fila.
+  const visitasConMedios = useMemo(
+    () =>
+      visitas.map((v) => {
+        const porMedio: Record<string, number> = {};
+        for (const c of v.cargos) {
+          for (const p of c.cargo_pagos) {
+            porMedio[p.medio_pago] = (porMedio[p.medio_pago] ?? 0) + Number(p.valor);
+          }
+        }
+        return { ...v, porMedio };
+      }),
+    [visitas],
+  );
+  const visitasFiltradas = useMemo(
+    () => (medioPagoFiltro ? visitasConMedios.filter((v) => medioPagoFiltro in v.porMedio) : visitasConMedios),
+    [visitasConMedios, medioPagoFiltro],
+  );
 
   // Facturación por día para control de honorarios: solo procedimiento/tratamiento
   // (no RX ni conceptos administrativos), sin importar el medio de pago —
@@ -135,6 +157,18 @@ export function Historial() {
             </option>
           ))}
         </select>
+        <select
+          value={medioPagoFiltro}
+          onChange={(e) => setMedioPagoFiltro(e.target.value)}
+          className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+        >
+          <option value="">Cualquier medio de pago</option>
+          {MEDIOS_PAGO.map((m) => (
+            <option key={m.value} value={m.value}>
+              {m.label}
+            </option>
+          ))}
+        </select>
       </div>
 
       {doctoraId && (
@@ -177,16 +211,11 @@ export function Historial() {
       )}
 
       <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
-        {visitas.map((v) => {
+        {visitasFiltradas.map((v) => {
           const totalCargos = v.cargos.reduce((a, c) => a + Number(c.valor), 0);
           const totalPagado = v.cargos.reduce((a, c) => a + c.cargo_pagos.reduce((x, p) => x + Number(p.valor), 0), 0);
           const sinCuadrar = v.estado === "cobrado" && Math.round(totalPagado) !== Math.round(totalCargos);
-          const porMedio: Record<string, number> = {};
-          for (const c of v.cargos) {
-            for (const p of c.cargo_pagos) {
-              porMedio[p.medio_pago] = (porMedio[p.medio_pago] ?? 0) + Number(p.valor);
-            }
-          }
+          const { porMedio } = v;
           return (
             <div key={v.id} className="flex items-center justify-between px-4 py-2.5 text-sm flex-wrap gap-1">
               <div>
@@ -243,7 +272,7 @@ export function Historial() {
             </div>
           );
         })}
-        {visitas.length === 0 && <p className="px-4 py-4 text-sm text-gray-400">Sin visitas en este rango.</p>}
+        {visitasFiltradas.length === 0 && <p className="px-4 py-4 text-sm text-gray-400">Sin visitas en este rango.</p>}
       </div>
     </div>
   );
