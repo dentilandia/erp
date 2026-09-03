@@ -19,6 +19,7 @@ import {
   Boxes,
   PiggyBank,
   Warehouse,
+  Clock,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -177,6 +178,18 @@ export function Layout() {
               </NavLink>
             );
           })}
+        <NavLink
+          to="/asistencia"
+          className={({ isActive }) =>
+            `flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${
+              isActive ? "text-white" : "text-gris hover:bg-white/10"
+            }`
+          }
+          style={({ isActive }) => (isActive ? { background: "#009F98" } : {})}
+        >
+          <Clock size={16} />
+          Asistencia
+        </NavLink>
         <a
           href="/capacitacion.html"
           className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap text-gris hover:bg-white/10"

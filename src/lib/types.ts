@@ -12,6 +12,22 @@ export interface Sede {
   id: string;
   nombre: string;
   color_acento: string;
+  ip_permitida: string | null;
+}
+
+/** Control de asistencia — marca de llegada/salida con foto, restringida a
+ *  la IP pública de la sede (se valida en el edge function marcar-asistencia,
+ *  esta tabla no admite insert directo desde el cliente). */
+export type TipoAsistencia = "llegada" | "salida";
+
+export interface AsistenciaRegistro {
+  id: string;
+  perfil_id: string;
+  sede_id: string | null;
+  tipo: TipoAsistencia;
+  foto_path: string | null;
+  ip: string | null;
+  marcado_en: string;
 }
 
 export interface Doctora {

@@ -2,7 +2,15 @@ import { useEffect, useState } from "react";
 import { Plus, Check, X, Trash2, Bell, ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
-import { MOTIVOS_SALDO_FAVOR, type Doctora, type Sede, type Paciente, type SaldoFavor, type InsumoGeneralCatalogo } from "../lib/types";
+import {
+  MOTIVOS_SALDO_FAVOR,
+  type Doctora,
+  type Sede,
+  type Paciente,
+  type SaldoFavor,
+  type InsumoGeneralCatalogo,
+  type AsistenciaRegistro,
+} from "../lib/types";
 import { PacienteAutocomplete } from "../components/PacienteAutocomplete";
 import { useAuth } from "../auth/AuthContext";
 
@@ -62,14 +70,45 @@ export function Parametros() {
   const [guardandoItem, setGuardandoItem] = useState(false);
   const [errorCatalogo, setErrorCatalogo] = useState<string | null>(null);
 
+  const [errorIpSede, setErrorIpSede] = useState<string | null>(null);
+  const [asistenciaRegistros, setAsistenciaRegistros] = useState<
+    (AsistenciaRegistro & { perfiles: { nombre: string } | null; sedes: { nombre: string } | null })[]
+  >([]);
+
   async function cargar() {
     const { data: d } = await supabase.from("doctoras").select("*").order("nombre");
     setDoctoras((d as Doctora[]) ?? []);
     const { data: p } = await supabase.from("precios_config").select("clave, valor").order("clave");
     setPrecios(p ?? []);
-    const { data: s } = await supabase.from("sedes").select("id, nombre, color_acento").order("nombre");
+    const { data: s } = await supabase.from("sedes").select("id, nombre, color_acento, ip_permitida").order("nombre");
     setSedes((s as Sede[]) ?? []);
     if (s && s.length > 0) setSedeSaldoId((prev) => prev || s[0].id);
+  }
+
+  async function guardarIpSede(id: string, valor: string) {
+    setErrorIpSede(null);
+    const { error } = await supabase.from("sedes").update({ ip_permitida: valor.trim() || null }).eq("id", id);
+    if (error) {
+      setErrorIpSede(error.message);
+      return;
+    }
+    setSedes((prev) => prev.map((s) => (s.id === id ? { ...s, ip_permitida: valor.trim() || null } : s)));
+  }
+
+  async function cargarAsistencia() {
+    const { data } = await supabase
+      .from("asistencia_registros")
+      .select("*, perfiles(nombre), sedes(nombre)")
+      .order("marcado_en", { ascending: false })
+      .limit(50);
+    setAsistenciaRegistros(
+      (data as unknown as (AsistenciaRegistro & { perfiles: { nombre: string } | null; sedes: { nombre: string } | null })[]) ?? [],
+    );
+  }
+
+  async function verFotoAsistencia(path: string) {
+    const { data } = await supabase.storage.from("asistencia").createSignedUrl(path, 60);
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
   }
 
   // Últimos pedidos de bodega pendientes de las dos sedes — el período más
@@ -118,6 +157,7 @@ export function Parametros() {
     cargar();
     cargarPedidosPendientes();
     cargarCatalogoGeneral();
+    cargarAsistencia();
   }, []);
 
   const categoriasGeneral = Array.from(new Set(catalogoGeneral.map((c) => c.categoria)));
@@ -250,6 +290,53 @@ export function Parametros() {
           </div>
         </div>
       )}
+
+      <section className="bg-white rounded-xl border border-gray-200 p-4">
+        <h2 className="font-semibold text-tinta mb-1">Sedes — IP para control de asistencia</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Restringe "Marcar asistencia" a la red de la sede — se compara contra la IP pública real de quien marca (no
+          se puede falsificar desde el navegador). Busca "cuál es mi IP" en Google desde un computador de esa sede
+          para saber cuál poner. Si la dejas vacía, no se restringe. Si el internet de la sede cambia de IP, hay que
+          actualizarla acá.
+        </p>
+        <div className="divide-y divide-gray-100">
+          {sedes.map((s) => (
+            <div key={s.id} className="flex items-center gap-3 py-2.5">
+              <span className="font-medium text-sm flex-1">{s.nombre}</span>
+              <input
+                defaultValue={s.ip_permitida ?? ""}
+                onBlur={(e) => e.target.value.trim() !== (s.ip_permitida ?? "") && guardarIpSede(s.id, e.target.value)}
+                placeholder="Sin restricción"
+                className="w-44 rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+              />
+            </div>
+          ))}
+        </div>
+        {errorIpSede && <p className="text-sm text-red-600 mt-2">{errorIpSede}</p>}
+      </section>
+
+      <section className="bg-white rounded-xl border border-gray-200 p-4">
+        <h2 className="font-semibold text-tinta mb-3">Asistencia — últimos registros</h2>
+        <div className="divide-y divide-gray-100 max-h-80 overflow-y-auto">
+          {asistenciaRegistros.map((r) => (
+            <div key={r.id} className="flex items-center justify-between py-1.5 text-sm">
+              <span>
+                <span className="font-medium">{r.perfiles?.nombre ?? "—"}</span>{" "}
+                <span className="text-gray-400">
+                  · {r.sedes?.nombre ?? "—"} · <span className="capitalize">{r.tipo}</span> ·{" "}
+                  {new Date(r.marcado_en).toLocaleString("es-CO")}
+                </span>
+              </span>
+              {r.foto_path && (
+                <button onClick={() => verFotoAsistencia(r.foto_path!)} className="text-xs font-medium text-[var(--acento)] underline">
+                  Ver foto
+                </button>
+              )}
+            </div>
+          ))}
+          {asistenciaRegistros.length === 0 && <p className="text-sm text-gray-400 py-2">Sin registros todavía.</p>}
+        </div>
+      </section>
 
       <section className="bg-white rounded-xl border border-gray-200 p-4">
         <h2 className="font-semibold text-tinta mb-3">Doctoras</h2>
