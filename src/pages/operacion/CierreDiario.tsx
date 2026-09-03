@@ -139,6 +139,25 @@ export function CierreDiario() {
     if (cajeraFiltro && !cajeras.some((c) => c.id === cajeraFiltro)) setCajeraFiltro("");
   }, [cajeras, cajeraFiltro]);
 
+  // Cuánto recaudó cada persona en total (facturación de doctoras + otros
+  // ingresos + saldos), sin importar el filtro de arriba — para mostrar de
+  // una vez el cierre de cada quien junto al consolidado, sin tener que ir
+  // clickeando cajera por cajera.
+  const totalPorCajera = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const f of filasRaw) {
+      const id = f.cargos.visitas?.cobrado_por ?? SIN_ASIGNAR;
+      map.set(id, (map.get(id) ?? 0) + Number(f.valor));
+    }
+    for (const o of [...otrosCargosRaw, ...otrosSaldosRaw]) {
+      const id = o.cajeraId ?? SIN_ASIGNAR;
+      map.set(id, (map.get(id) ?? 0) + o.valor);
+    }
+    return map;
+  }, [filasRaw, otrosCargosRaw, otrosSaldosRaw]);
+  const cajerasReales = useMemo(() => cajeras.filter((c) => c.id !== SIN_ASIGNAR), [cajeras]);
+  const totalConsolidado = useMemo(() => Array.from(totalPorCajera.values()).reduce((a, v) => a + v, 0), [totalPorCajera]);
+
   function coincideCajera(id: string | null): boolean {
     if (!cajeraFiltro) return true;
     if (cajeraFiltro === SIN_ASIGNAR) return id === null;
@@ -413,6 +432,11 @@ export function CierreDiario() {
       <div className="flex items-center justify-between">
         <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
         <div className="flex items-center gap-4">
+          {cajerasReales.length === 1 && (
+            <span className="text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-600">
+              Registrado por: {cajerasReales[0].nombre}
+            </span>
+          )}
           <button onClick={exportarPDF} className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]">
             <FileText size={16} /> Descargar PDF
           </button>
@@ -421,6 +445,24 @@ export function CierreDiario() {
           </button>
         </div>
       </div>
+
+      {cajerasReales.length > 1 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <h3 className="text-sm font-semibold text-gray-500 mb-2">Cierre por persona</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {cajerasReales.map((c) => (
+              <div key={c.id} className="rounded-lg border border-gray-200 px-3 py-2">
+                <p className="text-xs text-gray-400">{c.nombre}</p>
+                <p className="font-semibold text-tinta">{fmtCOP(totalPorCajera.get(c.id) ?? 0)}</p>
+              </div>
+            ))}
+            <div className="rounded-lg border-2 px-3 py-2" style={{ borderColor: sedeActiva.color_acento }}>
+              <p className="text-xs text-gray-400">Consolidado</p>
+              <p className="font-semibold text-tinta">{fmtCOP(totalConsolidado)}</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {cajeras.length > 1 && (
         <div className="flex items-center gap-1.5 flex-wrap">
