@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
-import { TIPOS_INSUMO_CONSULTA, type Sede, type Doctora } from "../../lib/types";
+import { TIPOS_INSUMO_CONSULTA, MEDIOS_PAGO, type Sede, type Doctora } from "../../lib/types";
 import { CalendarioCalor } from "../../components/CalendarioCalor";
 import { StatTile } from "../../components/StatTile";
+
+const MEDIO_PAGO_LABEL: Record<string, string> = Object.fromEntries(MEDIOS_PAGO.map((m) => [m.value, m.label]));
 
 interface VisitaRow {
   id: string;
@@ -17,7 +19,7 @@ interface VisitaRow {
   observacion: string | null;
   pacientes: { nombre: string };
   doctoras: { nombre: string; color_pastel: string };
-  cargos: { categoria: string; valor: number; cargo_pagos: { valor: number }[] }[];
+  cargos: { categoria: string; valor: number; cargo_pagos: { valor: number; medio_pago: string }[] }[];
   insumos_consulta: { tipo: string }[];
 }
 
@@ -43,7 +45,7 @@ export function Historial() {
       let q = supabase
         .from("visitas")
         .select(
-          `id, fecha, estado, tratamiento, doctora_id, remision_especialidad, proxima_cita, observacion, ${pacientesSelect}, doctoras(nombre, color_pastel), cargos(categoria, valor, cargo_pagos(valor)), ${insumosSelect}`,
+          `id, fecha, estado, tratamiento, doctora_id, remision_especialidad, proxima_cita, observacion, ${pacientesSelect}, doctoras(nombre, color_pastel), cargos(categoria, valor, cargo_pagos(valor, medio_pago)), ${insumosSelect}`,
         )
         .eq("sede_id", sedeActiva.id)
         .gte("fecha", desde)
@@ -167,6 +169,12 @@ export function Historial() {
           const totalCargos = v.cargos.reduce((a, c) => a + Number(c.valor), 0);
           const totalPagado = v.cargos.reduce((a, c) => a + c.cargo_pagos.reduce((x, p) => x + Number(p.valor), 0), 0);
           const sinCuadrar = v.estado === "cobrado" && Math.round(totalPagado) !== Math.round(totalCargos);
+          const porMedio: Record<string, number> = {};
+          for (const c of v.cargos) {
+            for (const p of c.cargo_pagos) {
+              porMedio[p.medio_pago] = (porMedio[p.medio_pago] ?? 0) + Number(p.valor);
+            }
+          }
           return (
             <div key={v.id} className="flex items-center justify-between px-4 py-2.5 text-sm flex-wrap gap-1">
               <div>
@@ -194,6 +202,16 @@ export function Historial() {
                     {TIPOS_INSUMO_CONSULTA.find((t) => t.value === i.tipo)?.label ?? i.tipo}
                   </span>
                 ))}
+                {Object.entries(porMedio).map(([medio, valor]) => (
+                  <span key={medio} className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-violet-50 text-violet-700">
+                    {MEDIO_PAGO_LABEL[medio] ?? medio}: {fmtCOP(valor)}
+                  </span>
+                ))}
+                {Object.keys(porMedio).length === 0 && v.estado === "cobrado" && (
+                  <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                    Sin pago registrado
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: v.doctoras?.color_pastel + "40" }}>
