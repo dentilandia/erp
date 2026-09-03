@@ -303,7 +303,7 @@ function InsumosGenerales() {
   const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
   return (
     <div className="space-y-4">
-      <BodegaAdminTabla editable={false} />
+      <BodegaAdminTabla editable={false} sedeId={sedeActiva.id} />
       <h2 className="font-semibold text-tinta">Bodega de insumos generales — {sedeActiva.nombre}</h2>
       <InsumosGeneralesPeriodo sedeId={sedeActiva.id} />
     </div>
