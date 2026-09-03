@@ -82,7 +82,16 @@ export function BodegaAdminTabla({ editable, sedeId }: { editable: boolean; sede
     setMotivoCompra("");
     setCompraOk(true);
     setTimeout(() => setCompraOk(false), 2000);
-    cargar();
+    // Abre de una vez la categoría del ítem registrado, y si la vista de
+    // existencias estaba en otra sede la cambia a esta — si no, el cambio
+    // queda guardado pero no se ve reflejado en ningún lado visible.
+    const categoria = catalogo.find((c) => c.id === catalogoIdCompra)?.categoria;
+    if (categoria) setCategoriasAbiertas((prev) => ({ ...prev, [categoria]: true }));
+    if (!sedeId && sedeIdVista !== sedeIdCompra) {
+      setSedeIdVista(sedeIdCompra);
+    } else {
+      cargar();
+    }
   }
 
   if (cargando) return <p className="text-sm text-gray-400">Cargando…</p>;
