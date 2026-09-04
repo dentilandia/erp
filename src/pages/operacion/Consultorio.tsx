@@ -625,15 +625,6 @@ function ModalAtencion({
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">Observación (opcional)</label>
-          <input
-            value={observacion}
-            onChange={(e) => setObservacion(e.target.value)}
-            placeholder="Ej: el paciente debe dejar saldo a favor de $50.000"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-          />
-        </div>
-        <div>
           <label className="block text-sm font-medium mb-1">Próxima cita</label>
           <input
             type="text"
@@ -641,6 +632,15 @@ function ModalAtencion({
             onChange={(e) => setProximaCita(e.target.value)}
             placeholder="Ej: en 3 semanas para ajuste, o 15 de agosto"
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="rounded-lg bg-sky-50 border border-sky-200 p-3">
+          <label className="block text-sm font-medium mb-1 text-sky-800">Observación (opcional)</label>
+          <input
+            value={observacion}
+            onChange={(e) => setObservacion(e.target.value)}
+            placeholder="Ej: el paciente debe dejar saldo a favor de $50.000"
+            className="w-full rounded-lg border border-sky-200 px-3 py-2 text-sm"
           />
         </div>
 
