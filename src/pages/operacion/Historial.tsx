@@ -26,11 +26,13 @@ interface VisitaRow {
   estado: string;
   tratamiento: string | null;
   doctora_id: string;
+  cobrado_por: string | null;
   remision_especialidad: string | null;
   proxima_cita: string | null;
   observacion: string | null;
   pacientes: { nombre: string };
   doctoras: { nombre: string; color_pastel: string };
+  perfiles: { nombre: string } | null;
   cargos: { categoria: string; valor: number; cargo_pagos: { valor: number; medio_pago: string }[] }[];
   insumos_consulta: { tipo: string }[];
 }
@@ -45,6 +47,7 @@ export function Historial() {
   const [insumoFiltro, setInsumoFiltro] = useState("");
   const [medioPagoFiltro, setMedioPagoFiltro] = useState("");
   const [valorFiltro, setValorFiltro] = useState("");
+  const [cajeraFiltro, setCajeraFiltro] = useState("");
   const [buscarPaciente, setBuscarPaciente] = useState("");
   const [visitas, setVisitas] = useState<VisitaRow[]>([]);
 
@@ -59,7 +62,7 @@ export function Historial() {
       let q = supabase
         .from("visitas")
         .select(
-          `id, fecha, estado, tratamiento, doctora_id, remision_especialidad, proxima_cita, observacion, ${pacientesSelect}, doctoras(nombre, color_pastel), cargos(categoria, valor, cargo_pagos(valor, medio_pago)), ${insumosSelect}`,
+          `id, fecha, estado, tratamiento, doctora_id, cobrado_por, remision_especialidad, proxima_cita, observacion, ${pacientesSelect}, doctoras(nombre, color_pastel), perfiles(nombre), cargos(categoria, valor, cargo_pagos(valor, medio_pago)), ${insumosSelect}`,
         )
         .eq("sede_id", sedeActiva.id)
         .gte("fecha", desde)
@@ -92,9 +95,21 @@ export function Historial() {
       }),
     [visitas],
   );
+  // Quién cobró cada visita — para poder cruzar exactamente lo mismo que se
+  // ve en el resumen "Cierre por persona" de Cierre Diario y encontrar la
+  // visita puntual detrás de un total.
+  const cajeras = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const v of visitas) if (v.cobrado_por) map.set(v.cobrado_por, v.perfiles?.nombre ?? "—");
+    return Array.from(map.entries())
+      .map(([id, nombre]) => ({ id, nombre }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [visitas]);
+
   const visitasFiltradas = useMemo(() => {
     let filas = visitasConMedios;
     if (medioPagoFiltro) filas = filas.filter((v) => medioPagoFiltro in v.porMedio);
+    if (cajeraFiltro) filas = filas.filter((v) => v.cobrado_por === cajeraFiltro);
     const valorNum = Math.round(Number(valorFiltro));
     if (valorFiltro.trim() && valorNum > 0) {
       filas = filas.filter(
@@ -102,7 +117,7 @@ export function Historial() {
       );
     }
     return filas;
-  }, [visitasConMedios, medioPagoFiltro, valorFiltro]);
+  }, [visitasConMedios, medioPagoFiltro, valorFiltro, cajeraFiltro]);
 
   // Facturación por día para control de honorarios: solo procedimiento/tratamiento
   // (no RX ni conceptos administrativos), sin importar el medio de pago —
@@ -186,6 +201,20 @@ export function Historial() {
           placeholder="Buscar por valor, ej. 136000"
           className="rounded-lg border border-gray-300 px-3 py-2 text-sm w-44"
         />
+        {cajeras.length > 0 && (
+          <select
+            value={cajeraFiltro}
+            onChange={(e) => setCajeraFiltro(e.target.value)}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          >
+            <option value="">Cualquier cajera</option>
+            {cajeras.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.nombre}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       {doctoraId && (
@@ -273,6 +302,9 @@ export function Historial() {
                 )}
               </div>
               <div className="flex items-center gap-3">
+                {v.perfiles?.nombre && (
+                  <span className="text-xs text-gray-400">{v.perfiles.nombre}</span>
+                )}
                 <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: v.doctoras?.color_pastel + "40" }}>
                   {v.doctoras?.nombre}
                 </span>
