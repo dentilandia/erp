@@ -46,6 +46,14 @@ function BloqueadoEnClinica({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/** Consultorio, al revés, queda bloqueado en modo "Recepción" — no le sirve
+ *  de nada a quien está en recepción. */
+function BloqueadoEnRecepcion({ children }: { children: React.ReactNode }) {
+  const { perfil, modoOperacion } = useAuth();
+  if (perfil?.rol !== "admin" && modoOperacion === "recepcion") return <Navigate to="/operacion/recepcion" replace />;
+  return <>{children}</>;
+}
+
 /** Se muestra cuando hay sesión pero aún no hay perfil (falta que Tomás lo
  *  cree). Deja fijar la contraseña ahí mismo por si el link de invitación/
  *  recuperación no activó la pantalla dedicada (pasa con algunos navegadores
@@ -157,7 +165,8 @@ function SeleccionarModoOperacion() {
           </button>
         </div>
         <p className="text-xs text-gray-400">
-          En Recepción ves todo. En Consultorio solo ves Consultorio, Laboratorio, Inventario e Historial.
+          En Recepción ves Recepción, Cierre diario, Laboratorio, Inventario, Financiación, Historial y Caja menor (si la
+          tienes asignada). En Consultorio solo ves Consultorio, Laboratorio, Inventario e Historial.
         </p>
         <button onClick={signOut} className="text-xs text-gray-400 hover:text-tinta">
           Cerrar sesión
@@ -196,7 +205,7 @@ function App() {
             <Route path="/" element={<Layout />}>
               <Route index element={<Navigate to={ultimaRuta || "/operacion/recepcion"} replace />} />
               <Route path="operacion/recepcion" element={<BloqueadoEnClinica><Recepcion /></BloqueadoEnClinica>} />
-              <Route path="operacion/consultorio" element={<Consultorio />} />
+              <Route path="operacion/consultorio" element={<BloqueadoEnRecepcion><Consultorio /></BloqueadoEnRecepcion>} />
               <Route path="operacion/cierre" element={<BloqueadoEnClinica><CierreDiario /></BloqueadoEnClinica>} />
               <Route path="operacion/laboratorio" element={<LaboratorioOperativo />} />
               <Route path="operacion/inventario" element={<Inventario />} />

@@ -27,7 +27,7 @@ import type { Sede } from "../lib/types";
 
 const TABS = [
   { to: "/operacion/recepcion", label: "Recepción", icon: ClipboardList, restringidoEnClinica: true },
-  { to: "/operacion/consultorio", label: "Consultorio", icon: Stethoscope },
+  { to: "/operacion/consultorio", label: "Consultorio", icon: Stethoscope, restringidoEnRecepcion: true },
   { to: "/operacion/cierre", label: "Cierre diario", icon: Wallet, restringidoEnClinica: true },
   { to: "/operacion/laboratorio", label: "Laboratorio", icon: FlaskConical },
   { to: "/operacion/inventario", label: "Inventario", icon: Boxes },
@@ -204,7 +204,8 @@ export function Layout() {
           {TABS.filter(
             (t) =>
               (!t.soloCajaMenor || perfil?.rol === "admin" || perfil?.puede_caja_menor) &&
-              (!t.restringidoEnClinica || perfil?.rol === "admin" || modoOperacion !== "clinica"),
+              (!t.restringidoEnClinica || perfil?.rol === "admin" || modoOperacion !== "clinica") &&
+              (!t.restringidoEnRecepcion || perfil?.rol === "admin" || modoOperacion !== "recepcion"),
           ).map((t) => (
             <NavLink
               key={t.to}
