@@ -62,6 +62,7 @@ export function Parametros() {
   const [pacienteEditar, setPacienteEditar] = useState<Paciente | null>(null);
   const [saldosPaciente, setSaldosPaciente] = useState<SaldoFavor[]>([]);
   const [saldoGuardadoId, setSaldoGuardadoId] = useState<string | null>(null);
+  const [errorSaldoExistente, setErrorSaldoExistente] = useState<string | null>(null);
 
   const [catalogoGeneral, setCatalogoGeneral] = useState<InsumoGeneralCatalogo[]>([]);
   const [categoriasAbiertas, setCategoriasAbiertas] = useState<Record<string, boolean>>({});
@@ -256,17 +257,29 @@ export function Parametros() {
   async function guardarSaldoPaciente(id: string) {
     const s = saldosPaciente.find((x) => x.id === id);
     if (!s) return;
-    await supabase
+    setErrorSaldoExistente(null);
+    const { error } = await supabase
       .from("saldos_favor")
       .update({ fecha: s.fecha, valor: s.valor, valor_disponible: s.valor_disponible, motivo: s.motivo, notas: s.notas })
       .eq("id", id);
+    if (error) {
+      setErrorSaldoExistente(error.message);
+      return;
+    }
     setSaldoGuardadoId(id);
     setTimeout(() => setSaldoGuardadoId((prev) => (prev === id ? null : prev)), 1500);
   }
 
   async function eliminarSaldoPaciente(id: string) {
     if (!window.confirm("¿Eliminar este saldo a favor? Esta acción no se puede deshacer.")) return;
-    await supabase.from("saldos_favor").delete().eq("id", id);
+    setErrorSaldoExistente(null);
+    const { error } = await supabase.from("saldos_favor").delete().eq("id", id);
+    if (error) {
+      // Ej: hay un pago que ya usó este saldo (cargo_pagos.saldo_id) — no se
+      // puede borrar sin antes deshacer ese pago o cambiarlo a otro medio.
+      setErrorSaldoExistente(error.message);
+      return;
+    }
     setSaldosPaciente((prev) => prev.filter((s) => s.id !== id));
   }
 
@@ -522,6 +535,7 @@ export function Parametros() {
           <PacienteAutocomplete onSelect={cargarSaldosPaciente} placeholder="Buscar paciente…" />
         )}
 
+        {errorSaldoExistente && <p className="text-sm text-red-600 mt-2">{errorSaldoExistente}</p>}
         {pacienteEditar && (
           <div className="space-y-3 mt-2">
             {saldosPaciente.map((s) => (
