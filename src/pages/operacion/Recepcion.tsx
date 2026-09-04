@@ -680,7 +680,6 @@ function ModalCobro({
   const [pacienteNombre, setPacienteNombre] = useState("");
   const [estadoVisita, setEstadoVisita] = useState<"espera" | "consulta" | "cobrado">("consulta");
   const [visitaFecha, setVisitaFecha] = useState(today());
-  const [tratamiento, setTratamiento] = useState("");
   const [proximaCita, setProximaCita] = useState("");
   const [insumos, setInsumos] = useState<Record<string, boolean>>({});
   const [insumosOriginales, setInsumosOriginales] = useState<string[]>([]);
@@ -721,7 +720,6 @@ function ModalCobro({
       setPacienteNombre(v.pacientes?.nombre ?? "");
       setEstadoVisita(v.estado);
       setVisitaFecha(v.fecha);
-      setTratamiento(v.tratamiento ?? "");
       setProximaCita(v.proxima_cita ?? "");
       setMotivoCero(v.motivo_valor_cero ?? "");
 
@@ -839,8 +837,6 @@ function ModalCobro({
   function quitarExcedente(idx: number) {
     setExcedentes((prev) => prev.filter((_, i) => i !== idx));
   }
-
-  const idxProcedimiento = cargos.findIndex((c) => c.categoria === "procedimiento");
 
   async function confirmar() {
     setErrorMsg(null);
@@ -982,19 +978,20 @@ function ModalCobro({
 
             <div className="rounded-lg border-2 border-amber-300 bg-amber-50/60 px-3 py-3 mb-3 space-y-3">
               <p className="text-xs font-semibold text-amber-700">Registrado en consultorio (editable aquí)</p>
-              {tratamiento && (
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-gray-500 shrink-0">Tratamiento:</span>
-                  <span className="flex-1 min-w-0 truncate">{tratamiento}</span>
-                  {idxProcedimiento !== -1 && (
-                    <input
-                      type="number"
-                      value={cargos[idxProcedimiento].valor || ""}
-                      onChange={(e) => actualizarValorCargo(idxProcedimiento, e.target.value)}
-                      className="w-28 shrink-0 rounded-md border border-gray-300 px-2 py-1 text-sm"
-                    />
-                  )}
-                </div>
+              {cargos.map(
+                (c, idx) =>
+                  c.categoria === "procedimiento" && (
+                    <div key={c.id ?? `nuevo-${idx}`} className="flex items-center gap-2 text-sm">
+                      <span className="text-gray-500 shrink-0">Tratamiento:</span>
+                      <span className="flex-1 min-w-0 truncate">{c.concepto}</span>
+                      <input
+                        type="number"
+                        value={c.valor || ""}
+                        onChange={(e) => actualizarValorCargo(idx, e.target.value)}
+                        className="w-28 shrink-0 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                      />
+                    </div>
+                  ),
               )}
 
               <div>
