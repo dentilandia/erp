@@ -3,6 +3,12 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 import type { Perfil, Sede } from "../lib/types";
 
+export type ModoOperacion = "recepcion" | "clinica";
+
+function claveModo(perfilId: string) {
+  return `erp_modo_operacion:${perfilId}`;
+}
+
 interface AuthState {
   loading: boolean;
   session: Session | null;
@@ -10,6 +16,8 @@ interface AuthState {
   sede: Sede | null;
   error: string | null;
   recuperandoClave: boolean;
+  modoOperacion: ModoOperacion | null;
+  elegirModoOperacion: (modo: ModoOperacion) => void;
   signIn: (email: string, password: string) => Promise<string | null>;
   signOut: () => Promise<void>;
   enviarRecuperacion: (email: string) => Promise<string | null>;
@@ -25,6 +33,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [recuperandoClave, setRecuperandoClave] = useState(false);
+  const [modoOperacion, setModoOperacion] = useState<ModoOperacion | null>(null);
+
+  function elegirModoOperacion(modo: ModoOperacion) {
+    if (perfil) sessionStorage.setItem(claveModo(perfil.id), modo);
+    setModoOperacion(modo);
+  }
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -40,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!next) {
         setPerfil(null);
         setSede(null);
+        setModoOperacion(null);
         setLoading(false);
       }
     });
@@ -65,6 +80,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       setPerfil(perfilRow as Perfil);
+      const modoGuardado = sessionStorage.getItem(claveModo(perfilRow.id));
+      setModoOperacion(modoGuardado === "recepcion" || modoGuardado === "clinica" ? modoGuardado : null);
       if (perfilRow.sede_id) {
         const { data: sedeRow } = await supabase
           .from("sedes")
@@ -129,7 +146,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ loading, session, perfil, sede, error, recuperandoClave, signIn, signOut, enviarRecuperacion, actualizarClave }}
+      value={{
+        loading,
+        session,
+        perfil,
+        sede,
+        error,
+        recuperandoClave,
+        modoOperacion,
+        elegirModoOperacion,
+        signIn,
+        signOut,
+        enviarRecuperacion,
+        actualizarClave,
+      }}
     >
       {children}
     </AuthContext.Provider>

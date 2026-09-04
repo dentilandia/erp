@@ -36,6 +36,16 @@ function SoloCajaMenor({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/** En modo "Consultorio" (elegido al entrar) solo se puede ver Consultorio,
+ *  Laboratorio, Inventario e Historial — el resto queda bloqueado de
+ *  verdad por ruta, no solo oculto del menú. No aplica a admin (Tomás,
+ *  Sirley), que siempre ve todo sin necesidad de elegir modo. */
+function BloqueadoEnClinica({ children }: { children: React.ReactNode }) {
+  const { perfil, modoOperacion } = useAuth();
+  if (perfil?.rol !== "admin" && modoOperacion === "clinica") return <Navigate to="/operacion/consultorio" replace />;
+  return <>{children}</>;
+}
+
 /** Se muestra cuando hay sesión pero aún no hay perfil (falta que Tomás lo
  *  cree). Deja fijar la contraseña ahí mismo por si el link de invitación/
  *  recuperación no activó la pantalla dedicada (pasa con algunos navegadores
@@ -120,8 +130,45 @@ function SinPerfil({ error }: { error: string | null }) {
   );
 }
 
+/** Se pregunta una sola vez por sesión (no queda guardado de una vez para
+ *  la próxima) — para todo el equipo de operación excepto admin. Determina
+ *  qué tabs/rutas puede ver: en "Consultorio" solo Consultorio, Laboratorio,
+ *  Inventario e Historial; en "Recepción" ve todo lo de operación. */
+function SeleccionarModoOperacion() {
+  const { perfil, elegirModoOperacion, signOut } = useAuth();
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4">
+      <div className="max-w-sm w-full space-y-4 text-center">
+        <p className="text-sm text-gray-500">
+          Hola, {perfil?.nombre} — ¿dónde vas a estar hoy?
+        </p>
+        <div className="space-y-2">
+          <button
+            onClick={() => elegirModoOperacion("recepcion")}
+            className="w-full rounded-xl bg-[#2E253A] text-white py-4 text-sm font-semibold"
+          >
+            Recepción
+          </button>
+          <button
+            onClick={() => elegirModoOperacion("clinica")}
+            className="w-full rounded-xl border-2 border-[#2E253A] text-[#2E253A] py-4 text-sm font-semibold"
+          >
+            Consultorio
+          </button>
+        </div>
+        <p className="text-xs text-gray-400">
+          En Recepción ves todo. En Consultorio solo ves Consultorio, Laboratorio, Inventario e Historial.
+        </p>
+        <button onClick={signOut} className="text-xs text-gray-400 hover:text-tinta">
+          Cerrar sesión
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Gate({ children }: { children: React.ReactNode }) {
-  const { loading, session, perfil, error, recuperandoClave } = useAuth();
+  const { loading, session, perfil, error, recuperandoClave, modoOperacion } = useAuth();
 
   if (loading) {
     return (
@@ -133,6 +180,7 @@ function Gate({ children }: { children: React.ReactNode }) {
   if (recuperandoClave) return <SetPasswordPage />;
   if (!session) return <LoginPage />;
   if (error || !perfil) return <SinPerfil error={error} />;
+  if (perfil.rol !== "admin" && !modoOperacion) return <SeleccionarModoOperacion />;
   return <>{children}</>;
 }
 
@@ -147,14 +195,14 @@ function App() {
           <Routes>
             <Route path="/" element={<Layout />}>
               <Route index element={<Navigate to={ultimaRuta || "/operacion/recepcion"} replace />} />
-              <Route path="operacion/recepcion" element={<Recepcion />} />
+              <Route path="operacion/recepcion" element={<BloqueadoEnClinica><Recepcion /></BloqueadoEnClinica>} />
               <Route path="operacion/consultorio" element={<Consultorio />} />
-              <Route path="operacion/cierre" element={<CierreDiario />} />
+              <Route path="operacion/cierre" element={<BloqueadoEnClinica><CierreDiario /></BloqueadoEnClinica>} />
               <Route path="operacion/laboratorio" element={<LaboratorioOperativo />} />
               <Route path="operacion/inventario" element={<Inventario />} />
               <Route path="operacion/historial" element={<Historial />} />
-              <Route path="operacion/comprobantes" element={<ComprobantesFinanciacion />} />
-              <Route path="operacion/caja-menor" element={<SoloCajaMenor><CajaMenor /></SoloCajaMenor>} />
+              <Route path="operacion/comprobantes" element={<BloqueadoEnClinica><ComprobantesFinanciacion /></BloqueadoEnClinica>} />
+              <Route path="operacion/caja-menor" element={<BloqueadoEnClinica><SoloCajaMenor><CajaMenor /></SoloCajaMenor></BloqueadoEnClinica>} />
               <Route path="administracion/liquidaciones" element={<SoloAdmin><Liquidaciones /></SoloAdmin>} />
               <Route path="administracion/financiacion" element={<SoloAdmin><Financiacion /></SoloAdmin>} />
               <Route path="administracion/cierre-caja" element={<SoloAdmin><CierreCaja /></SoloAdmin>} />
