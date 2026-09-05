@@ -463,6 +463,7 @@ interface ResumenLabRow {
 /** Informativo: qué se envió y qué se instaló hoy, para verificación rápida de operación. */
 function ResumenOperacionDia({ sedeId, fecha }: { sedeId: string; fecha: string }) {
   const [enviados, setEnviados] = useState<ResumenLabRow[]>([]);
+  const [recibidos, setRecibidos] = useState<ResumenLabRow[]>([]);
   const [instalados, setInstalados] = useState<ResumenLabRow[]>([]);
 
   useEffect(() => {
@@ -489,6 +490,12 @@ function ResumenOperacionDia({ sedeId, fecha }: { sedeId: string; fecha: string 
         .eq("sede_id", sedeId)
         .eq("fecha_envio", fecha);
       setEnviados(mapear((env as unknown as Fila[]) ?? []));
+      const { data: rec } = await supabase
+        .from("lab_ordenes")
+        .select(select)
+        .eq("sede_id", sedeId)
+        .eq("fecha_recibido", fecha);
+      setRecibidos(mapear((rec as unknown as Fila[]) ?? []));
       const { data: inst } = await supabase
         .from("lab_ordenes")
         .select(select)
@@ -501,7 +508,7 @@ function ResumenOperacionDia({ sedeId, fecha }: { sedeId: string; fecha: string 
   return (
     <section className="bg-white rounded-xl border border-gray-200 p-4">
       <h3 className="text-sm font-semibold text-gray-500 mb-3">Resumen del día — laboratorio</h3>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
         <div>
           <p className="text-xs font-medium text-gray-400 mb-1">Enviados hoy ({enviados.length})</p>
           <div className="space-y-1">
@@ -511,6 +518,17 @@ function ResumenOperacionDia({ sedeId, fecha }: { sedeId: string; fecha: string 
               </div>
             ))}
             {enviados.length === 0 && <p className="text-xs text-gray-400">Ninguno.</p>}
+          </div>
+        </div>
+        <div>
+          <p className="text-xs font-medium text-gray-400 mb-1">Recibidos hoy ({recibidos.length})</p>
+          <div className="space-y-1">
+            {recibidos.map((r) => (
+              <div key={r.id} className="rounded-md bg-gray-50 px-2 py-1.5">
+                {r.paciente} <span className="text-gray-400">· {r.doctora} · {r.laboratorio}</span>
+              </div>
+            ))}
+            {recibidos.length === 0 && <p className="text-xs text-gray-400">Ninguno.</p>}
           </div>
         </div>
         <div>
