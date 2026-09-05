@@ -29,6 +29,7 @@ const ETIQUETAS_PRECIOS: Record<string, string> = {
   llave_aparato: "Llave de aparato",
   boton_traccion: "Botón de tracción",
   porcentaje_honorario: "% honorario doctora (Odontopediatra)",
+  horas_semana_meta: "Meta de horas semanales (jornada legal)",
 };
 
 interface PedidoPendiente {
