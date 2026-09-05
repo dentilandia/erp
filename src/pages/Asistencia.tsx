@@ -122,15 +122,21 @@ export function Asistencia() {
   const [reporte, setReporte] = useState<FilaPersona[]>([]);
   const [cargandoReporte, setCargandoReporte] = useState(true);
 
+  // Solo para admin: día que se está simulando al marcar, para poder probar
+  // el conteo de horas de varios días seguidos sin esperar a que pasen de
+  // verdad. Por defecto es hoy (comportamiento normal).
+  const [fechaMarca, setFechaMarca] = useState(() => fechaBogota(new Date().toISOString()));
+
   async function cargarRegistros() {
     if (!perfil) return;
-    const desde = new Date();
-    desde.setHours(0, 0, 0, 0);
+    const desde = `${fechaMarca}T00:00:00-05:00`;
+    const hasta = `${sumarDias(fechaMarca, 1)}T00:00:00-05:00`;
     const { data } = await supabase
       .from("asistencia_registros")
       .select("*")
       .eq("perfil_id", perfil.id)
-      .gte("marcado_en", desde.toISOString())
+      .gte("marcado_en", desde)
+      .lt("marcado_en", hasta)
       .order("marcado_en", { ascending: false });
     setRegistros((data as AsistenciaRegistro[]) ?? []);
   }
@@ -138,7 +144,7 @@ export function Asistencia() {
   useEffect(() => {
     cargarRegistros();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [perfil?.id]);
+  }, [perfil?.id, fechaMarca]);
 
   useEffect(() => {
     supabase
@@ -151,25 +157,28 @@ export function Asistencia() {
       });
   }, []);
 
-  useEffect(() => {
+  async function cargarReporte() {
     setCargandoReporte(true);
     // Se pide con 8 días de colchón a cada lado para que las semanas que
     // cruzan el borde del mes queden completas (armarReporteHoras las filtra
     // después por el mes del lunes de cada semana).
     const desde = sumarDias(`${mesReporte}-01`, -8);
     const hasta = sumarDias(`${mesReporte}-01`, 39);
-    supabase
+    const { data } = await supabase
       .from("asistencia_registros")
       .select("perfil_id, tipo, marcado_en, perfiles(nombre)")
       .gte("marcado_en", desde)
-      .lt("marcado_en", hasta)
-      .then(({ data }) => {
-        const filas = ((data as unknown as { perfil_id: string; tipo: TipoAsistencia; marcado_en: string; perfiles: { nombre: string } | null }[]) ?? []).map(
-          (r) => ({ perfil_id: r.perfil_id, tipo: r.tipo, marcado_en: r.marcado_en, nombre: r.perfiles?.nombre ?? "—" }),
-        );
-        setReporte(armarReporteHoras(filas, mesReporte, metaSemanal));
-        setCargandoReporte(false);
-      });
+      .lt("marcado_en", hasta);
+    const filas = ((data as unknown as { perfil_id: string; tipo: TipoAsistencia; marcado_en: string; perfiles: { nombre: string } | null }[]) ?? []).map(
+      (r) => ({ perfil_id: r.perfil_id, tipo: r.tipo, marcado_en: r.marcado_en, nombre: r.perfiles?.nombre ?? "—" }),
+    );
+    setReporte(armarReporteHoras(filas, mesReporte, metaSemanal));
+    setCargandoReporte(false);
+  }
+
+  useEffect(() => {
+    cargarReporte();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesReporte, metaSemanal]);
 
   const yaMarcado = useMemo(() => new Set(registros.map((r) => r.tipo)), [registros]);
@@ -190,7 +199,7 @@ export function Asistencia() {
   async function marcar(tipo: TipoAsistencia) {
     setMarcando(tipo);
     setMensaje(null);
-    const { data, error } = await supabase.functions.invoke("marcar-asistencia", { body: { tipo } });
+    const { data, error } = await supabase.functions.invoke("marcar-asistencia", { body: { tipo, fecha: fechaMarca } });
     setMarcando(null);
     if (error || data?.error) {
       setMensaje({ tipo: "error", texto: data?.error ?? error?.message ?? "No se pudo registrar la marca." });
@@ -202,6 +211,7 @@ export function Asistencia() {
       setFrase({ tipo, texto: data.frase });
     }
     cargarRegistros();
+    if (fechaMarca.slice(0, 7) === mesReporte) cargarReporte();
   }
 
   return (
@@ -210,6 +220,22 @@ export function Asistencia() {
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
         <h2 className="font-semibold text-tinta">Marcar asistencia</h2>
         <p className="text-xs text-gray-400">Solo funciona conectado a la red de la sede.</p>
+
+        {perfil?.rol === "admin" && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 space-y-1">
+            <label className="block text-xs font-medium text-amber-800">Simular día (solo pruebas)</label>
+            <input
+              type="date"
+              value={fechaMarca}
+              onChange={(e) => setFechaMarca(e.target.value)}
+              className="rounded-md border border-amber-300 px-2 py-1 text-sm"
+            />
+            <p className="text-xs text-amber-700">
+              Solo admin puede cambiarlo — a todos los demás siempre se les registra la hora real, aunque este módulo
+              se abra a todo el personal.
+            </p>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-2">
           {TIPOS_ASISTENCIA.map((t) => {
@@ -237,9 +263,11 @@ export function Asistencia() {
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 p-4">
-        <h3 className="text-sm font-semibold text-gray-500 mb-2">Tus marcas de hoy</h3>
+        <h3 className="text-sm font-semibold text-gray-500 mb-2">
+          Tus marcas {fechaMarca === fechaBogota(new Date().toISOString()) ? "de hoy" : `del ${fechaMarca}`}
+        </h3>
         {registros.length === 0 ? (
-          <p className="text-sm text-gray-400">Todavía no has marcado nada hoy.</p>
+          <p className="text-sm text-gray-400">Todavía no has marcado nada ese día.</p>
         ) : (
           <div className="divide-y divide-gray-100">
             {registros.map((r) => (
