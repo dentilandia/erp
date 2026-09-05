@@ -796,6 +796,8 @@ function ModalEditarValor({
 }) {
   const [pacienteNombre, setPacienteNombre] = useState("");
   const [tratamiento, setTratamiento] = useState("");
+  const [proximaCita, setProximaCita] = useState("");
+  const [observacion, setObservacion] = useState("");
   const [cargoId, setCargoId] = useState<string | null>(null);
   const [valor, setValor] = useState("");
   const [cargando, setCargando] = useState(true);
@@ -804,10 +806,21 @@ function ModalEditarValor({
 
   useEffect(() => {
     (async () => {
-      const { data: v } = await supabase.from("visitas").select("tratamiento, pacientes(nombre)").eq("id", visitaId).single();
-      const visita = v as unknown as { tratamiento: string | null; pacientes: { nombre: string } } | null;
+      const { data: v } = await supabase
+        .from("visitas")
+        .select("tratamiento, proxima_cita, observacion, pacientes(nombre)")
+        .eq("id", visitaId)
+        .single();
+      const visita = v as unknown as {
+        tratamiento: string | null;
+        proxima_cita: string | null;
+        observacion: string | null;
+        pacientes: { nombre: string };
+      } | null;
       setPacienteNombre(visita?.pacientes?.nombre ?? "");
       setTratamiento(visita?.tratamiento ?? "");
+      setProximaCita(visita?.proxima_cita ?? "");
+      setObservacion(visita?.observacion ?? "");
       const { data: cargo } = await supabase
         .from("cargos")
         .select("id, valor")
@@ -827,7 +840,12 @@ function ModalEditarValor({
     setError(null);
     const { error: errorVisita } = await supabase
       .from("visitas")
-      .update({ tratamiento, updated_at: new Date().toISOString() })
+      .update({
+        tratamiento,
+        proxima_cita: proximaCita.trim() || null,
+        observacion: observacion.trim() || null,
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", visitaId);
     if (errorVisita) {
       setGuardando(false);
@@ -886,6 +904,24 @@ function ModalEditarValor({
                 de procedimiento.
               </p>
             )}
+            <div>
+              <label className="block text-sm font-medium mb-1">Próxima cita</label>
+              <input
+                value={proximaCita}
+                onChange={(e) => setProximaCita(e.target.value)}
+                placeholder="Ej: en 3 semanas para ajuste, o 15 de agosto"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            </div>
+            <div className="rounded-lg bg-sky-50 border border-sky-200 p-3">
+              <label className="block text-sm font-medium mb-1 text-sky-800">Observación (opcional)</label>
+              <input
+                value={observacion}
+                onChange={(e) => setObservacion(e.target.value)}
+                placeholder="Ej: el paciente debe dejar saldo a favor de $50.000"
+                className="w-full rounded-lg border border-sky-200 px-3 py-2 text-sm"
+              />
+            </div>
             {error && <p className="text-sm text-red-600">{error}</p>}
             <button
               onClick={guardar}
