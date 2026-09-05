@@ -77,6 +77,7 @@ export interface Visita {
   remision_especialidad: string | null;
   observacion: string | null;
   atendido_por: string | null;
+  es_venta_producto: boolean;
   created_at: string;
   updated_at: string;
 }

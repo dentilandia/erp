@@ -29,6 +29,7 @@ interface VisitaRow {
   fecha: string;
   paciente_id: string;
   doctora_id: string;
+  es_venta_producto: boolean;
   pacientes: { nombre: string };
   doctoras: { nombre: string; color_pastel: string };
 }
@@ -98,7 +99,7 @@ export function Recepcion() {
   async function cargarVisitas() {
     const { data } = await supabase
       .from("visitas")
-      .select("id, estado, fecha, paciente_id, doctora_id, pacientes(nombre), doctoras(nombre, color_pastel)")
+      .select("id, estado, fecha, paciente_id, doctora_id, es_venta_producto, pacientes(nombre), doctoras(nombre, color_pastel)")
       .eq("sede_id", sedeActiva.id)
       .eq("fecha", fecha)
       .order("created_at", { ascending: false });
@@ -215,6 +216,7 @@ export function Recepcion() {
         fecha,
         estado: "cobrado",
         cobrado_por: perfil?.id ?? null,
+        es_venta_producto: true,
       })
       .select("id")
       .single();
@@ -256,7 +258,11 @@ export function Recepcion() {
 
   const enEspera = visitas.filter((v) => v.estado === "espera");
   const listaCobro = visitas.filter((v) => v.estado === "consulta");
-  const cobradasTodas = visitas.filter((v) => v.estado === "cobrado");
+  // Las ventas de producto sin cita usan una visita solo como vehículo técnico
+  // (cargos exige visita_id) — no son un paciente atendido por esa doctora,
+  // así que van aparte, no mezcladas con "Cobrados hoy".
+  const cobradasTodas = visitas.filter((v) => v.estado === "cobrado" && !v.es_venta_producto);
+  const ventasProductoHoy = visitas.filter((v) => v.estado === "cobrado" && v.es_venta_producto);
   const doctorasCobradas = Array.from(
     new Map(cobradasTodas.map((v) => [v.doctora_id, v.doctoras?.nombre])).entries(),
   ).sort((a, b) => (a[1] ?? "").localeCompare(b[1] ?? ""));
@@ -541,6 +547,33 @@ export function Recepcion() {
           ))}
         </div>
       </section>
+
+      {ventasProductoHoy.length > 0 && (
+        <section>
+          <h3 className="text-sm font-semibold text-gray-500 mb-2">
+            Otros pagos recibidos hoy ({ventasProductoHoy.length})
+          </h3>
+          <p className="text-xs text-gray-400 mb-2">Ventas de producto sin cita — no cuentan como paciente de ninguna doctora.</p>
+          <div className="space-y-2">
+            {ventasProductoHoy.map((v) => (
+              <div
+                key={v.id}
+                className="w-full flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2.5 opacity-70"
+              >
+                <button
+                  onClick={() => setCobrandoId(v.id)}
+                  className="flex-1 flex items-center justify-between text-left hover:opacity-80"
+                >
+                  <span className="font-medium text-tinta">{v.pacientes?.nombre}</span>
+                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                    Venta de producto
+                  </span>
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {cobrandoId && (
         <ModalCobro

@@ -35,7 +35,7 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: "Sesión inválida." }), { status: 401, headers: cors });
   }
 
-  let body: { tipo?: string; fecha?: string };
+  let body: { tipo?: string; fecha?: string; hora?: string };
   try {
     body = await req.json();
   } catch {
@@ -74,17 +74,17 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // Solo un admin puede simular el día de una marca (para probar el conteo
-  // de horas sin esperar días reales) — a cualquier otro rol se le ignora
-  // por completo el campo "fecha" y siempre queda la hora real del server,
-  // aunque el rol se abra a todo el personal más adelante.
+  // Solo un admin puede simular el día/hora de una marca (para probar el
+  // conteo de horas sin esperar días reales) — a cualquier otro rol se le
+  // ignora por completo "fecha"/"hora" y siempre queda la hora real del
+  // server, aunque el rol se abra a todo el personal más adelante. Bogotá
+  // es UTC-5 fijo (sin horario de verano), así que ese offset es siempre
+  // correcto acá.
   let marcadoEn: string | undefined;
   if (perfil.rol === "admin" && body.fecha && /^\d{4}-\d{2}-\d{2}$/.test(body.fecha)) {
-    const ahora = new Date();
-    const [y, m, d] = body.fecha.split("-").map(Number);
-    marcadoEn = new Date(
-      Date.UTC(y, m - 1, d, ahora.getUTCHours(), ahora.getUTCMinutes(), ahora.getUTCSeconds(), ahora.getUTCMilliseconds()),
-    ).toISOString();
+    const hora = body.hora && /^\d{2}:\d{2}(:\d{2})?$/.test(body.hora) ? body.hora : "12:00";
+    const horaCompleta = hora.length === 5 ? `${hora}:00` : hora;
+    marcadoEn = new Date(`${body.fecha}T${horaCompleta}-05:00`).toISOString();
   }
 
   const { error: insertError } = await admin.from("asistencia_registros").insert({

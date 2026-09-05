@@ -34,6 +34,10 @@ function sumarDias(fechaYMD: string, dias: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
+function horaBogotaAhora(): string {
+  return new Date().toLocaleTimeString("en-GB", { timeZone: "America/Bogota", hour: "2-digit", minute: "2-digit" });
+}
+
 interface RegistroReporte {
   perfil_id: string;
   nombre: string;
@@ -126,6 +130,7 @@ export function Asistencia() {
   // el conteo de horas de varios días seguidos sin esperar a que pasen de
   // verdad. Por defecto es hoy (comportamiento normal).
   const [fechaMarca, setFechaMarca] = useState(() => fechaBogota(new Date().toISOString()));
+  const [horaMarca, setHoraMarca] = useState(() => horaBogotaAhora());
 
   async function cargarRegistros() {
     if (!perfil) return;
@@ -199,7 +204,9 @@ export function Asistencia() {
   async function marcar(tipo: TipoAsistencia) {
     setMarcando(tipo);
     setMensaje(null);
-    const { data, error } = await supabase.functions.invoke("marcar-asistencia", { body: { tipo, fecha: fechaMarca } });
+    const { data, error } = await supabase.functions.invoke("marcar-asistencia", {
+      body: { tipo, fecha: fechaMarca, hora: horaMarca },
+    });
     setMarcando(null);
     if (error || data?.error) {
       setMensaje({ tipo: "error", texto: data?.error ?? error?.message ?? "No se pudo registrar la marca." });
@@ -223,13 +230,21 @@ export function Asistencia() {
 
         {perfil?.rol === "admin" && (
           <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 space-y-1">
-            <label className="block text-xs font-medium text-amber-800">Simular día (solo pruebas)</label>
-            <input
-              type="date"
-              value={fechaMarca}
-              onChange={(e) => setFechaMarca(e.target.value)}
-              className="rounded-md border border-amber-300 px-2 py-1 text-sm"
-            />
+            <label className="block text-xs font-medium text-amber-800">Simular día y hora (solo pruebas)</label>
+            <div className="flex gap-2">
+              <input
+                type="date"
+                value={fechaMarca}
+                onChange={(e) => setFechaMarca(e.target.value)}
+                className="rounded-md border border-amber-300 px-2 py-1 text-sm"
+              />
+              <input
+                type="time"
+                value={horaMarca}
+                onChange={(e) => setHoraMarca(e.target.value)}
+                className="rounded-md border border-amber-300 px-2 py-1 text-sm"
+              />
+            </div>
             <p className="text-xs text-amber-700">
               Solo admin puede cambiarlo — a todos los demás siempre se les registra la hora real, aunque este módulo
               se abra a todo el personal.
