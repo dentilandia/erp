@@ -48,7 +48,7 @@ Deno.serve(async (req: Request) => {
   const admin = createClient(supabaseUrl, serviceRoleKey);
   const { data: perfil, error: perfilError } = await admin
     .from("perfiles")
-    .select("id, sede_id, nombre")
+    .select("id, sede_id, rol, nombre")
     .eq("id", userData.user.id)
     .single();
   if (perfilError || !perfil) {
@@ -57,7 +57,10 @@ Deno.serve(async (req: Request) => {
 
   const ipCliente = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
 
-  if (perfil.sede_id) {
+  // Los administrativos nunca quedan restringidos por IP, sin importar si
+  // tienen sede_id asignado — la restricción es solo para el personal
+  // asistencial/de operación.
+  if (perfil.rol !== "admin" && perfil.sede_id) {
     const { data: sede } = await admin.from("sedes").select("ip_permitida").eq("id", perfil.sede_id).single();
     const permitidas = (sede?.ip_permitida ?? "")
       .split(",")

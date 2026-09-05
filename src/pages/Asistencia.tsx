@@ -43,6 +43,19 @@ export function Asistencia() {
 
   const yaMarcado = useMemo(() => new Set(registros.map((r) => r.tipo)), [registros]);
 
+  // Orden de la jornada, pero flexible: la salida final siempre queda
+  // habilitada apenas hay llegada (sin exigir pasar por el almuerzo), para
+  // no bloquear a quien solo trabaja media jornada compensando horas.
+  function habilitado(tipo: TipoAsistencia): boolean {
+    if (yaMarcado.has(tipo) || yaMarcado.has("salida")) return false;
+    if (tipo === "llegada") return true;
+    if (!yaMarcado.has("llegada")) return false;
+    if (tipo === "salida") return true;
+    if (tipo === "salida_almuerzo") return true;
+    if (tipo === "entrada_almuerzo") return yaMarcado.has("salida_almuerzo");
+    return false;
+  }
+
   async function marcar(tipo: TipoAsistencia) {
     setMarcando(tipo);
     setMensaje(null);
@@ -70,11 +83,12 @@ export function Asistencia() {
           {TIPOS_ASISTENCIA.map((t) => {
             const Icono = ICONOS[t.value];
             const marcadoHoy = yaMarcado.has(t.value);
+            const puede = habilitado(t.value);
             return (
               <button
                 key={t.value}
                 onClick={() => marcar(t.value)}
-                disabled={marcando !== null || marcadoHoy}
+                disabled={marcando !== null || !puede}
                 className={`flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-medium disabled:opacity-40 ${
                   marcadoHoy ? "bg-gray-100 text-gray-400" : "bg-[var(--acento)] text-white"
                 }`}
