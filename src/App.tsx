@@ -218,7 +218,7 @@ function App() {
               <Route path="administracion/reportes" element={<SoloAdmin><Reportes /></SoloAdmin>} />
               <Route path="administracion/inventarios" element={<SoloAdmin><AdministracionInventarios /></SoloAdmin>} />
               <Route path="parametros" element={<SoloAdmin><Parametros /></SoloAdmin>} />
-              <Route path="asistencia" element={<Asistencia />} />
+              <Route path="asistencia" element={<SoloAdmin><Asistencia /></SoloAdmin>} />
             </Route>
           </Routes>
         </Gate>
