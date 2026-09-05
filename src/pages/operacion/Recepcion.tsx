@@ -85,6 +85,16 @@ export function Recepcion() {
   const [errorSaldoExterno, setErrorSaldoExterno] = useState<string | null>(null);
   const [mostrarSaldoExterno, setMostrarSaldoExterno] = useState(false);
 
+  const [precios, setPrecios] = useState<Record<string, number>>({});
+  const [mostrarVentaProducto, setMostrarVentaProducto] = useState(false);
+  const [pacienteVentaProducto, setPacienteVentaProducto] = useState<Paciente | null>(null);
+  const [productoVenta, setProductoVenta] = useState(Object.keys(CONCEPTO_PRECIO_CLAVE)[0]);
+  const [valorVentaProducto, setValorVentaProducto] = useState("");
+  const [medioVentaProducto, setMedioVentaProducto] = useState<MedioPago>("efectivo");
+  const [guardandoVentaProducto, setGuardandoVentaProducto] = useState(false);
+  const [ventaProductoOk, setVentaProductoOk] = useState(false);
+  const [errorVentaProducto, setErrorVentaProducto] = useState<string | null>(null);
+
   async function cargarVisitas() {
     const { data } = await supabase
       .from("visitas")
@@ -95,6 +105,14 @@ export function Recepcion() {
     setVisitas((data as unknown as VisitaRow[]) ?? []);
     setCargando(false);
   }
+
+  useEffect(() => {
+    supabase.from("precios_config").select("clave, valor").then(({ data }) => {
+      const mapa: Record<string, number> = {};
+      (data ?? []).forEach((p) => (mapa[p.clave] = Number(p.valor)));
+      setPrecios(mapa);
+    });
+  }, []);
 
   useEffect(() => {
     setCargando(true);
@@ -178,6 +196,62 @@ export function Recepcion() {
     setNotaSaldoExterno("");
     setSaldoExternoOk(true);
     setTimeout(() => setSaldoExternoOk(false), 2000);
+  }
+
+  async function registrarVentaProducto() {
+    const valor = Number(valorVentaProducto);
+    if (!pacienteVentaProducto || !valor || !nuevaDoctoraId) return;
+    setGuardandoVentaProducto(true);
+    setErrorVentaProducto(null);
+    // Se crea una visita "cobrado" al vuelo: cargos exige visita_id, pero al ser
+    // concepto_administrativo nunca cuenta como honorario de doctora, así que la
+    // doctora asociada es irrelevante para las liquidaciones — solo cumple la FK.
+    const { data: visita, error: errorVisita } = await supabase
+      .from("visitas")
+      .insert({
+        sede_id: sedeActiva.id,
+        paciente_id: pacienteVentaProducto.id,
+        doctora_id: nuevaDoctoraId,
+        fecha,
+        estado: "cobrado",
+        cobrado_por: perfil?.id ?? null,
+      })
+      .select("id")
+      .single();
+    if (errorVisita || !visita) {
+      setGuardandoVentaProducto(false);
+      setErrorVentaProducto(errorVisita?.message ?? "No se pudo registrar la venta.");
+      return;
+    }
+    const { data: cargo, error: errorCargo } = await supabase
+      .from("cargos")
+      .insert({
+        visita_id: visita.id,
+        categoria: "concepto_administrativo",
+        concepto: productoVenta,
+        valor,
+        registrado_en: "recepcion",
+      })
+      .select("id")
+      .single();
+    if (errorCargo || !cargo) {
+      setGuardandoVentaProducto(false);
+      setErrorVentaProducto(errorCargo?.message ?? "No se pudo registrar la venta.");
+      return;
+    }
+    const { error: errorPago } = await supabase
+      .from("cargo_pagos")
+      .insert({ cargo_id: cargo.id, medio_pago: medioVentaProducto, valor });
+    setGuardandoVentaProducto(false);
+    if (errorPago) {
+      setErrorVentaProducto(errorPago.message);
+      return;
+    }
+    setPacienteVentaProducto(null);
+    setValorVentaProducto("");
+    setVentaProductoOk(true);
+    setTimeout(() => setVentaProductoOk(false), 2000);
+    cargarVisitas();
   }
 
   const enEspera = visitas.filter((v) => v.estado === "espera");
@@ -323,6 +397,85 @@ export function Recepcion() {
               >
                 {saldoExternoOk ? <Check size={16} /> : <Plus size={16} />}
                 {guardandoSaldoExterno ? "Registrando…" : saldoExternoOk ? "Registrado" : "Registrar saldo a favor"}
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+
+      <section className="bg-white rounded-xl border border-dashed border-gray-300 p-4">
+        {!mostrarVentaProducto ? (
+          <button
+            onClick={() => setMostrarVentaProducto(true)}
+            className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]"
+          >
+            <Plus size={16} /> Registrar venta de producto
+          </button>
+        ) : (
+          <>
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="font-semibold text-tinta">Registrar venta de producto</h2>
+              <button onClick={() => setMostrarVentaProducto(false)}>
+                <X size={16} className="text-gray-400" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mb-3">
+              Para llaves, cajas de aparato o GUM que se venden sueltas, sin que el paciente tenga cita ese día.
+            </p>
+            <div className="space-y-2">
+              {pacienteVentaProducto ? (
+                <div className="flex items-center justify-between rounded-lg border border-[var(--acento)] bg-[var(--acento)]/5 px-3 py-2 text-sm">
+                  <span>{pacienteVentaProducto.nombre}</span>
+                  <button onClick={() => setPacienteVentaProducto(null)}>
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : (
+                <PacienteAutocomplete onSelect={setPacienteVentaProducto} placeholder="Buscar paciente…" />
+              )}
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={productoVenta}
+                  onChange={(e) => {
+                    setProductoVenta(e.target.value);
+                    const clave = CONCEPTO_PRECIO_CLAVE[e.target.value];
+                    setValorVentaProducto(clave && precios[clave] ? String(precios[clave]) : "");
+                  }}
+                  className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                >
+                  {Object.keys(CONCEPTO_PRECIO_CLAVE).map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  placeholder="Valor"
+                  value={valorVentaProducto}
+                  onChange={(e) => setValorVentaProducto(e.target.value)}
+                  className="w-32 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                />
+                <select
+                  value={medioVentaProducto}
+                  onChange={(e) => setMedioVentaProducto(e.target.value as MedioPago)}
+                  className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                >
+                  {MEDIOS_PAGO.filter((m) => m.value !== "saldo_favor").map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {errorVentaProducto && <p className="text-sm text-red-600">{errorVentaProducto}</p>}
+              <button
+                onClick={registrarVentaProducto}
+                disabled={!pacienteVentaProducto || !valorVentaProducto || !nuevaDoctoraId || guardandoVentaProducto}
+                className="flex items-center gap-2 rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+              >
+                {ventaProductoOk ? <Check size={16} /> : <Plus size={16} />}
+                {guardandoVentaProducto ? "Registrando…" : ventaProductoOk ? "Registrado" : "Registrar venta"}
               </button>
             </div>
           </>
@@ -699,6 +852,7 @@ function ModalCobro({
   const [estadoVisita, setEstadoVisita] = useState<"espera" | "consulta" | "cobrado">("consulta");
   const [visitaFecha, setVisitaFecha] = useState(today());
   const [proximaCita, setProximaCita] = useState("");
+  const [observacion, setObservacion] = useState("");
   const [insumos, setInsumos] = useState<Record<string, boolean>>({});
   const [insumosOriginales, setInsumosOriginales] = useState<string[]>([]);
   const [cargos, setCargos] = useState<CargoEdit[]>([]);
@@ -720,7 +874,7 @@ function ModalCobro({
     (async () => {
       const { data: visita } = await supabase
         .from("visitas")
-        .select("id, estado, fecha, paciente_id, motivo_valor_cero, tratamiento, proxima_cita, pacientes(nombre)")
+        .select("id, estado, fecha, paciente_id, motivo_valor_cero, tratamiento, proxima_cita, observacion, pacientes(nombre)")
         .eq("id", visitaId)
         .single();
       if (!visita) return;
@@ -732,6 +886,7 @@ function ModalCobro({
         motivo_valor_cero: string | null;
         tratamiento: string | null;
         proxima_cita: string | null;
+        observacion: string | null;
         pacientes: { nombre: string };
       };
       setPacienteId(v.paciente_id);
@@ -739,6 +894,7 @@ function ModalCobro({
       setEstadoVisita(v.estado);
       setVisitaFecha(v.fecha);
       setProximaCita(v.proxima_cita ?? "");
+      setObservacion(v.observacion ?? "");
       setMotivoCero(v.motivo_valor_cero ?? "");
 
       const { data: cargosData } = await supabase
@@ -1053,6 +1209,12 @@ function ModalCobro({
                 />
               </div>
             </div>
+
+            {observacion && (
+              <p className="rounded-lg bg-sky-50 border border-sky-200 px-3 py-2 text-sm text-sky-800 mb-3">
+                <span className="font-semibold">Observación de consultorio:</span> {observacion}
+              </p>
+            )}
 
             {cargos.length === 0 && (
               <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-4">
