@@ -1,18 +1,27 @@
-import { useEffect, useState } from "react";
-import { LogIn, LogOut } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { LogIn, LogOut, Coffee, Utensils, Sparkles } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthContext";
-import type { AsistenciaRegistro } from "../lib/types";
+import { TIPOS_ASISTENCIA, type AsistenciaRegistro, type TipoAsistencia } from "../lib/types";
 
-/** Marcar llegada/salida — la IP se valida del lado del servidor (edge
- *  function marcar-asistencia), no acá, porque un dato mandado desde el
- *  navegador se podría falsificar. Si la sede no tiene IP configurada en
- *  Parámetros, no se restringe (para no bloquear antes de configurarla). */
+const ICONOS: Record<TipoAsistencia, typeof LogIn> = {
+  llegada: LogIn,
+  salida_almuerzo: Coffee,
+  entrada_almuerzo: Utensils,
+  salida: LogOut,
+};
+
+/** Marcar la jornada (llegada, salida/entrada de almuerzo, salida final) — la
+ *  IP se valida del lado del servidor (edge function marcar-asistencia), no
+ *  acá, porque un dato mandado desde el navegador se podría falsificar. Al
+ *  marcar llegada o salida final, el edge function devuelve una frase del
+ *  día (motivadora o de agradecimiento) que hay que cerrar para continuar. */
 export function Asistencia() {
   const { perfil } = useAuth();
-  const [marcando, setMarcando] = useState<"llegada" | "salida" | null>(null);
+  const [marcando, setMarcando] = useState<TipoAsistencia | null>(null);
   const [mensaje, setMensaje] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [registros, setRegistros] = useState<AsistenciaRegistro[]>([]);
+  const [frase, setFrase] = useState<{ tipo: "llegada" | "salida"; texto: string } | null>(null);
 
   async function cargarRegistros() {
     if (!perfil) return;
@@ -32,7 +41,9 @@ export function Asistencia() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [perfil?.id]);
 
-  async function marcar(tipo: "llegada" | "salida") {
+  const yaMarcado = useMemo(() => new Set(registros.map((r) => r.tipo)), [registros]);
+
+  async function marcar(tipo: TipoAsistencia) {
     setMarcando(tipo);
     setMensaje(null);
     const { data, error } = await supabase.functions.invoke("marcar-asistencia", { body: { tipo } });
@@ -41,7 +52,11 @@ export function Asistencia() {
       setMensaje({ tipo: "error", texto: data?.error ?? error?.message ?? "No se pudo registrar la marca." });
       return;
     }
-    setMensaje({ tipo: "ok", texto: tipo === "llegada" ? "Llegada registrada." : "Salida registrada." });
+    const etiqueta = TIPOS_ASISTENCIA.find((t) => t.value === tipo)?.label ?? tipo;
+    setMensaje({ tipo: "ok", texto: `${etiqueta} registrada.` });
+    if (data?.frase && (tipo === "llegada" || tipo === "salida")) {
+      setFrase({ tipo, texto: data.frase });
+    }
     cargarRegistros();
   }
 
@@ -52,20 +67,22 @@ export function Asistencia() {
         <p className="text-xs text-gray-400">Solo funciona conectado a la red de la sede.</p>
 
         <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => marcar("llegada")}
-            disabled={marcando !== null}
-            className="flex items-center justify-center gap-2 rounded-lg bg-emerald-600 text-white py-2.5 text-sm font-medium disabled:opacity-40"
-          >
-            <LogIn size={16} /> {marcando === "llegada" ? "Marcando…" : "Marcar llegada"}
-          </button>
-          <button
-            onClick={() => marcar("salida")}
-            disabled={marcando !== null}
-            className="flex items-center justify-center gap-2 rounded-lg bg-amber-600 text-white py-2.5 text-sm font-medium disabled:opacity-40"
-          >
-            <LogOut size={16} /> {marcando === "salida" ? "Marcando…" : "Marcar salida"}
-          </button>
+          {TIPOS_ASISTENCIA.map((t) => {
+            const Icono = ICONOS[t.value];
+            const marcadoHoy = yaMarcado.has(t.value);
+            return (
+              <button
+                key={t.value}
+                onClick={() => marcar(t.value)}
+                disabled={marcando !== null || marcadoHoy}
+                className={`flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-medium disabled:opacity-40 ${
+                  marcadoHoy ? "bg-gray-100 text-gray-400" : "bg-[var(--acento)] text-white"
+                }`}
+              >
+                <Icono size={16} /> {marcando === t.value ? "Marcando…" : marcadoHoy ? `${t.label} ✓` : t.label}
+              </button>
+            );
+          })}
         </div>
 
         {mensaje && (
@@ -81,13 +98,31 @@ export function Asistencia() {
           <div className="divide-y divide-gray-100">
             {registros.map((r) => (
               <div key={r.id} className="flex items-center justify-between py-1.5 text-sm">
-                <span className="capitalize font-medium">{r.tipo}</span>
+                <span className="font-medium">{TIPOS_ASISTENCIA.find((t) => t.value === r.tipo)?.label ?? r.tipo}</span>
                 <span className="text-gray-500">{new Date(r.marcado_en).toLocaleTimeString("es-CO")}</span>
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {frase && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-30">
+          <div className="max-w-sm w-full rounded-2xl bg-gradient-to-br from-violet-500 to-teal p-6 text-white text-center space-y-4 shadow-2xl">
+            <Sparkles size={32} className="mx-auto" />
+            <p className="text-xs font-semibold uppercase tracking-wide opacity-80">
+              {frase.tipo === "llegada" ? "Para arrancar el día" : "Gracias por hoy"}
+            </p>
+            <p className="text-lg font-medium leading-snug">{frase.texto}</p>
+            <button
+              onClick={() => setFrase(null)}
+              className="w-full rounded-lg bg-white/20 hover:bg-white/30 py-2.5 text-sm font-semibold"
+            >
+              Entendido
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

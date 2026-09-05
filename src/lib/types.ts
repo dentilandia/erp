@@ -18,7 +18,14 @@ export interface Sede {
 /** Control de asistencia — marca de llegada/salida con foto, restringida a
  *  la IP pública de la sede (se valida en el edge function marcar-asistencia,
  *  esta tabla no admite insert directo desde el cliente). */
-export type TipoAsistencia = "llegada" | "salida";
+export type TipoAsistencia = "llegada" | "salida_almuerzo" | "entrada_almuerzo" | "salida";
+
+export const TIPOS_ASISTENCIA: { value: TipoAsistencia; label: string }[] = [
+  { value: "llegada", label: "Llegada" },
+  { value: "salida_almuerzo", label: "Salida a almuerzo" },
+  { value: "entrada_almuerzo", label: "Regreso de almuerzo" },
+  { value: "salida", label: "Salida (fin de jornada)" },
+];
 
 export interface AsistenciaRegistro {
   id: string;
@@ -28,6 +35,16 @@ export interface AsistenciaRegistro {
   foto_path: string | null;
   ip: string | null;
   marcado_en: string;
+}
+
+/** Frase mostrada al marcar llegada (motivadora) o salida final
+ *  (agradecimiento/felicitación) — rota una nueva cada día. */
+export interface FraseMotivacional {
+  id: string;
+  tipo: "llegada" | "salida";
+  texto: string;
+  orden: number;
+  activa: boolean;
 }
 
 export interface Doctora {

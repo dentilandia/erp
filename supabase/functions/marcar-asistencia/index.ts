@@ -1,11 +1,18 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-// Registra una marca de llegada/salida. Se ejecuta con el rol de servicio a
-// propósito: la tabla asistencia_registros no tiene policy de insert para
-// usuarios normales, así que este es el único camino para escribir ahí. Eso
-// permite comprobar la IP pública del que llama (tomada de la conexión real,
-// no de un dato que mande el cliente) antes de aceptar el registro.
+const TIPOS_VALIDOS = ["llegada", "salida_almuerzo", "entrada_almuerzo", "salida"];
+
+// Registra una marca de la jornada (llegada, salida/entrada de almuerzo,
+// salida final). Se ejecuta con el rol de servicio a propósito: la tabla
+// asistencia_registros no tiene policy de insert para usuarios normales, así
+// que este es el único camino para escribir ahí. Eso permite comprobar la IP
+// pública del que llama (tomada de la conexión real, no de un dato que mande
+// el cliente) antes de aceptar el registro.
+//
+// Al marcar "llegada" o "salida" (fin de jornada) devuelve además una frase
+// motivadora/de agradecimiento del día — rotan por índice de día del año,
+// así que no hay que asignarle fecha a cada una a mano.
 Deno.serve(async (req: Request) => {
   const cors = {
     "Access-Control-Allow-Origin": "*",
@@ -28,13 +35,13 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: "Sesión inválida." }), { status: 401, headers: cors });
   }
 
-  let body: { tipo?: string; foto_path?: string };
+  let body: { tipo?: string };
   try {
     body = await req.json();
   } catch {
     return new Response(JSON.stringify({ error: "Solicitud inválida." }), { status: 400, headers: cors });
   }
-  if (body.tipo !== "llegada" && body.tipo !== "salida") {
+  if (!body.tipo || !TIPOS_VALIDOS.includes(body.tipo)) {
     return new Response(JSON.stringify({ error: "Tipo inválido." }), { status: 400, headers: cors });
   }
 
@@ -68,14 +75,27 @@ Deno.serve(async (req: Request) => {
     perfil_id: perfil.id,
     sede_id: perfil.sede_id,
     tipo: body.tipo,
-    foto_path: body.foto_path ?? null,
     ip: ipCliente,
   });
   if (insertError) {
     return new Response(JSON.stringify({ error: insertError.message }), { status: 500, headers: cors });
   }
 
-  return new Response(JSON.stringify({ success: true }), {
+  let frase: string | null = null;
+  if (body.tipo === "llegada" || body.tipo === "salida") {
+    const { data: frases } = await admin
+      .from("frases_motivacionales")
+      .select("texto")
+      .eq("tipo", body.tipo)
+      .eq("activa", true)
+      .order("orden");
+    if (frases && frases.length > 0) {
+      const diaDelAnio = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+      frase = frases[diaDelAnio % frases.length].texto;
+    }
+  }
+
+  return new Response(JSON.stringify({ success: true, frase }), {
     status: 200,
     headers: { ...cors, "Content-Type": "application/json" },
   });
