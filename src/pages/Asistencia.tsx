@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { LogIn, LogOut, Coffee, Utensils, Sparkles } from "lucide-react";
+import { LogIn, LogOut, Coffee, Utensils, Sunrise, PartyPopper } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthContext";
 import { TIPOS_ASISTENCIA, type AsistenciaRegistro, type TipoAsistencia } from "../lib/types";
@@ -358,19 +358,39 @@ export function Asistencia() {
       </div>
 
       {frase && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-30">
-          <div className="max-w-sm w-full rounded-2xl bg-gradient-to-br from-violet-500 to-teal p-6 text-white text-center space-y-4 shadow-2xl">
-            <Sparkles size={32} className="mx-auto" />
-            <p className="text-xs font-semibold uppercase tracking-wide opacity-80">
-              {frase.tipo === "llegada" ? "Para arrancar el día" : "Gracias por hoy"}
-            </p>
-            <p className="text-lg font-medium leading-snug">{frase.texto}</p>
-            <button
-              onClick={() => setFrase(null)}
-              className="w-full rounded-lg bg-white/20 hover:bg-white/30 py-2.5 text-sm font-semibold"
-            >
-              Entendido
-            </button>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-30">
+          <div
+            className={`relative max-w-sm w-full rounded-3xl p-8 text-white text-center shadow-2xl overflow-hidden ${
+              frase.tipo === "llegada"
+                ? "bg-gradient-to-br from-amber-400 via-orange-500 to-rose-500"
+                : "bg-gradient-to-br from-indigo-600 via-violet-600 to-purple-700"
+            }`}
+          >
+            <div className="absolute -top-12 -right-12 w-40 h-40 rounded-full bg-white/10" />
+            <div className="absolute -bottom-16 -left-12 w-48 h-48 rounded-full bg-white/10" />
+
+            <div className="relative space-y-5">
+              <div className="mx-auto w-16 h-16 rounded-full bg-white/20 flex items-center justify-center">
+                {frase.tipo === "llegada" ? <Sunrise size={30} /> : <PartyPopper size={30} />}
+              </div>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest opacity-80 mb-1">
+                  {frase.tipo === "llegada" ? "Para arrancar el día" : "Fin de jornada"}
+                </p>
+                <p className="text-2xl font-extrabold leading-tight">
+                  {frase.tipo === "llegada" ? "¡Buenos días!" : "¡Lo lograste!"}
+                </p>
+              </div>
+              <p className="text-base font-medium leading-snug bg-white/15 rounded-xl px-4 py-3">{frase.texto}</p>
+              <button
+                onClick={() => setFrase(null)}
+                className={`w-full rounded-xl bg-white py-3 text-sm font-bold hover:bg-white/90 ${
+                  frase.tipo === "llegada" ? "text-orange-600" : "text-violet-700"
+                }`}
+              >
+                Entendido
+              </button>
+            </div>
           </div>
         </div>
       )}
