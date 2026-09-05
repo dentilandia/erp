@@ -804,23 +804,59 @@ function ModalEditarValor({
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [visitaDatos, setVisitaDatos] = useState<{ sede_id: string; doctora_id: string; paciente_id: string; fecha: string } | null>(
+    null,
+  );
+  const [labOrdenes, setLabOrdenes] = useState<{ id: string; laboratorioNombre: string; tipoServicio: string }[]>([]);
+  const [laboratorios, setLaboratorios] = useState<Laboratorio[]>([]);
+  const [agregarLab, setAgregarLab] = useState(false);
+  const [laboratorioId, setLaboratorioId] = useState("");
+  const [tipoServicio, setTipoServicio] = useState(TIPOS_SERVICIO_LAB[0].value);
+  const [guardandoLab, setGuardandoLab] = useState(false);
+
+  async function cargarLabOrdenes() {
+    const { data } = await supabase
+      .from("lab_ordenes")
+      .select("id, tipo_servicio, laboratorios(nombre)")
+      .eq("visita_id", visitaId);
+    setLabOrdenes(
+      ((data as unknown as { id: string; tipo_servicio: string; laboratorios: { nombre: string } | null }[]) ?? []).map((o) => ({
+        id: o.id,
+        laboratorioNombre: o.laboratorios?.nombre ?? "—",
+        tipoServicio: o.tipo_servicio,
+      })),
+    );
+  }
+
   useEffect(() => {
     (async () => {
       const { data: v } = await supabase
         .from("visitas")
-        .select("tratamiento, proxima_cita, observacion, pacientes(nombre)")
+        .select("tratamiento, proxima_cita, observacion, sede_id, doctora_id, paciente_id, fecha, pacientes(nombre)")
         .eq("id", visitaId)
         .single();
       const visita = v as unknown as {
         tratamiento: string | null;
         proxima_cita: string | null;
         observacion: string | null;
+        sede_id: string;
+        doctora_id: string;
+        paciente_id: string;
+        fecha: string;
         pacientes: { nombre: string };
       } | null;
       setPacienteNombre(visita?.pacientes?.nombre ?? "");
       setTratamiento(visita?.tratamiento ?? "");
       setProximaCita(visita?.proxima_cita ?? "");
       setObservacion(visita?.observacion ?? "");
+      if (visita) {
+        setVisitaDatos({
+          sede_id: visita.sede_id,
+          doctora_id: visita.doctora_id,
+          paciente_id: visita.paciente_id,
+          fecha: visita.fecha,
+        });
+      }
       const { data: cargo } = await supabase
         .from("cargos")
         .select("id, valor")
@@ -831,9 +867,47 @@ function ModalEditarValor({
         setCargoId(cargo.id);
         setValor(String(cargo.valor));
       }
+      await cargarLabOrdenes();
+      const { data: labs } = await supabase.from("laboratorios").select("*").eq("activo", true);
+      setLaboratorios((labs as Laboratorio[]) ?? []);
+      if (labs && labs.length > 0) setLaboratorioId(labs[0].id);
       setCargando(false);
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visitaId]);
+
+  async function quitarLabOrden(id: string) {
+    if (!window.confirm("¿Quitar este envío a laboratorio? Esta acción no se puede deshacer.")) return;
+    const { error: errorLab } = await supabase.from("lab_ordenes").delete().eq("id", id);
+    if (errorLab) {
+      setError(errorLab.message);
+      return;
+    }
+    cargarLabOrdenes();
+  }
+
+  async function agregarLabOrden() {
+    if (!visitaDatos || !laboratorioId) return;
+    setGuardandoLab(true);
+    setError(null);
+    const { error: errorLab } = await supabase.from("lab_ordenes").insert({
+      visita_id: visitaId,
+      sede_id: visitaDatos.sede_id,
+      doctora_id: visitaDatos.doctora_id,
+      paciente_id: visitaDatos.paciente_id,
+      laboratorio_id: laboratorioId,
+      tipo_servicio: tipoServicio,
+      estado: "enviado",
+      fecha_envio: visitaDatos.fecha,
+    });
+    setGuardandoLab(false);
+    if (errorLab) {
+      setError(errorLab.message);
+      return;
+    }
+    setAgregarLab(false);
+    cargarLabOrdenes();
+  }
 
   async function guardar() {
     setGuardando(true);
@@ -921,6 +995,60 @@ function ModalEditarValor({
                 placeholder="Ej: el paciente debe dejar saldo a favor de $50.000"
                 className="w-full rounded-lg border border-sky-200 px-3 py-2 text-sm"
               />
+            </div>
+            <div>
+              <p className="text-sm font-medium mb-1">Envío a laboratorio</p>
+              {labOrdenes.length > 0 && (
+                <div className="space-y-1 mb-2">
+                  {labOrdenes.map((o) => (
+                    <div key={o.id} className="flex items-center justify-between rounded-md bg-gray-50 px-2 py-1.5 text-sm">
+                      <span>
+                        {o.laboratorioNombre} · {TIPOS_SERVICIO_LAB.find((t) => t.value === o.tipoServicio)?.label ?? o.tipoServicio}
+                      </span>
+                      <button onClick={() => quitarLabOrden(o.id)} title="Quitar este envío">
+                        <X size={14} className="text-gray-400" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {agregarLab ? (
+                <div className="flex gap-2 flex-wrap items-center">
+                  <select
+                    value={laboratorioId}
+                    onChange={(e) => setLaboratorioId(e.target.value)}
+                    className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1 text-sm"
+                  >
+                    {laboratorios.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.nombre}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={tipoServicio}
+                    onChange={(e) => setTipoServicio(e.target.value)}
+                    className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1 text-sm"
+                  >
+                    {TIPOS_SERVICIO_LAB.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={agregarLabOrden}
+                    disabled={guardandoLab}
+                    className="rounded-md bg-gray-100 px-3 py-1 text-sm font-medium disabled:opacity-40"
+                  >
+                    {guardandoLab ? "…" : "Agregar"}
+                  </button>
+                </div>
+              ) : (
+                <button onClick={() => setAgregarLab(true)} className="flex items-center gap-1 text-sm font-medium text-[var(--acento)]">
+                  <Plus size={14} /> Se me olvidó enviarlo
+                </button>
+              )}
             </div>
             {error && <p className="text-sm text-red-600">{error}</p>}
             <button
