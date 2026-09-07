@@ -276,9 +276,14 @@ export function Parametros() {
     setErrorSaldoExistente(null);
     const { error } = await supabase.from("saldos_favor").delete().eq("id", id);
     if (error) {
-      // Ej: hay un pago que ya usó este saldo (cargo_pagos.saldo_id) — no se
-      // puede borrar sin antes deshacer ese pago o cambiarlo a otro medio.
-      setErrorSaldoExistente(error.message);
+      // 23503 = ya hay un pago real que usó este saldo (cargo_pagos.saldo_id) —
+      // no se puede borrar sin antes deshacer ese pago, porque dejaría el pago
+      // apuntando a un saldo que ya no existe.
+      setErrorSaldoExistente(
+        error.code === "23503"
+          ? "No se puede eliminar: este saldo ya se usó para pagar un cobro real. Para poder borrarlo, primero hay que deshacer ese pago desde el cobro del paciente (quitarlo o cambiarlo a otro medio de pago)."
+          : `No se pudo eliminar: ${error.message}`,
+      );
       return;
     }
     setSaldosPaciente((prev) => prev.filter((s) => s.id !== id));
@@ -536,7 +541,11 @@ export function Parametros() {
           <PacienteAutocomplete onSelect={cargarSaldosPaciente} placeholder="Buscar paciente…" />
         )}
 
-        {errorSaldoExistente && <p className="text-sm text-red-600 mt-2">{errorSaldoExistente}</p>}
+        {errorSaldoExistente && (
+          <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mt-2">
+            {errorSaldoExistente}
+          </p>
+        )}
         {pacienteEditar && (
           <div className="space-y-3 mt-2">
             {saldosPaciente.map((s) => (
