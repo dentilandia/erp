@@ -1631,15 +1631,20 @@ async function loadAllEmployees(){
 }
 
 /* ============ RENDER: GATE (login / registro real con Supabase Auth) ============ */
-function renderGate(){
+async function renderGate(){
   root.innerHTML = `<div class="gate"><div class="gate-card"><p class="sub">Verificando tu sesión…</p></div></div>`;
-  sb.auth.getSession().then(({ data }) => {
-    if(data && data.session && data.session.user){
-      onAuthenticated(data.session.user);
-    } else {
-      renderNotLoggedIn();
-    }
-  });
+  let { data } = await sb.auth.getSession();
+  if(!(data && data.session && data.session.user)){
+    // La sesión guardada puede estar vencida (el token de acceso dura poco) —
+    // antes de asumir que no hay sesión, se intenta refrescarla una vez.
+    const refreshed = await sb.auth.refreshSession();
+    data = refreshed.data;
+  }
+  if(data && data.session && data.session.user){
+    onAuthenticated(data.session.user);
+  } else {
+    renderNotLoggedIn();
+  }
 }
 
 function renderNotLoggedIn(){

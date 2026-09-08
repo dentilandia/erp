@@ -208,7 +208,10 @@ export function Layout() {
           {TABS.filter(
             (t) =>
               (!t.soloCajaMenor || perfil?.rol === "admin" || perfil?.puede_caja_menor) &&
-              (!t.soloInventario || perfil?.rol === "admin" || perfil?.puede_inventario) &&
+              (!t.soloInventario ||
+                perfil?.rol === "admin" ||
+                perfil?.puede_inventario_clinico ||
+                perfil?.puede_inventario_general) &&
               (!t.restringidoEnClinica || perfil?.rol === "admin" || modoOperacion !== "clinica") &&
               (!t.restringidoEnRecepcion || perfil?.rol === "admin" || modoOperacion !== "recepcion"),
           ).map((t) => (

@@ -6,7 +6,8 @@ export interface Perfil {
   rol: Rol;
   sede_id: string | null;
   puede_caja_menor: boolean;
-  puede_inventario: boolean;
+  puede_inventario_clinico: boolean;
+  puede_inventario_general: boolean;
 }
 
 export interface Sede {

@@ -6,6 +6,7 @@ import { today } from "../../lib/format";
 import { TIPOS_INVENTARIO, type Sede, type Doctora, type Paciente, type InventarioStock } from "../../lib/types";
 import { PacienteAutocomplete } from "../../components/PacienteAutocomplete";
 import { InsumosGeneralesPeriodo } from "../../components/InsumosGeneralesPeriodo";
+import { useAuth } from "../../auth/AuthContext";
 
 const TIPO_LABEL: Record<string, string> = Object.fromEntries(TIPOS_INVENTARIO.map((t) => [t.value, t.label]));
 
@@ -15,24 +16,45 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number]["value"];
 
+/** "Insumos clínicos" es de recepción y "Insumos generales" de las
+ *  auxiliares de odontología — cada quien ve solo su pestaña (admin ve las
+ *  dos). Si a alguien solo le toca una, ni siquiera se muestra el selector. */
 export function Inventario() {
-  const [tab, setTab] = useState<Tab>("clinicos");
+  const { perfil } = useAuth();
+  const esAdmin = perfil?.rol === "admin";
+  const tabsVisibles = TABS.filter(
+    (t) =>
+      (t.value === "clinicos" && (esAdmin || perfil?.puede_inventario_clinico)) ||
+      (t.value === "generales" && (esAdmin || perfil?.puede_inventario_general)),
+  );
+  const [tab, setTab] = useState<Tab>(tabsVisibles[0]?.value ?? "clinicos");
+
   return (
     <div className="max-w-3xl mx-auto space-y-4">
-      <div className="flex gap-1.5">
-        {TABS.map((t) => (
-          <button
-            key={t.value}
-            onClick={() => setTab(t.value)}
-            className={`text-sm font-medium px-3 py-1.5 rounded-lg ${
-              tab === t.value ? "bg-[var(--acento)] text-white" : "bg-gray-100 text-gray-500"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      {tab === "clinicos" ? <InsumosClinicos /> : <InsumosGenerales />}
+      {tabsVisibles.length > 1 && (
+        <div className="flex gap-1.5">
+          {tabsVisibles.map((t) => (
+            <button
+              key={t.value}
+              onClick={() => setTab(t.value)}
+              className={`text-sm font-medium px-3 py-1.5 rounded-lg ${
+                tab === t.value ? "bg-[var(--acento)] text-white" : "bg-gray-100 text-gray-500"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {tabsVisibles.some((t) => t.value === tab) ? (
+        tab === "clinicos" ? (
+          <InsumosClinicos />
+        ) : (
+          <InsumosGenerales />
+        )
+      ) : (
+        <p className="text-sm text-gray-400">No tienes acceso a ninguna vista de inventario.</p>
+      )}
     </div>
   );
 }

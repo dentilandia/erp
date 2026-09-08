@@ -9,6 +9,10 @@ function claveModo(perfilId: string) {
   return `erp_modo_operacion:${perfilId}`;
 }
 
+function claveSedeElegida(perfilId: string) {
+  return `erp_sede_elegida:${perfilId}`;
+}
+
 interface AuthState {
   loading: boolean;
   session: Session | null;
@@ -18,6 +22,9 @@ interface AuthState {
   recuperandoClave: boolean;
   modoOperacion: ModoOperacion | null;
   elegirModoOperacion: (modo: ModoOperacion) => void;
+  sedeElegidaId: string | null;
+  elegirSede: (sedeId: string) => void;
+  errorSede: string | null;
   signIn: (email: string, password: string) => Promise<string | null>;
   signOut: () => Promise<void>;
   enviarRecuperacion: (email: string) => Promise<string | null>;
@@ -34,10 +41,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [recuperandoClave, setRecuperandoClave] = useState(false);
   const [modoOperacion, setModoOperacion] = useState<ModoOperacion | null>(null);
+  const [sedeElegidaId, setSedeElegidaId] = useState<string | null>(null);
+  const [errorSede, setErrorSede] = useState<string | null>(null);
 
   function elegirModoOperacion(modo: ModoOperacion) {
     if (perfil) sessionStorage.setItem(claveModo(perfil.id), modo);
     setModoOperacion(modo);
+  }
+
+  // Alguien de operación puede terminar trabajando en otra sede ese día
+  // (cubre a una compañera, va a cobrar allá, etc.) — se elige al iniciar
+  // sesión, igual que el modo, y no queda guardado para la próxima. Hay que
+  // actualizar perfiles.sede_id de verdad (vía RPC, no una policy de update
+  // genérica) porque fn_perfil_sede() —con la que están armadas casi todas
+  // las policies de RLS de operación— la lee directo de la base: si no, el
+  // front mostraría la sede elegida pero cualquier inserción real seguiría
+  // bloqueada contra la sede vieja.
+  async function elegirSede(sedeId: string) {
+    setErrorSede(null);
+    const { error: rpcError } = await supabase.rpc("fn_elegir_sede_trabajo", { p_sede_id: sedeId });
+    if (rpcError) {
+      setErrorSede(rpcError.message);
+      return;
+    }
+    if (perfil) sessionStorage.setItem(claveSedeElegida(perfil.id), sedeId);
+    setSedeElegidaId(sedeId);
+    const { data } = await supabase.from("sedes").select("id, nombre, color_acento, ip_permitida").eq("id", sedeId).single();
+    if (data) setSede(data as Sede);
   }
 
   useEffect(() => {
@@ -55,6 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setPerfil(null);
         setSede(null);
         setModoOperacion(null);
+        setSedeElegidaId(null);
         setLoading(false);
       }
     });
@@ -68,7 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (async () => {
       const { data: perfilRow, error: perfilError } = await supabase
         .from("perfiles")
-        .select("id, nombre, rol, sede_id, puede_caja_menor")
+        .select("id, nombre, rol, sede_id, puede_caja_menor, puede_inventario_clinico, puede_inventario_general")
         .eq("id", session.user.id)
         .single();
       if (cancelled) return;
@@ -82,11 +113,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setPerfil(perfilRow as Perfil);
       const modoGuardado = sessionStorage.getItem(claveModo(perfilRow.id));
       setModoOperacion(modoGuardado === "recepcion" || modoGuardado === "clinica" ? modoGuardado : null);
-      if (perfilRow.sede_id) {
+      // La sede elegida esta sesión manda sobre la sede asignada por defecto
+      // (perfil.sede_id) — para cuando alguien de operación se desplaza a
+      // trabajar a otra sede ese día.
+      const sedeGuardada = sessionStorage.getItem(claveSedeElegida(perfilRow.id));
+      setSedeElegidaId(sedeGuardada);
+      const sedeIdEfectiva = sedeGuardada || perfilRow.sede_id;
+      if (sedeIdEfectiva) {
         const { data: sedeRow } = await supabase
           .from("sedes")
-          .select("id, nombre, color_acento")
-          .eq("id", perfilRow.sede_id)
+          .select("id, nombre, color_acento, ip_permitida")
+          .eq("id", sedeIdEfectiva)
           .single();
         if (!cancelled) setSede((sedeRow as Sede) ?? null);
       } else {
@@ -155,6 +192,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         recuperandoClave,
         modoOperacion,
         elegirModoOperacion,
+        sedeElegidaId,
+        elegirSede,
+        errorSede,
         signIn,
         signOut,
         enviarRecuperacion,

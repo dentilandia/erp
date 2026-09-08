@@ -1,9 +1,11 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { LoginPage } from "./auth/LoginPage";
 import { SetPasswordPage } from "./auth/SetPasswordPage";
 import { Layout } from "./components/Layout";
+import { supabase } from "./lib/supabase";
+import type { Sede } from "./lib/types";
 import { Recepcion } from "./pages/operacion/Recepcion";
 import { Consultorio } from "./pages/operacion/Consultorio";
 import { CierreDiario } from "./pages/operacion/CierreDiario";
@@ -36,11 +38,15 @@ function SoloCajaMenor({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/** Inventario (operación) es solo para las auxiliares de odontología — admin
- *  y quien tenga perfiles.puede_inventario marcado. */
+/** Inventario (operación) no es para todo el mundo: "Insumos clínicos" es de
+ *  recepción y "Insumos generales" de las auxiliares de odontología — cada
+ *  quien ve su pestaña dentro de Inventario.tsx. Acá solo se bloquea la
+ *  ruta completa a quien no tenga ninguna de las dos marcadas. */
 function SoloInventario({ children }: { children: React.ReactNode }) {
   const { perfil } = useAuth();
-  if (perfil?.rol !== "admin" && !perfil?.puede_inventario) return <Navigate to="/operacion/recepcion" replace />;
+  if (perfil?.rol !== "admin" && !perfil?.puede_inventario_clinico && !perfil?.puede_inventario_general) {
+    return <Navigate to="/operacion/recepcion" replace />;
+  }
   return <>{children}</>;
 }
 
@@ -147,31 +153,76 @@ function SinPerfil({ error }: { error: string | null }) {
 }
 
 /** Se pregunta una sola vez por sesión (no queda guardado de una vez para
- *  la próxima) — para todo el equipo de operación excepto admin. Determina
- *  qué tabs/rutas puede ver: en "Consultorio" solo Consultorio, Laboratorio,
- *  Inventario e Historial; en "Recepción" ve todo lo de operación. */
+ *  la próxima) — para todo el equipo de operación excepto admin. El modo
+ *  determina qué tabs/rutas puede ver: en "Consultorio" solo Consultorio,
+ *  Laboratorio, Inventario e Historial; en "Recepción" ve todo lo de
+ *  operación. La sede es la de trabajo de ESE día — parte de la asignada al
+ *  perfil, pero se puede cambiar (alguien de operación a veces se desplaza a
+ *  cubrir o cobrar en otra sede). */
 function SeleccionarModoOperacion() {
-  const { perfil, elegirModoOperacion, signOut } = useAuth();
+  const { perfil, sede, modoOperacion, sedeElegidaId, elegirModoOperacion, elegirSede, errorSede, signOut } = useAuth();
+  const [sedes, setSedes] = useState<Sede[]>([]);
+
+  useEffect(() => {
+    supabase
+      .from("sedes")
+      .select("id, nombre, color_acento, ip_permitida")
+      .order("nombre")
+      .then(({ data }) => setSedes((data as Sede[]) ?? []));
+  }, []);
+
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="max-w-sm w-full space-y-4 text-center">
-        <p className="text-sm text-gray-500">
-          Hola, {perfil?.nombre} — ¿dónde vas a estar hoy?
-        </p>
-        <div className="space-y-2">
-          <button
-            onClick={() => elegirModoOperacion("recepcion")}
-            className="w-full rounded-xl bg-[#2E253A] text-white py-4 text-sm font-semibold"
-          >
-            Recepción
-          </button>
-          <button
-            onClick={() => elegirModoOperacion("clinica")}
-            className="w-full rounded-xl border-2 border-[#2E253A] text-[#2E253A] py-4 text-sm font-semibold"
-          >
-            Consultorio
-          </button>
+    <div className="min-h-screen flex items-center justify-center px-4 py-8">
+      <div className="max-w-sm w-full space-y-5 text-center">
+        <p className="text-sm text-gray-500">Hola, {perfil?.nombre} — cuéntanos de tu día de hoy.</p>
+
+        <div>
+          <p className="text-xs font-medium text-gray-500 mb-2">¿En qué sede vas a estar hoy?</p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {sedes.map((s) => {
+              const activa = sedeElegidaId === s.id;
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => elegirSede(s.id)}
+                  className="text-sm font-semibold px-4 py-2 rounded-full border-2 transition-colors"
+                  style={{
+                    background: activa ? s.color_acento : "transparent",
+                    borderColor: s.color_acento,
+                    color: activa ? "#ffffff" : s.color_acento,
+                  }}
+                >
+                  {s.nombre}
+                </button>
+              );
+            })}
+          </div>
+          {sede && !sedeElegidaId && <p className="text-xs text-gray-400 mt-2">Tu sede asignada es {sede.nombre}.</p>}
+          {errorSede && <p className="text-xs text-red-600 mt-2">{errorSede}</p>}
         </div>
+
+        <div>
+          <p className="text-xs font-medium text-gray-500 mb-2">¿Dónde vas a estar hoy?</p>
+          <div className="space-y-2">
+            <button
+              onClick={() => elegirModoOperacion("recepcion")}
+              className={`w-full rounded-xl py-4 text-sm font-semibold ${
+                modoOperacion === "recepcion" ? "bg-[#2E253A] text-white" : "border-2 border-[#2E253A] text-[#2E253A]"
+              }`}
+            >
+              Recepción
+            </button>
+            <button
+              onClick={() => elegirModoOperacion("clinica")}
+              className={`w-full rounded-xl py-4 text-sm font-semibold ${
+                modoOperacion === "clinica" ? "bg-[#2E253A] text-white" : "border-2 border-[#2E253A] text-[#2E253A]"
+              }`}
+            >
+              Consultorio
+            </button>
+          </div>
+        </div>
+
         <p className="text-xs text-gray-400">
           En Recepción ves Recepción, Cierre diario, Laboratorio, Inventario, Financiación, Historial y Caja menor (si la
           tienes asignada). En Consultorio solo ves Consultorio, Laboratorio, Inventario e Historial.
@@ -185,7 +236,7 @@ function SeleccionarModoOperacion() {
 }
 
 function Gate({ children }: { children: React.ReactNode }) {
-  const { loading, session, perfil, error, recuperandoClave, modoOperacion } = useAuth();
+  const { loading, session, perfil, error, recuperandoClave, modoOperacion, sedeElegidaId } = useAuth();
 
   if (loading) {
     return (
@@ -197,7 +248,7 @@ function Gate({ children }: { children: React.ReactNode }) {
   if (recuperandoClave) return <SetPasswordPage />;
   if (!session) return <LoginPage />;
   if (error || !perfil) return <SinPerfil error={error} />;
-  if (perfil.rol !== "admin" && !modoOperacion) return <SeleccionarModoOperacion />;
+  if (perfil.rol !== "admin" && (!modoOperacion || !sedeElegidaId)) return <SeleccionarModoOperacion />;
   return <>{children}</>;
 }
 

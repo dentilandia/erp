@@ -422,6 +422,7 @@ function ModalAtencion({
   const [pacienteNombre, setPacienteNombre] = useState("");
   const [observacionAnterior, setObservacionAnterior] = useState<string | null>(null);
   const [fechaObservacionAnterior, setFechaObservacionAnterior] = useState<string | null>(null);
+  const [saldoFavor, setSaldoFavor] = useState(0);
   const [tratamiento, setTratamiento] = useState("");
   const [valorTratamiento, setValorTratamiento] = useState("");
   const [observacion, setObservacion] = useState("");
@@ -466,6 +467,12 @@ function ModalAtencion({
           .maybeSingle();
         setObservacionAnterior(anterior?.observacion ?? null);
         setFechaObservacionAnterior(anterior?.fecha ?? null);
+        const { data: saldos } = await supabase
+          .from("saldos_favor")
+          .select("valor_disponible")
+          .eq("paciente_id", visita.paciente_id)
+          .gt("valor_disponible", 0);
+        setSaldoFavor((saldos ?? []).reduce((a, s) => a + Number(s.valor_disponible), 0));
       }
       const { data: preciosData } = await supabase.from("precios_config").select("clave, valor");
       const map: Record<string, number> = {};
@@ -598,6 +605,12 @@ function ModalAtencion({
             <X size={18} />
           </button>
         </div>
+
+        {saldoFavor > 0 && (
+          <p className="rounded-lg bg-[var(--acento)]/10 border border-[var(--acento)] px-3 py-2 text-sm text-tinta">
+            <span className="font-semibold">💰 Saldo a favor disponible:</span> {fmtCOP(saldoFavor)}
+          </p>
+        )}
 
         {observacionAnterior && (
           <p className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-sm text-emerald-800">
