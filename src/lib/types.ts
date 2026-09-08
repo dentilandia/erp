@@ -80,6 +80,7 @@ export interface Visita {
   observacion: string | null;
   atendido_por: string | null;
   es_venta_producto: boolean;
+  comprobante_datafono_url: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { CheckCircle2, X, Search, Plus } from "lucide-react";
+import { CheckCircle2, X, Search, Plus, Paperclip } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
 import { TIPOS_INSUMO_CONSULTA, TIPOS_SERVICIO_LAB, type Sede, type Laboratorio, type Doctora } from "../../lib/types";
+
+// Comprobante de datáfono: por ahora solo se pide en Las Américas.
+const SEDE_LAS_AMERICAS_ID = "37af479b-777c-4d32-bce1-bc0becb7c3df";
 
 interface VisitaRow {
   id: string;
@@ -442,6 +445,8 @@ function ModalAtencion({
   const [remisionEspecialidad, setRemisionEspecialidad] = useState("");
   const [interconsulta, setInterconsulta] = useState(false);
   const [interconsultaEspecialidad, setInterconsultaEspecialidad] = useState("");
+  const [comprobanteDatafono, setComprobanteDatafono] = useState(false);
+  const [archivoDatafono, setArchivoDatafono] = useState<File | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -499,12 +504,28 @@ function ModalAtencion({
   }
 
   async function guardar() {
+    if (comprobanteDatafono && !archivoDatafono) {
+      setError("Marcaste \"Comprobante de datáfono\" pero falta adjuntar el archivo.");
+      return;
+    }
     setGuardando(true);
     setError(null);
     const { data: visita } = await supabase.from("visitas").select("doctora_id, paciente_id, fecha").eq("id", visitaId).single();
     if (!visita) {
       setGuardando(false);
       return;
+    }
+
+    let comprobanteDatafonoUrl: string | null = null;
+    if (comprobanteDatafono && archivoDatafono) {
+      const path = `${sedeId}/datafono-${visitaId}-${archivoDatafono.name}`;
+      const { error: errorSubida } = await supabase.storage.from("comprobantes").upload(path, archivoDatafono, { upsert: true });
+      if (errorSubida) {
+        setGuardando(false);
+        setError(`No se pudo subir el comprobante de datáfono: ${errorSubida.message}`);
+        return;
+      }
+      comprobanteDatafonoUrl = path;
     }
 
     if (Number(valorTratamiento) > 0) {
@@ -588,6 +609,7 @@ function ModalAtencion({
         proxima_cita: proximaCita || null,
         observacion: observacion.trim() || null,
         remision_especialidad: remitido ? remisionEspecialidad.trim() || null : null,
+        ...(comprobanteDatafonoUrl ? { comprobante_datafono_url: comprobanteDatafonoUrl } : {}),
         updated_at: new Date().toISOString(),
       })
       .eq("id", visitaId);
@@ -661,6 +683,34 @@ function ModalAtencion({
           <input type="checkbox" checked={rxTomada} onChange={(e) => setRxTomada(e.target.checked)} />
           RX tomada {precios["rx"] ? `(${fmtCOP(precios["rx"])})` : ""}
         </label>
+
+        {sedeId === SEDE_LAS_AMERICAS_ID && (
+          <div>
+            <label className="flex items-center gap-2 text-sm mb-2">
+              <input
+                type="checkbox"
+                checked={comprobanteDatafono}
+                onChange={(e) => {
+                  setComprobanteDatafono(e.target.checked);
+                  if (!e.target.checked) setArchivoDatafono(null);
+                }}
+              />
+              Comprobante de datáfono
+            </label>
+            {comprobanteDatafono && (
+              <label className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-[var(--acento)] text-white cursor-pointer w-fit">
+                <Paperclip size={14} />
+                {archivoDatafono ? archivoDatafono.name : "Adjuntar comprobante"}
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  className="hidden"
+                  onChange={(e) => setArchivoDatafono(e.target.files?.[0] ?? null)}
+                />
+              </label>
+            )}
+          </div>
+        )}
 
         <div>
           <label className="flex items-center gap-2 text-sm">
