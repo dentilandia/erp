@@ -5,7 +5,6 @@ import { supabase } from "../../lib/supabase";
 import { today } from "../../lib/format";
 import { TIPOS_INVENTARIO, type Sede, type Doctora, type Paciente, type InventarioStock } from "../../lib/types";
 import { PacienteAutocomplete } from "../../components/PacienteAutocomplete";
-import { BodegaAdminTabla } from "../../components/BodegaAdminTabla";
 import { InsumosGeneralesPeriodo } from "../../components/InsumosGeneralesPeriodo";
 
 const TIPO_LABEL: Record<string, string> = Object.fromEntries(TIPOS_INVENTARIO.map((t) => [t.value, t.label]));
@@ -296,14 +295,13 @@ function InsumosClinicos() {
 
 /** Insumos generales (bodega): réplica del Excel — catálogo compartido de
  *  172 ítems por categoría, con un período de conteo por sede a la vez
- *  (inventario inicial, entrega 1/2, entradas, pedido → inventario final).
- *  Incluye también la existencia de la bodega administrativa central de
- *  solo lectura (se administra desde Administración → Inventarios). */
+ *  (inventario inicial, salidas, entradas, pedido → inventario final). La
+ *  existencia de la bodega administrativa central es solo visible desde
+ *  Administración → Inventarios — las sedes no deben verla acá. */
 function InsumosGenerales() {
   const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
   return (
     <div className="space-y-4">
-      <BodegaAdminTabla editable={false} sedeId={sedeActiva.id} />
       <h2 className="font-semibold text-tinta">Bodega de insumos generales — {sedeActiva.nombre}</h2>
       <InsumosGeneralesPeriodo sedeId={sedeActiva.id} />
     </div>
