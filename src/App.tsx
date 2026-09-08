@@ -36,6 +36,14 @@ function SoloCajaMenor({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/** Inventario (operación) es solo para las auxiliares de odontología — admin
+ *  y quien tenga perfiles.puede_inventario marcado. */
+function SoloInventario({ children }: { children: React.ReactNode }) {
+  const { perfil } = useAuth();
+  if (perfil?.rol !== "admin" && !perfil?.puede_inventario) return <Navigate to="/operacion/recepcion" replace />;
+  return <>{children}</>;
+}
+
 /** En modo "Consultorio" (elegido al entrar) solo se puede ver Consultorio,
  *  Laboratorio, Inventario e Historial — el resto queda bloqueado de
  *  verdad por ruta, no solo oculto del menú. No aplica a admin (Tomás,
@@ -208,7 +216,7 @@ function App() {
               <Route path="operacion/consultorio" element={<BloqueadoEnRecepcion><Consultorio /></BloqueadoEnRecepcion>} />
               <Route path="operacion/cierre" element={<BloqueadoEnClinica><CierreDiario /></BloqueadoEnClinica>} />
               <Route path="operacion/laboratorio" element={<LaboratorioOperativo />} />
-              <Route path="operacion/inventario" element={<Inventario />} />
+              <Route path="operacion/inventario" element={<SoloInventario><Inventario /></SoloInventario>} />
               <Route path="operacion/historial" element={<Historial />} />
               <Route path="operacion/comprobantes" element={<BloqueadoEnClinica><ComprobantesFinanciacion /></BloqueadoEnClinica>} />
               <Route path="operacion/caja-menor" element={<BloqueadoEnClinica><SoloCajaMenor><CajaMenor /></SoloCajaMenor></BloqueadoEnClinica>} />

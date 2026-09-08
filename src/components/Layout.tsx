@@ -30,7 +30,7 @@ const TABS = [
   { to: "/operacion/consultorio", label: "Consultorio", icon: Stethoscope, restringidoEnRecepcion: true },
   { to: "/operacion/cierre", label: "Cierre diario", icon: Wallet, restringidoEnClinica: true },
   { to: "/operacion/laboratorio", label: "Laboratorio", icon: FlaskConical },
-  { to: "/operacion/inventario", label: "Inventario", icon: Boxes },
+  { to: "/operacion/inventario", label: "Inventario", icon: Boxes, soloInventario: true },
   { to: "/operacion/comprobantes", label: "Financiación", icon: Paperclip, restringidoEnClinica: true },
   { to: "/operacion/historial", label: "Historial", icon: History },
   { to: "/operacion/caja-menor", label: "Caja menor", icon: PiggyBank, soloCajaMenor: true, restringidoEnClinica: true },
@@ -208,6 +208,7 @@ export function Layout() {
           {TABS.filter(
             (t) =>
               (!t.soloCajaMenor || perfil?.rol === "admin" || perfil?.puede_caja_menor) &&
+              (!t.soloInventario || perfil?.rol === "admin" || perfil?.puede_inventario) &&
               (!t.restringidoEnClinica || perfil?.rol === "admin" || modoOperacion !== "clinica") &&
               (!t.restringidoEnRecepcion || perfil?.rol === "admin" || modoOperacion !== "recepcion"),
           ).map((t) => (

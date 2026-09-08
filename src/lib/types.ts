@@ -6,6 +6,7 @@ export interface Perfil {
   rol: Rol;
   sede_id: string | null;
   puede_caja_menor: boolean;
+  puede_inventario: boolean;
 }
 
 export interface Sede {
@@ -254,6 +255,7 @@ export interface InsumoGeneralEntrega {
   cantidad: number;
   fecha: string;
   created_at: string;
+  visto: boolean;
 }
 
 /** Caja menor por sede — acceso restringido a admin y a quien tenga

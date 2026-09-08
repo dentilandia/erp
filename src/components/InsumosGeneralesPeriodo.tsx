@@ -91,6 +91,13 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     setEntregasRecibidas((data as unknown as EntregaConCatalogo[]) ?? []);
   }
 
+  async function marcarEntregasVistas() {
+    const ids = entregasRecibidas.filter((e) => !e.visto).map((e) => e.id);
+    if (ids.length === 0) return;
+    await supabase.from("insumos_generales_entregas").update({ visto: true }).in("id", ids);
+    cargarEntregasRecibidas();
+  }
+
   async function cargarSalidas() {
     const { data } = await supabase
       .from("insumos_generales_salidas")
@@ -232,11 +239,36 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   }
 
   const periodoActivo = periodos.find((p) => p.id === periodoId);
+  const entregasNoVistas = entregasRecibidas.filter((e) => !e.visto);
 
   if (cargando) return <p className="text-sm text-gray-400">Cargando…</p>;
 
   return (
     <div className="space-y-4">
+      {entregasNoVistas.length > 0 && (
+        <section className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-4">
+          <p className="font-semibold text-emerald-800 mb-2">📦 Llegaron entregas nuevas de administración</p>
+          <div className="space-y-1 mb-3">
+            {entregasNoVistas.map((e) => (
+              <p key={e.id} className="text-sm text-emerald-700">
+                {e.fecha} · {e.insumos_generales_catalogo?.nombre ?? "—"} ·{" "}
+                <span className="font-semibold">{e.cantidad}</span>
+              </p>
+            ))}
+          </div>
+          <p className="text-xs text-emerald-600 mb-2">
+            Ya se sumaron solas a "Entradas" del período correspondiente — esto es solo para que no se te pase que
+            llegaron.
+          </p>
+          <button
+            onClick={marcarEntregasVistas}
+            className="rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-medium hover:bg-emerald-700"
+          >
+            Entendido
+          </button>
+        </section>
+      )}
+
       <section className="bg-white rounded-xl border border-gray-200 p-4">
         <div className="flex items-center gap-2 flex-wrap mb-2">
           <select
@@ -399,10 +431,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                       <tr className="bg-gray-50 text-left text-gray-500">
                         <th className="px-3 py-1.5">Ítem</th>
                         <th className="px-2 py-1.5 text-right">Inicial</th>
-                        <th className="px-2 py-1.5 text-right">Entrega 1</th>
-                        <th className="px-2 py-1.5 text-right">Entrega 2</th>
                         <th className="px-2 py-1.5 text-right">Salidas</th>
-                        <th className="px-2 py-1.5 text-right">Consumo</th>
                         <th className="px-2 py-1.5 text-right">Entradas</th>
                         <th className="px-2 py-1.5 text-right">Final</th>
                         <th className="px-2 py-1.5 text-right">Pedido</th>
@@ -412,25 +441,22 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                       {items.map((item) => {
                         const mov = movimientos[item.id];
                         if (!mov) return null;
-                        const consumo = mov.entrega1 + mov.entrega2 + mov.salidas;
-                        const final = mov.inventario_inicial - consumo + mov.entradas;
+                        const final = mov.inventario_inicial - mov.salidas + mov.entradas;
                         return (
                           <tr key={item.id} className="border-t border-gray-100">
                             <td className="px-3 py-1.5">{item.nombre}</td>
-                            {(["inventario_inicial", "entrega1", "entrega2"] as const).map((campo) => (
-                              <td key={campo} className="px-2 py-1.5 text-right">
-                                <input
-                                  type="number"
-                                  defaultValue={mov[campo]}
-                                  onBlur={(e) => {
-                                    const v = Number(e.target.value) || 0;
-                                    actualizarCampo(item.id, campo, v);
-                                    guardarCampo(item.id, campo, v);
-                                  }}
-                                  className="w-16 rounded-md border border-gray-200 px-1.5 py-1 text-right"
-                                />
-                              </td>
-                            ))}
+                            <td className="px-2 py-1.5 text-right">
+                              <input
+                                type="number"
+                                defaultValue={mov.inventario_inicial}
+                                onBlur={(e) => {
+                                  const v = Number(e.target.value) || 0;
+                                  actualizarCampo(item.id, "inventario_inicial", v);
+                                  guardarCampo(item.id, "inventario_inicial", v);
+                                }}
+                                className="w-16 rounded-md border border-gray-200 px-1.5 py-1 text-right"
+                              />
+                            </td>
                             <td className="px-2 py-1.5 text-right">
                               <input
                                 type="number"
@@ -443,7 +469,6 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                                 className="w-16 rounded-md border border-gray-200 px-1.5 py-1 text-right"
                               />
                             </td>
-                            <td className="px-2 py-1.5 text-right text-gray-500">{consumo}</td>
                             <td className="px-2 py-1.5 text-right">
                               <input
                                 type="number"
