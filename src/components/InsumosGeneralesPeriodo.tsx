@@ -19,6 +19,13 @@ interface SalidaConCatalogo extends InsumoGeneralSalida {
   insumos_generales_catalogo: { nombre: string } | null;
 }
 
+const MESES = [
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+];
+const ANIO_ACTUAL = new Date().getFullYear();
+const ANIOS = [ANIO_ACTUAL - 1, ANIO_ACTUAL, ANIO_ACTUAL + 1];
+
 /** Bodega operativa de una sede — réplica del Excel: catálogo compartido de
  *  172 ítems por categoría, con un período de conteo a la vez (inventario
  *  inicial, entrega 1/2, salidas, entradas, pedido → inventario final). Se
@@ -35,7 +42,8 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   const [salidasRegistradas, setSalidasRegistradas] = useState<SalidaConCatalogo[]>([]);
   const [cargando, setCargando] = useState(true);
   const [categoriasAbiertas, setCategoriasAbiertas] = useState<Record<string, boolean>>({});
-  const [nuevaEtiqueta, setNuevaEtiqueta] = useState("");
+  const [mesNuevo, setMesNuevo] = useState(MESES[new Date().getMonth()]);
+  const [anioNuevo, setAnioNuevo] = useState(new Date().getFullYear());
   const [creandoPeriodo, setCreandoPeriodo] = useState(false);
   const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
 
@@ -110,6 +118,15 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     const { data } = await supabase.from("insumos_generales_movimientos").select("*").eq("periodo_id", periodoId);
     const filas = (data as InsumoGeneralMovimiento[]) ?? [];
     setMovimientos(Object.fromEntries(filas.map((m) => [m.catalogo_id, m])));
+    // Si el período está completamente vacío (recién creado en otra sesión, o
+    // se recargó la página), se abren todas las categorías de una vez — si no,
+    // parece que no hay dónde escribir el inventario inicial.
+    const vacio = filas.every(
+      (m) => !m.inventario_inicial && !m.entrega1 && !m.entrega2 && !m.salidas && !m.entradas && !m.pedido,
+    );
+    if (filas.length > 0 && vacio) {
+      setCategoriasAbiertas(Object.fromEntries(catalogo.map((c) => [c.categoria, true])));
+    }
   }
 
   useEffect(() => {
@@ -120,12 +137,12 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   const categorias = useMemo(() => Array.from(new Set(catalogo.map((c) => c.categoria))), [catalogo]);
 
   async function crearPeriodo() {
-    if (!nuevaEtiqueta.trim()) return;
     setCreandoPeriodo(true);
     setErrorPeriodo(null);
+    const etiqueta = `${mesNuevo} ${anioNuevo}`;
     const { data: nuevo, error } = await supabase
       .from("insumos_generales_periodos")
-      .insert({ sede_id: sedeId, etiqueta: nuevaEtiqueta.trim(), fecha_inicio: today() })
+      .insert({ sede_id: sedeId, etiqueta, fecha_inicio: today() })
       .select("*")
       .single();
     if (error || !nuevo) {
@@ -160,9 +177,12 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
       setErrorPeriodo(errorMovs.message);
       return;
     }
-    setNuevaEtiqueta("");
     await cargarPeriodos();
     setPeriodoId(nuevo.id);
+    // Abre todas las categorías de una vez — si no, un período recién creado
+    // se ve como si solo tuviera "Registrar salida" y no quedara claro dónde
+    // escribir el inventario inicial (las categorías empiezan colapsadas).
+    setCategoriasAbiertas(Object.fromEntries(categorias.map((c) => [c, true])));
   }
 
   function actualizarCampo(
@@ -232,15 +252,31 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
               </option>
             ))}
           </select>
-          <input
-            value={nuevaEtiqueta}
-            onChange={(e) => setNuevaEtiqueta(e.target.value)}
-            placeholder='Nombre del período nuevo, ej. "Septiembre 2026"'
-            className="flex-1 min-w-[180px] rounded-lg border border-gray-300 px-3 py-2 text-sm"
-          />
+          <select
+            value={mesNuevo}
+            onChange={(e) => setMesNuevo(e.target.value)}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          >
+            {MESES.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+          <select
+            value={anioNuevo}
+            onChange={(e) => setAnioNuevo(Number(e.target.value))}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          >
+            {ANIOS.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
           <button
             onClick={crearPeriodo}
-            disabled={!nuevaEtiqueta.trim() || creandoPeriodo}
+            disabled={creandoPeriodo}
             className="flex items-center gap-2 rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
           >
             <Plus size={16} /> {creandoPeriodo ? "Creando…" : "Nuevo período"}
