@@ -43,6 +43,21 @@ function horaBogotaAhora(): string {
   return new Date().toLocaleTimeString("en-GB", { timeZone: "America/Bogota", hour: "2-digit", minute: "2-digit" });
 }
 
+/** 0 = domingo ... 6 = sábado. */
+function diaDeSemana(fechaYMD: string): number {
+  const [y, m, d] = fechaYMD.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+}
+
+// Sábado es media jornada (8am-12m, sin almuerzo) — el resto de la semana
+// es la jornada ordinaria completa (8:30am-6:00pm con 1h de almuerzo).
+function horasPorDefecto(fechaYMD: string): Record<TipoAsistencia, string> {
+  if (diaDeSemana(fechaYMD) === 6) {
+    return { llegada: "08:00", salida_almuerzo: "12:00", entrada_almuerzo: "13:00", salida: "12:00" };
+  }
+  return { llegada: "08:30", salida_almuerzo: "12:00", entrada_almuerzo: "13:00", salida: "18:00" };
+}
+
 interface RegistroReporte {
   perfil_id: string;
   nombre: string;
@@ -181,12 +196,9 @@ export function Asistencia() {
   const [notaPersona, setNotaPersona] = useState("");
   const [notaOriginal, setNotaOriginal] = useState("");
   const [ausenciaPersona, setAusenciaPersona] = useState<{ id: string; tipo: "vacaciones" | "incapacidad" } | null>(null);
-  const [horaNueva, setHoraNueva] = useState<Record<TipoAsistencia, string>>({
-    llegada: "09:00",
-    salida_almuerzo: "12:00",
-    entrada_almuerzo: "13:00",
-    salida: "17:00",
-  });
+  const [horaNueva, setHoraNueva] = useState<Record<TipoAsistencia, string>>(() =>
+    horasPorDefecto(fechaBogota(new Date().toISOString())),
+  );
   const [guardandoAdmin, setGuardandoAdmin] = useState(false);
   const [errorAdmin, setErrorAdmin] = useState<string | null>(null);
 
@@ -236,6 +248,10 @@ export function Asistencia() {
     cargarMarcasPersona();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [personaAdminId, fechaAdmin]);
+
+  useEffect(() => {
+    setHoraNueva(horasPorDefecto(fechaAdmin));
+  }, [fechaAdmin]);
 
   async function agregarMarcaPersona(tipo: TipoAsistencia) {
     const persona = personas.find((p) => p.id === personaAdminId);
@@ -577,7 +593,9 @@ export function Asistencia() {
           </div>
 
           <div className="space-y-2">
-            {TIPOS_ASISTENCIA.map((t) => {
+            {TIPOS_ASISTENCIA.filter(
+              (t) => diaDeSemana(fechaAdmin) !== 6 || (t.value !== "salida_almuerzo" && t.value !== "entrada_almuerzo"),
+            ).map((t) => {
               const marca = marcasPersona.find((m) => m.tipo === t.value);
               return (
                 <div key={t.value} className="flex items-center gap-2 text-sm">
