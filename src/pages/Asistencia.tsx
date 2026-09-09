@@ -4,10 +4,26 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthContext";
 import { TIPOS_ASISTENCIA, type AsistenciaRegistro, type TipoAsistencia } from "../lib/types";
 
-// Jornada ordinaria (8:30am-6:00pm con 1h de almuerzo) — un día de
-// vacaciones/incapacidad resta esto de la meta semanal de esa semana, para
-// no marcarlo como déficit.
-const JORNADA_ORDINARIA_HORAS = 8.5;
+// Jornada ordinaria: 8:30am-6:00pm con 1h de almuerzo entre semana (8.5h),
+// 8am-12m el sábado sin almuerzo (4h). Un día de vacaciones/incapacidad
+// resta esto de la meta semanal de esa semana, y también es lo que se usa
+// para calcular cuánto le "falta" a un día compensado (ver más abajo).
+function jornadaOrdinariaHoras(fechaYMD: string): number {
+  return diaDeSemana(fechaYMD) === 6 ? 4 : 8.5;
+}
+
+/** Horas realmente trabajadas ese día según sus marcas (mismo cálculo que
+ *  usa el reporte mensual: llegada→salida, descontando almuerzo si hay). */
+function horasTrabajadasDeMarcas(marcas: { tipo: TipoAsistencia; marcado_en: string }[]): number {
+  const porTipo: Partial<Record<TipoAsistencia, string>> = {};
+  for (const m of marcas) if (!porTipo[m.tipo]) porTipo[m.tipo] = m.marcado_en;
+  if (!porTipo.llegada || !porTipo.salida) return 0;
+  let horas = (new Date(porTipo.salida).getTime() - new Date(porTipo.llegada).getTime()) / 3_600_000;
+  if (porTipo.salida_almuerzo && porTipo.entrada_almuerzo) {
+    horas -= (new Date(porTipo.entrada_almuerzo).getTime() - new Date(porTipo.salida_almuerzo).getTime()) / 3_600_000;
+  }
+  return Math.max(0, horas);
+}
 
 const ICONOS: Record<TipoAsistencia, typeof LogIn> = {
   llegada: LogIn,
@@ -147,14 +163,19 @@ function armarReporteHoras(
     });
   }
 
-  // Un día de vacaciones/incapacidad resta una jornada ordinaria de la meta
-  // semanal de esa semana, para no marcarlo como déficit.
-  const ausenciasPorSemana = new Map<string, { nombre: string; dias: number }>();
+  // Un día de vacaciones/incapacidad resta una jornada ordinaria (8.5h entre
+  // semana, 4h el sábado) de la meta semanal de esa semana, para no
+  // marcarlo como déficit.
+  const ausenciasPorSemana = new Map<string, { nombre: string; dias: number; horasDescuento: number }>();
   for (const a of ausencias) {
     const lunes = lunesDeSemana(a.fecha);
     const claveSemana = `${a.perfil_id}|${lunes}`;
     const acumulado = ausenciasPorSemana.get(claveSemana);
-    ausenciasPorSemana.set(claveSemana, { nombre: a.nombre, dias: (acumulado?.dias ?? 0) + 1 });
+    ausenciasPorSemana.set(claveSemana, {
+      nombre: a.nombre,
+      dias: (acumulado?.dias ?? 0) + 1,
+      horasDescuento: (acumulado?.horasDescuento ?? 0) + jornadaOrdinariaHoras(a.fecha),
+    });
   }
 
   const clavesSemana = new Set([...porPersonaYSemana.keys(), ...ausenciasPorSemana.keys()]);
@@ -173,7 +194,8 @@ function armarReporteHoras(
     const minutosCompensados = porPersonaYSemana.get(claveSemana)?.minutosCompensados ?? 0;
     const diasAusencia = ausenciasPorSemana.get(claveSemana)?.dias ?? 0;
     const nombre = porPersonaYSemana.get(claveSemana)?.nombre ?? ausenciasPorSemana.get(claveSemana)?.nombre ?? "—";
-    const metaAjustada = Math.max(0, metaSemanal - diasAusencia * JORNADA_ORDINARIA_HORAS);
+    const horasDescuentoAusencia = ausenciasPorSemana.get(claveSemana)?.horasDescuento ?? 0;
+    const metaAjustada = Math.max(0, metaSemanal - horasDescuentoAusencia);
     if (!porPersona.has(perfilId)) porPersona.set(perfilId, { perfilId, nombre, semanas: [], totalHorasExtra: 0 });
     const fila = porPersona.get(perfilId)!;
     const horasExtra = Math.max(0, horas - metaAjustada);
@@ -225,8 +247,8 @@ export function Asistencia() {
   const [marcasPersona, setMarcasPersona] = useState<AsistenciaRegistro[]>([]);
   const [notaPersona, setNotaPersona] = useState("");
   const [notaOriginal, setNotaOriginal] = useState("");
-  const [minutosCompensados, setMinutosCompensados] = useState("0");
-  const [minutosCompensadosOriginal, setMinutosCompensadosOriginal] = useState("0");
+  const [esCompensado, setEsCompensado] = useState(false);
+  const [esCompensadoOriginal, setEsCompensadoOriginal] = useState(false);
   const [ausenciaPersona, setAusenciaPersona] = useState<{ id: string; tipo: "vacaciones" | "incapacidad" } | null>(null);
   const [horaNueva, setHoraNueva] = useState<Record<TipoAsistencia, string>>(() =>
     horasPorDefecto(fechaBogota(new Date().toISOString())),
@@ -267,8 +289,8 @@ export function Asistencia() {
       .maybeSingle();
     setNotaPersona(nota?.nota ?? "");
     setNotaOriginal(nota?.nota ?? "");
-    setMinutosCompensados(String(nota?.minutos_compensados ?? 0));
-    setMinutosCompensadosOriginal(String(nota?.minutos_compensados ?? 0));
+    setEsCompensado((nota?.minutos_compensados ?? 0) > 0);
+    setEsCompensadoOriginal((nota?.minutos_compensados ?? 0) > 0);
     const { data: ausencia } = await supabase
       .from("asistencia_ausencias")
       .select("id, tipo")
@@ -318,14 +340,29 @@ export function Asistencia() {
   }
 
   async function guardarNotaPersona() {
+    // El check de "compensado" no pide un número — calcula solo cuánto le
+    // faltó ese día contra la jornada ordinaria (8.5h entre semana, 4h
+    // sábado) y ese faltante se suma de vuelta a las horas de la semana en
+    // el reporte, para no descontarlo dos veces (ya estaba a su favor de un
+    // período anterior).
+    if (esCompensado) {
+      const horasTrabajadas = horasTrabajadasDeMarcas(marcasPersona);
+      if (horasTrabajadas === 0) {
+        setErrorAdmin('Para marcar "compensado" primero hay que cargar la llegada y la salida de ese día.');
+        return;
+      }
+    }
     setGuardandoAdmin(true);
     setErrorAdmin(null);
+    const minutosCompensados = esCompensado
+      ? Math.round(Math.max(0, jornadaOrdinariaHoras(fechaAdmin) - horasTrabajadasDeMarcas(marcasPersona)) * 60)
+      : 0;
     const { error } = await supabase.from("asistencia_notas_dia").upsert(
       {
         perfil_id: personaAdminId,
         fecha: fechaAdmin,
         nota: notaPersona.trim(),
-        minutos_compensados: Number(minutosCompensados) || 0,
+        minutos_compensados: minutosCompensados,
         created_by: perfil?.id ?? null,
       },
       { onConflict: "perfil_id,fecha" },
@@ -336,7 +373,7 @@ export function Asistencia() {
       return;
     }
     setNotaOriginal(notaPersona.trim());
-    setMinutosCompensadosOriginal(minutosCompensados);
+    setEsCompensadoOriginal(esCompensado);
     cargarReporte();
   }
 
@@ -633,7 +670,7 @@ export function Asistencia() {
               </div>
             )}
             <p className="text-xs text-sky-700 mt-1">
-              No cuenta como déficit de horas esa semana (resta {JORNADA_ORDINARIA_HORAS}h de la meta).
+              No cuenta como déficit de horas esa semana (resta {jornadaOrdinariaHoras(fechaAdmin)}h de la meta).
             </p>
           </div>
 
@@ -689,29 +726,23 @@ export function Asistencia() {
                 placeholder="Sin nota"
                 className="flex-1 min-w-[160px] rounded-lg border border-gray-300 px-3 py-2 text-sm"
               />
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="number"
-                  value={minutosCompensados}
-                  onChange={(e) => setMinutosCompensados(e.target.value)}
-                  className="w-20 rounded-lg border border-gray-300 px-2 py-2 text-sm"
-                />
-                <span className="text-xs text-gray-400 whitespace-nowrap">min. compensados</span>
-              </div>
               <button
                 onClick={guardarNotaPersona}
-                disabled={
-                  guardandoAdmin ||
-                  (notaPersona.trim() === notaOriginal && minutosCompensados === minutosCompensadosOriginal)
-                }
+                disabled={guardandoAdmin || (notaPersona.trim() === notaOriginal && esCompensado === esCompensadoOriginal)}
                 className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
               >
                 {guardandoAdmin ? "Guardando…" : "Guardar"}
               </button>
             </div>
+            <label className="flex items-center gap-2 text-sm mt-2">
+              <input type="checkbox" checked={esCompensado} onChange={(e) => setEsCompensado(e.target.checked)} />
+              Compensado de tiempo
+            </label>
             <p className="text-xs text-gray-400 mt-1">
-              Si llegó tarde/salió temprano pero ese tiempo ya estaba compensado de un período anterior, pon los
-              minutos acá para que se sumen de vuelta y no se resten dos veces.
+              Si llegó tarde o salió temprano pero ese tiempo ya estaba a su favor de un período anterior (autorizado),
+              marca esto y toca "Guardar": el sistema calcula solo cuánto le faltó ese día contra la jornada
+              ({jornadaOrdinariaHoras(fechaAdmin)}h) y lo suma de vuelta a las horas de la semana, para no
+              descontárselo dos veces.
             </p>
           </div>
 
