@@ -4,6 +4,11 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthContext";
 import { TIPOS_ASISTENCIA, type AsistenciaRegistro, type TipoAsistencia } from "../lib/types";
 
+// Jornada ordinaria (8:30am-6:00pm con 1h de almuerzo) — un día de
+// vacaciones/incapacidad resta esto de la meta semanal de esa semana, para
+// no marcarlo como déficit.
+const JORNADA_ORDINARIA_HORAS = 8.5;
+
 const ICONOS: Record<TipoAsistencia, typeof LogIn> = {
   llegada: LogIn,
   salida_almuerzo: Coffee,
@@ -50,6 +55,7 @@ interface SemanaReporte {
   horas: number;
   horasExtra: number;
   horasDeficit: number;
+  diasAusencia: number;
 }
 
 interface FilaPersona {
@@ -57,6 +63,12 @@ interface FilaPersona {
   nombre: string;
   semanas: SemanaReporte[];
   totalHorasExtra: number;
+}
+
+interface AusenciaReporte {
+  perfil_id: string;
+  nombre: string;
+  fecha: string;
 }
 
 /** Arma el reporte de horas del mes: agrupa las marcas por persona y día
@@ -67,7 +79,12 @@ interface FilaPersona {
  *  mes donde arrancó, que es como se van a pagar (horas extra del mes se
  *  pagan el mes siguiente).
  */
-function armarReporteHoras(registros: RegistroReporte[], mesSeleccionado: string, metaSemanal: number): FilaPersona[] {
+function armarReporteHoras(
+  registros: RegistroReporte[],
+  ausencias: AusenciaReporte[],
+  mesSeleccionado: string,
+  metaSemanal: number,
+): FilaPersona[] {
   const porPersonaYDia = new Map<string, { nombre: string; marcas: Record<string, string> }>();
   for (const r of registros) {
     const dia = fechaBogota(r.marcado_en);
@@ -92,15 +109,31 @@ function armarReporteHoras(registros: RegistroReporte[], mesSeleccionado: string
     porPersonaYSemana.set(claveSemana, { nombre, horas: (acumulado?.horas ?? 0) + horas });
   }
 
+  // Un día de vacaciones/incapacidad resta una jornada ordinaria de la meta
+  // semanal de esa semana, para no marcarlo como déficit.
+  const ausenciasPorSemana = new Map<string, { nombre: string; dias: number }>();
+  for (const a of ausencias) {
+    const lunes = lunesDeSemana(a.fecha);
+    const claveSemana = `${a.perfil_id}|${lunes}`;
+    const acumulado = ausenciasPorSemana.get(claveSemana);
+    ausenciasPorSemana.set(claveSemana, { nombre: a.nombre, dias: (acumulado?.dias ?? 0) + 1 });
+  }
+
+  const clavesSemana = new Set([...porPersonaYSemana.keys(), ...ausenciasPorSemana.keys()]);
+
   const porPersona = new Map<string, FilaPersona>();
-  for (const [claveSemana, { nombre, horas }] of porPersonaYSemana) {
+  for (const claveSemana of clavesSemana) {
     const [perfilId, lunes] = claveSemana.split("|");
     if (lunes.slice(0, 7) !== mesSeleccionado) continue;
+    const horas = porPersonaYSemana.get(claveSemana)?.horas ?? 0;
+    const diasAusencia = ausenciasPorSemana.get(claveSemana)?.dias ?? 0;
+    const nombre = porPersonaYSemana.get(claveSemana)?.nombre ?? ausenciasPorSemana.get(claveSemana)?.nombre ?? "—";
+    const metaAjustada = Math.max(0, metaSemanal - diasAusencia * JORNADA_ORDINARIA_HORAS);
     if (!porPersona.has(perfilId)) porPersona.set(perfilId, { perfilId, nombre, semanas: [], totalHorasExtra: 0 });
     const fila = porPersona.get(perfilId)!;
-    const horasExtra = Math.max(0, horas - metaSemanal);
-    const horasDeficit = Math.max(0, metaSemanal - horas);
-    fila.semanas.push({ lunes, horas, horasExtra, horasDeficit });
+    const horasExtra = Math.max(0, horas - metaAjustada);
+    const horasDeficit = Math.max(0, metaAjustada - horas);
+    fila.semanas.push({ lunes, horas, horasExtra, horasDeficit, diasAusencia });
     fila.totalHorasExtra += horasExtra;
   }
 
@@ -126,6 +159,9 @@ export function Asistencia() {
   const [reporte, setReporte] = useState<FilaPersona[]>([]);
   const [cargandoReporte, setCargandoReporte] = useState(true);
   const [notasPorPersona, setNotasPorPersona] = useState<Record<string, { fecha: string; nota: string }[]>>({});
+  const [ausenciasPorPersona, setAusenciasPorPersona] = useState<
+    Record<string, { fecha: string; tipo: "vacaciones" | "incapacidad" }[]>
+  >({});
 
   // Solo para admin: día que se está simulando al marcar, para poder probar
   // el conteo de horas de varios días seguidos sin esperar a que pasen de
@@ -144,6 +180,7 @@ export function Asistencia() {
   const [marcasPersona, setMarcasPersona] = useState<AsistenciaRegistro[]>([]);
   const [notaPersona, setNotaPersona] = useState("");
   const [notaOriginal, setNotaOriginal] = useState("");
+  const [ausenciaPersona, setAusenciaPersona] = useState<{ id: string; tipo: "vacaciones" | "incapacidad" } | null>(null);
   const [horaNueva, setHoraNueva] = useState<Record<TipoAsistencia, string>>({
     llegada: "09:00",
     salida_almuerzo: "12:00",
@@ -186,6 +223,13 @@ export function Asistencia() {
       .maybeSingle();
     setNotaPersona(nota?.nota ?? "");
     setNotaOriginal(nota?.nota ?? "");
+    const { data: ausencia } = await supabase
+      .from("asistencia_ausencias")
+      .select("id, tipo")
+      .eq("perfil_id", personaAdminId)
+      .eq("fecha", fechaAdmin)
+      .maybeSingle();
+    setAusenciaPersona(ausencia ?? null);
   }
 
   useEffect(() => {
@@ -240,6 +284,40 @@ export function Asistencia() {
     setNotaOriginal(notaPersona.trim());
   }
 
+  async function marcarAusencia(tipo: "vacaciones" | "incapacidad") {
+    setGuardandoAdmin(true);
+    setErrorAdmin(null);
+    const { data, error } = await supabase
+      .from("asistencia_ausencias")
+      .upsert(
+        { perfil_id: personaAdminId, fecha: fechaAdmin, tipo, created_by: perfil?.id ?? null },
+        { onConflict: "perfil_id,fecha" },
+      )
+      .select("id, tipo")
+      .single();
+    setGuardandoAdmin(false);
+    if (error) {
+      setErrorAdmin(error.message);
+      return;
+    }
+    setAusenciaPersona(data);
+    if (fechaAdmin.slice(0, 7) === mesReporte) cargarReporte();
+  }
+
+  async function quitarAusencia() {
+    if (!ausenciaPersona) return;
+    setGuardandoAdmin(true);
+    setErrorAdmin(null);
+    const { error } = await supabase.from("asistencia_ausencias").delete().eq("id", ausenciaPersona.id);
+    setGuardandoAdmin(false);
+    if (error) {
+      setErrorAdmin(error.message);
+      return;
+    }
+    setAusenciaPersona(null);
+    if (fechaAdmin.slice(0, 7) === mesReporte) cargarReporte();
+  }
+
   async function cargarRegistros() {
     if (!perfil) return;
     const desde = `${fechaMarca}T00:00:00-05:00`;
@@ -285,7 +363,31 @@ export function Asistencia() {
     const filas = ((data as unknown as { perfil_id: string; tipo: TipoAsistencia; marcado_en: string; perfiles: { nombre: string } | null }[]) ?? []).map(
       (r) => ({ perfil_id: r.perfil_id, tipo: r.tipo, marcado_en: r.marcado_en, nombre: r.perfiles?.nombre ?? "—" }),
     );
-    setReporte(armarReporteHoras(filas, mesReporte, metaSemanal));
+
+    const { data: ausenciasData } = await supabase
+      .from("asistencia_ausencias")
+      .select("perfil_id, fecha, tipo, perfiles(nombre)")
+      .gte("fecha", desde)
+      .lt("fecha", hasta);
+    const ausenciasRows =
+      (ausenciasData as unknown as {
+        perfil_id: string;
+        fecha: string;
+        tipo: "vacaciones" | "incapacidad";
+        perfiles: { nombre: string } | null;
+      }[]) ?? [];
+    const ausencias: AusenciaReporte[] = ausenciasRows.map((a) => ({
+      perfil_id: a.perfil_id,
+      fecha: a.fecha,
+      nombre: a.perfiles?.nombre ?? "—",
+    }));
+    const ausenciasAgrupadas: Record<string, { fecha: string; tipo: "vacaciones" | "incapacidad" }[]> = {};
+    for (const a of ausenciasRows) {
+      (ausenciasAgrupadas[a.perfil_id] ??= []).push({ fecha: a.fecha, tipo: a.tipo });
+    }
+    setAusenciasPorPersona(ausenciasAgrupadas);
+
+    setReporte(armarReporteHoras(filas, ausencias, mesReporte, metaSemanal));
 
     const { data: notas } = await supabase
       .from("asistencia_notas_dia")
@@ -442,6 +544,38 @@ export function Asistencia() {
             />
           </div>
 
+          <div className="rounded-lg bg-sky-50 border border-sky-200 px-3 py-2">
+            {ausenciaPersona ? (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="font-medium text-sky-800">
+                  {ausenciaPersona.tipo === "vacaciones" ? "Día de vacaciones" : "Día de incapacidad"}
+                </span>
+                <button onClick={quitarAusencia} className="text-xs text-red-500 hover:underline">
+                  Quitar
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 flex-wrap text-sm">
+                <span className="text-gray-500">Marcar este día como:</span>
+                <button
+                  onClick={() => marcarAusencia("vacaciones")}
+                  className="text-xs font-medium px-2.5 py-1.5 rounded-md bg-sky-600 text-white"
+                >
+                  Vacaciones
+                </button>
+                <button
+                  onClick={() => marcarAusencia("incapacidad")}
+                  className="text-xs font-medium px-2.5 py-1.5 rounded-md bg-sky-600 text-white"
+                >
+                  Incapacidad
+                </button>
+              </div>
+            )}
+            <p className="text-xs text-sky-700 mt-1">
+              No cuenta como déficit de horas esa semana (resta {JORNADA_ORDINARIA_HORAS}h de la meta).
+            </p>
+          </div>
+
           <div className="space-y-2">
             {TIPOS_ASISTENCIA.map((t) => {
               const marca = marcasPersona.find((m) => m.tipo === t.value);
@@ -552,6 +686,9 @@ export function Asistencia() {
                         <tr key={s.lunes}>
                           <td className="py-1">
                             {s.lunes} — {sumarDias(s.lunes, 6)}
+                            {s.diasAusencia > 0 && (
+                              <span className="text-sky-600"> (−{s.diasAusencia}d ausencia)</span>
+                            )}
                           </td>
                           <td className="py-1 text-right">{s.horas.toFixed(1)}</td>
                           <td className="py-1 text-right text-emerald-700">{s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
@@ -561,6 +698,18 @@ export function Asistencia() {
                     </tbody>
                   </table>
                 </div>
+                {ausenciasPorPersona[fila.perfilId]?.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-gray-100 space-y-0.5">
+                    {ausenciasPorPersona[fila.perfilId]
+                      .sort((a, b) => a.fecha.localeCompare(b.fecha))
+                      .map((a) => (
+                        <p key={a.fecha} className="text-xs text-sky-700">
+                          <span className="font-medium">{a.fecha}:</span>{" "}
+                          {a.tipo === "vacaciones" ? "Vacaciones" : "Incapacidad"}
+                        </p>
+                      ))}
+                  </div>
+                )}
                 {notasPorPersona[fila.perfilId]?.length > 0 && (
                   <div className="mt-2 pt-2 border-t border-gray-100 space-y-0.5">
                     {notasPorPersona[fila.perfilId]

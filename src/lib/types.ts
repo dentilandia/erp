@@ -52,6 +52,18 @@ export interface AsistenciaNotaDia {
   updated_at: string;
 }
 
+/** Día de vacaciones o incapacidad de una persona — no debe contar como
+ *  "déficit" de horas en el reporte semanal. */
+export interface AsistenciaAusencia {
+  id: string;
+  perfil_id: string;
+  fecha: string;
+  tipo: "vacaciones" | "incapacidad";
+  nota: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
 /** Frase mostrada al marcar llegada (motivadora) o salida final
  *  (agradecimiento/felicitación) — rota una nueva cada día. */
 export interface FraseMotivacional {
