@@ -71,6 +71,8 @@ interface SemanaReporte {
   horasExtra: number;
   horasDeficit: number;
   diasAusencia: number;
+  minutosCompensados: number;
+  cuentaParaEsteMes: boolean;
 }
 
 interface FilaPersona {
@@ -86,20 +88,35 @@ interface AusenciaReporte {
   fecha: string;
 }
 
+interface CompensacionReporte {
+  perfil_id: string;
+  fecha: string;
+  minutos: number;
+}
+
 /** Arma el reporte de horas del mes: agrupa las marcas por persona y día
  *  calendario, calcula horas trabajadas (llegada→salida, descontando el
- *  almuerzo si hay salida/entrada de almuerzo) y las junta en semanas
- *  lunes-domingo. Solo se cuentan las semanas cuyo lunes cae dentro del mes
- *  seleccionado — así una semana partida entre dos meses queda del lado del
- *  mes donde arrancó, que es como se van a pagar (horas extra del mes se
- *  pagan el mes siguiente).
+ *  almuerzo si hay salida/entrada de almuerzo, y sumando de vuelta los
+ *  minutos ya compensados de un período anterior — si no, se le estaría
+ *  restando esa diferencia dos veces) y las junta en semanas lunes-domingo.
+ *  Se muestra cualquier semana que toque el mes seleccionado (aunque
+ *  arranque en el mes anterior), pero el total de horas extra del mes solo
+ *  suma las semanas cuyo lunes cae DENTRO del mes seleccionado — así una
+ *  semana partida entre dos meses se ve en ambos, pero solo se paga una vez,
+ *  en el mes donde arrancó (el mes siguiente al que se generó).
  */
 function armarReporteHoras(
   registros: RegistroReporte[],
   ausencias: AusenciaReporte[],
+  compensaciones: CompensacionReporte[],
   mesSeleccionado: string,
   metaSemanal: number,
 ): FilaPersona[] {
+  const compensadosPorDia = new Map<string, number>();
+  for (const c of compensaciones) {
+    compensadosPorDia.set(`${c.perfil_id}|${c.fecha}`, (compensadosPorDia.get(`${c.perfil_id}|${c.fecha}`) ?? 0) + c.minutos);
+  }
+
   const porPersonaYDia = new Map<string, { nombre: string; marcas: Record<string, string> }>();
   for (const r of registros) {
     const dia = fechaBogota(r.marcado_en);
@@ -109,7 +126,7 @@ function armarReporteHoras(
     if (!entrada.marcas[r.tipo]) entrada.marcas[r.tipo] = r.marcado_en;
   }
 
-  const porPersonaYSemana = new Map<string, { nombre: string; horas: number }>();
+  const porPersonaYSemana = new Map<string, { nombre: string; horas: number; minutosCompensados: number }>();
   for (const [clave, { nombre, marcas }] of porPersonaYDia) {
     const [perfilId, dia] = clave.split("|");
     if (!marcas.llegada || !marcas.salida) continue;
@@ -117,11 +134,17 @@ function armarReporteHoras(
     if (marcas.salida_almuerzo && marcas.entrada_almuerzo) {
       horas -= (new Date(marcas.entrada_almuerzo).getTime() - new Date(marcas.salida_almuerzo).getTime()) / 3_600_000;
     }
+    const minutosDia = compensadosPorDia.get(clave) ?? 0;
+    horas += minutosDia / 60;
     if (horas <= 0) continue;
     const lunes = lunesDeSemana(dia);
     const claveSemana = `${perfilId}|${lunes}`;
     const acumulado = porPersonaYSemana.get(claveSemana);
-    porPersonaYSemana.set(claveSemana, { nombre, horas: (acumulado?.horas ?? 0) + horas });
+    porPersonaYSemana.set(claveSemana, {
+      nombre,
+      horas: (acumulado?.horas ?? 0) + horas,
+      minutosCompensados: (acumulado?.minutosCompensados ?? 0) + minutosDia,
+    });
   }
 
   // Un día de vacaciones/incapacidad resta una jornada ordinaria de la meta
@@ -135,12 +158,19 @@ function armarReporteHoras(
   }
 
   const clavesSemana = new Set([...porPersonaYSemana.keys(), ...ausenciasPorSemana.keys()]);
+  const mesInicio = `${mesSeleccionado}-01`;
+  const mesFin = sumarDias(`${mesSeleccionado}-01`, 31).slice(0, 7) + "-01"; // primer día del mes siguiente
 
   const porPersona = new Map<string, FilaPersona>();
   for (const claveSemana of clavesSemana) {
     const [perfilId, lunes] = claveSemana.split("|");
-    if (lunes.slice(0, 7) !== mesSeleccionado) continue;
+    const domingo = sumarDias(lunes, 6);
+    // La semana se muestra si toca el mes seleccionado (aunque haya arrancado
+    // el mes anterior); el total del mes solo cuenta las que arrancan en él.
+    if (domingo < mesInicio || lunes >= mesFin) continue;
+    const cuentaParaEsteMes = lunes.slice(0, 7) === mesSeleccionado;
     const horas = porPersonaYSemana.get(claveSemana)?.horas ?? 0;
+    const minutosCompensados = porPersonaYSemana.get(claveSemana)?.minutosCompensados ?? 0;
     const diasAusencia = ausenciasPorSemana.get(claveSemana)?.dias ?? 0;
     const nombre = porPersonaYSemana.get(claveSemana)?.nombre ?? ausenciasPorSemana.get(claveSemana)?.nombre ?? "—";
     const metaAjustada = Math.max(0, metaSemanal - diasAusencia * JORNADA_ORDINARIA_HORAS);
@@ -148,8 +178,8 @@ function armarReporteHoras(
     const fila = porPersona.get(perfilId)!;
     const horasExtra = Math.max(0, horas - metaAjustada);
     const horasDeficit = Math.max(0, metaAjustada - horas);
-    fila.semanas.push({ lunes, horas, horasExtra, horasDeficit, diasAusencia });
-    fila.totalHorasExtra += horasExtra;
+    fila.semanas.push({ lunes, horas, horasExtra, horasDeficit, diasAusencia, minutosCompensados, cuentaParaEsteMes });
+    if (cuentaParaEsteMes) fila.totalHorasExtra += horasExtra;
   }
 
   return Array.from(porPersona.values())
@@ -195,6 +225,8 @@ export function Asistencia() {
   const [marcasPersona, setMarcasPersona] = useState<AsistenciaRegistro[]>([]);
   const [notaPersona, setNotaPersona] = useState("");
   const [notaOriginal, setNotaOriginal] = useState("");
+  const [minutosCompensados, setMinutosCompensados] = useState("0");
+  const [minutosCompensadosOriginal, setMinutosCompensadosOriginal] = useState("0");
   const [ausenciaPersona, setAusenciaPersona] = useState<{ id: string; tipo: "vacaciones" | "incapacidad" } | null>(null);
   const [horaNueva, setHoraNueva] = useState<Record<TipoAsistencia, string>>(() =>
     horasPorDefecto(fechaBogota(new Date().toISOString())),
@@ -229,12 +261,14 @@ export function Asistencia() {
     setMarcasPersona((data as AsistenciaRegistro[]) ?? []);
     const { data: nota } = await supabase
       .from("asistencia_notas_dia")
-      .select("nota")
+      .select("nota, minutos_compensados")
       .eq("perfil_id", personaAdminId)
       .eq("fecha", fechaAdmin)
       .maybeSingle();
     setNotaPersona(nota?.nota ?? "");
     setNotaOriginal(nota?.nota ?? "");
+    setMinutosCompensados(String(nota?.minutos_compensados ?? 0));
+    setMinutosCompensadosOriginal(String(nota?.minutos_compensados ?? 0));
     const { data: ausencia } = await supabase
       .from("asistencia_ausencias")
       .select("id, tipo")
@@ -269,7 +303,7 @@ export function Asistencia() {
       return;
     }
     cargarMarcasPersona();
-    if (fechaAdmin.slice(0, 7) === mesReporte) cargarReporte();
+    cargarReporte();
   }
 
   async function eliminarMarcaPersona(id: string) {
@@ -280,24 +314,30 @@ export function Asistencia() {
       return;
     }
     cargarMarcasPersona();
-    if (fechaAdmin.slice(0, 7) === mesReporte) cargarReporte();
+    cargarReporte();
   }
 
   async function guardarNotaPersona() {
     setGuardandoAdmin(true);
     setErrorAdmin(null);
-    const { error } = await supabase
-      .from("asistencia_notas_dia")
-      .upsert(
-        { perfil_id: personaAdminId, fecha: fechaAdmin, nota: notaPersona.trim(), created_by: perfil?.id ?? null },
-        { onConflict: "perfil_id,fecha" },
-      );
+    const { error } = await supabase.from("asistencia_notas_dia").upsert(
+      {
+        perfil_id: personaAdminId,
+        fecha: fechaAdmin,
+        nota: notaPersona.trim(),
+        minutos_compensados: Number(minutosCompensados) || 0,
+        created_by: perfil?.id ?? null,
+      },
+      { onConflict: "perfil_id,fecha" },
+    );
     setGuardandoAdmin(false);
     if (error) {
       setErrorAdmin(error.message);
       return;
     }
     setNotaOriginal(notaPersona.trim());
+    setMinutosCompensadosOriginal(minutosCompensados);
+    cargarReporte();
   }
 
   async function marcarAusencia(tipo: "vacaciones" | "incapacidad") {
@@ -317,7 +357,7 @@ export function Asistencia() {
       return;
     }
     setAusenciaPersona(data);
-    if (fechaAdmin.slice(0, 7) === mesReporte) cargarReporte();
+    cargarReporte();
   }
 
   async function quitarAusencia() {
@@ -331,7 +371,7 @@ export function Asistencia() {
       return;
     }
     setAusenciaPersona(null);
-    if (fechaAdmin.slice(0, 7) === mesReporte) cargarReporte();
+    cargarReporte();
   }
 
   async function cargarRegistros() {
@@ -403,18 +443,23 @@ export function Asistencia() {
     }
     setAusenciasPorPersona(ausenciasAgrupadas);
 
-    setReporte(armarReporteHoras(filas, ausencias, mesReporte, metaSemanal));
-
     const { data: notas } = await supabase
       .from("asistencia_notas_dia")
-      .select("perfil_id, fecha, nota")
+      .select("perfil_id, fecha, nota, minutos_compensados")
       .gte("fecha", desde)
       .lt("fecha", hasta);
+    const notasRows =
+      (notas as { perfil_id: string; fecha: string; nota: string; minutos_compensados: number }[]) ?? [];
     const notasAgrupadas: Record<string, { fecha: string; nota: string }[]> = {};
-    for (const n of (notas as { perfil_id: string; fecha: string; nota: string }[]) ?? []) {
-      (notasAgrupadas[n.perfil_id] ??= []).push({ fecha: n.fecha, nota: n.nota });
+    for (const n of notasRows) {
+      if (n.nota) (notasAgrupadas[n.perfil_id] ??= []).push({ fecha: n.fecha, nota: n.nota });
     }
     setNotasPorPersona(notasAgrupadas);
+    const compensaciones: CompensacionReporte[] = notasRows
+      .filter((n) => n.minutos_compensados)
+      .map((n) => ({ perfil_id: n.perfil_id, fecha: n.fecha, minutos: n.minutos_compensados }));
+
+    setReporte(armarReporteHoras(filas, ausencias, compensaciones, mesReporte, metaSemanal));
     setCargandoReporte(false);
   }
 
@@ -455,7 +500,7 @@ export function Asistencia() {
       setFrase({ tipo, texto: data.frase });
     }
     cargarRegistros();
-    if (fechaMarca.slice(0, 7) === mesReporte) cargarReporte();
+    cargarReporte();
   }
 
   return (
@@ -637,21 +682,37 @@ export function Asistencia() {
             <label className="block text-xs font-medium text-gray-500 mb-1">
               Nota del día (ej. "entró a la 1pm en vez de las 9am, autorizado")
             </label>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <input
                 value={notaPersona}
                 onChange={(e) => setNotaPersona(e.target.value)}
                 placeholder="Sin nota"
-                className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                className="flex-1 min-w-[160px] rounded-lg border border-gray-300 px-3 py-2 text-sm"
               />
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  value={minutosCompensados}
+                  onChange={(e) => setMinutosCompensados(e.target.value)}
+                  className="w-20 rounded-lg border border-gray-300 px-2 py-2 text-sm"
+                />
+                <span className="text-xs text-gray-400 whitespace-nowrap">min. compensados</span>
+              </div>
               <button
                 onClick={guardarNotaPersona}
-                disabled={guardandoAdmin || notaPersona.trim() === notaOriginal}
+                disabled={
+                  guardandoAdmin ||
+                  (notaPersona.trim() === notaOriginal && minutosCompensados === minutosCompensadosOriginal)
+                }
                 className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
               >
-                {guardandoAdmin ? "Guardando…" : "Guardar nota"}
+                {guardandoAdmin ? "Guardando…" : "Guardar"}
               </button>
             </div>
+            <p className="text-xs text-gray-400 mt-1">
+              Si llegó tarde/salió temprano pero ese tiempo ya estaba compensado de un período anterior, pon los
+              minutos acá para que se sumen de vuelta y no se resten dos veces.
+            </p>
           </div>
 
           {errorAdmin && <p className="text-sm text-red-600">{errorAdmin}</p>}
@@ -701,12 +762,16 @@ export function Asistencia() {
                     </thead>
                     <tbody className="divide-y divide-gray-50">
                       {fila.semanas.map((s) => (
-                        <tr key={s.lunes}>
+                        <tr key={s.lunes} className={s.cuentaParaEsteMes ? "" : "opacity-50"}>
                           <td className="py-1">
                             {s.lunes} — {sumarDias(s.lunes, 6)}
                             {s.diasAusencia > 0 && (
                               <span className="text-sky-600"> (−{s.diasAusencia}d ausencia)</span>
                             )}
+                            {s.minutosCompensados > 0 && (
+                              <span className="text-violet-600"> (+{s.minutosCompensados}min comp.)</span>
+                            )}
+                            {!s.cuentaParaEsteMes && <span className="text-gray-400"> — se paga el mes anterior</span>}
                           </td>
                           <td className="py-1 text-right">{s.horas.toFixed(1)}</td>
                           <td className="py-1 text-right text-emerald-700">{s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
