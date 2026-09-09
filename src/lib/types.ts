@@ -39,6 +39,19 @@ export interface AsistenciaRegistro {
   marcado_en: string;
 }
 
+/** Nota libre de admin sobre un día puntual de una persona (ej. "entró a la
+ *  1pm en vez de las 9am, autorizado") — contexto para explicar por qué las
+ *  horas de ese día no fueron las de siempre, antes de que eso reste horas
+ *  sin explicación en el reporte. */
+export interface AsistenciaNotaDia {
+  id: string;
+  perfil_id: string;
+  fecha: string;
+  nota: string;
+  created_by: string | null;
+  updated_at: string;
+}
+
 /** Frase mostrada al marcar llegada (motivadora) o salida final
  *  (agradecimiento/felicitación) — rota una nueva cada día. */
 export interface FraseMotivacional {

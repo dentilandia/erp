@@ -125,12 +125,120 @@ export function Asistencia() {
   const [metaSemanal, setMetaSemanal] = useState(42);
   const [reporte, setReporte] = useState<FilaPersona[]>([]);
   const [cargandoReporte, setCargandoReporte] = useState(true);
+  const [notasPorPersona, setNotasPorPersona] = useState<Record<string, { fecha: string; nota: string }[]>>({});
 
   // Solo para admin: día que se está simulando al marcar, para poder probar
   // el conteo de horas de varios días seguidos sin esperar a que pasen de
   // verdad. Por defecto es hoy (comportamiento normal).
   const [fechaMarca, setFechaMarca] = useState(() => fechaBogota(new Date().toISOString()));
   const [horaMarca, setHoraMarca] = useState(() => horaBogotaAhora());
+
+  // Registro administrativo: admin carga/corrige la asistencia de cualquier
+  // persona (para cargar retroactivo un período completo) y deja notas por
+  // día explicando horas fuera de lo normal — inserta directo a la tabla
+  // (RLS lo permite solo a admin), sin pasar por el edge function de
+  // marcado en vivo, que no aplica acá.
+  const [personas, setPersonas] = useState<{ id: string; nombre: string; sede_id: string | null }[]>([]);
+  const [personaAdminId, setPersonaAdminId] = useState("");
+  const [fechaAdmin, setFechaAdmin] = useState(() => fechaBogota(new Date().toISOString()));
+  const [marcasPersona, setMarcasPersona] = useState<AsistenciaRegistro[]>([]);
+  const [notaPersona, setNotaPersona] = useState("");
+  const [notaOriginal, setNotaOriginal] = useState("");
+  const [horaNueva, setHoraNueva] = useState<Record<TipoAsistencia, string>>({
+    llegada: "09:00",
+    salida_almuerzo: "12:00",
+    entrada_almuerzo: "13:00",
+    salida: "17:00",
+  });
+  const [guardandoAdmin, setGuardandoAdmin] = useState(false);
+  const [errorAdmin, setErrorAdmin] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (perfil?.rol !== "admin") return;
+    supabase
+      .from("perfiles")
+      .select("id, nombre, sede_id")
+      .order("nombre")
+      .then(({ data }) => {
+        const filas = data ?? [];
+        setPersonas(filas);
+        if (filas.length > 0) setPersonaAdminId((prev) => prev || filas[0].id);
+      });
+  }, [perfil?.rol]);
+
+  async function cargarMarcasPersona() {
+    if (!personaAdminId) return;
+    const desde = `${fechaAdmin}T00:00:00-05:00`;
+    const hasta = `${sumarDias(fechaAdmin, 1)}T00:00:00-05:00`;
+    const { data } = await supabase
+      .from("asistencia_registros")
+      .select("*")
+      .eq("perfil_id", personaAdminId)
+      .gte("marcado_en", desde)
+      .lt("marcado_en", hasta)
+      .order("marcado_en");
+    setMarcasPersona((data as AsistenciaRegistro[]) ?? []);
+    const { data: nota } = await supabase
+      .from("asistencia_notas_dia")
+      .select("nota")
+      .eq("perfil_id", personaAdminId)
+      .eq("fecha", fechaAdmin)
+      .maybeSingle();
+    setNotaPersona(nota?.nota ?? "");
+    setNotaOriginal(nota?.nota ?? "");
+  }
+
+  useEffect(() => {
+    cargarMarcasPersona();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [personaAdminId, fechaAdmin]);
+
+  async function agregarMarcaPersona(tipo: TipoAsistencia) {
+    const persona = personas.find((p) => p.id === personaAdminId);
+    if (!persona) return;
+    setErrorAdmin(null);
+    const marcadoEn = new Date(`${fechaAdmin}T${horaNueva[tipo]}:00-05:00`).toISOString();
+    const { error } = await supabase.from("asistencia_registros").insert({
+      perfil_id: persona.id,
+      sede_id: persona.sede_id,
+      tipo,
+      marcado_en: marcadoEn,
+    });
+    if (error) {
+      setErrorAdmin(error.message);
+      return;
+    }
+    cargarMarcasPersona();
+    if (fechaAdmin.slice(0, 7) === mesReporte) cargarReporte();
+  }
+
+  async function eliminarMarcaPersona(id: string) {
+    setErrorAdmin(null);
+    const { error } = await supabase.from("asistencia_registros").delete().eq("id", id);
+    if (error) {
+      setErrorAdmin(error.message);
+      return;
+    }
+    cargarMarcasPersona();
+    if (fechaAdmin.slice(0, 7) === mesReporte) cargarReporte();
+  }
+
+  async function guardarNotaPersona() {
+    setGuardandoAdmin(true);
+    setErrorAdmin(null);
+    const { error } = await supabase
+      .from("asistencia_notas_dia")
+      .upsert(
+        { perfil_id: personaAdminId, fecha: fechaAdmin, nota: notaPersona.trim(), created_by: perfil?.id ?? null },
+        { onConflict: "perfil_id,fecha" },
+      );
+    setGuardandoAdmin(false);
+    if (error) {
+      setErrorAdmin(error.message);
+      return;
+    }
+    setNotaOriginal(notaPersona.trim());
+  }
 
   async function cargarRegistros() {
     if (!perfil) return;
@@ -178,6 +286,17 @@ export function Asistencia() {
       (r) => ({ perfil_id: r.perfil_id, tipo: r.tipo, marcado_en: r.marcado_en, nombre: r.perfiles?.nombre ?? "—" }),
     );
     setReporte(armarReporteHoras(filas, mesReporte, metaSemanal));
+
+    const { data: notas } = await supabase
+      .from("asistencia_notas_dia")
+      .select("perfil_id, fecha, nota")
+      .gte("fecha", desde)
+      .lt("fecha", hasta);
+    const notasAgrupadas: Record<string, { fecha: string; nota: string }[]> = {};
+    for (const n of (notas as { perfil_id: string; fecha: string; nota: string }[]) ?? []) {
+      (notasAgrupadas[n.perfil_id] ??= []).push({ fecha: n.fecha, nota: n.nota });
+    }
+    setNotasPorPersona(notasAgrupadas);
     setCargandoReporte(false);
   }
 
@@ -296,6 +415,97 @@ export function Asistencia() {
       </div>
       </div>
 
+      {perfil?.rol === "admin" && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          <h2 className="font-semibold text-tinta">Registrar asistencia (administración)</h2>
+          <p className="text-xs text-gray-400">
+            Para cargar retroactivo un período completo o corregir una marca — inserta directo, sin depender de que
+            la persona lo haga desde su celular.
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={personaAdminId}
+              onChange={(e) => setPersonaAdminId(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm min-w-[180px]"
+            >
+              {personas.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.nombre}
+                </option>
+              ))}
+            </select>
+            <input
+              type="date"
+              value={fechaAdmin}
+              onChange={(e) => setFechaAdmin(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div className="space-y-2">
+            {TIPOS_ASISTENCIA.map((t) => {
+              const marca = marcasPersona.find((m) => m.tipo === t.value);
+              return (
+                <div key={t.value} className="flex items-center gap-2 text-sm">
+                  <span className="w-36 shrink-0">{t.label}</span>
+                  {marca ? (
+                    <div className="flex items-center gap-2 flex-1">
+                      <span className="text-tinta font-medium">
+                        {new Date(marca.marcado_en).toLocaleTimeString("es-CO")}
+                      </span>
+                      <button
+                        onClick={() => eliminarMarcaPersona(marca.id)}
+                        className="text-xs text-red-500 hover:underline"
+                      >
+                        Quitar
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="time"
+                        value={horaNueva[t.value]}
+                        onChange={(e) => setHoraNueva((prev) => ({ ...prev, [t.value]: e.target.value }))}
+                        className="rounded-md border border-gray-300 px-2 py-1 text-sm"
+                      />
+                      <button
+                        onClick={() => agregarMarcaPersona(t.value)}
+                        className="text-xs font-medium px-2.5 py-1.5 rounded-md bg-[var(--acento)] text-white"
+                      >
+                        Agregar
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              Nota del día (ej. "entró a la 1pm en vez de las 9am, autorizado")
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                value={notaPersona}
+                onChange={(e) => setNotaPersona(e.target.value)}
+                placeholder="Sin nota"
+                className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+              <button
+                onClick={guardarNotaPersona}
+                disabled={guardandoAdmin || notaPersona.trim() === notaOriginal}
+                className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+              >
+                {guardandoAdmin ? "Guardando…" : "Guardar nota"}
+              </button>
+            </div>
+          </div>
+
+          {errorAdmin && <p className="text-sm text-red-600">{errorAdmin}</p>}
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="font-semibold text-tinta">Horas trabajadas por mes</h2>
@@ -351,6 +561,17 @@ export function Asistencia() {
                     </tbody>
                   </table>
                 </div>
+                {notasPorPersona[fila.perfilId]?.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-gray-100 space-y-0.5">
+                    {notasPorPersona[fila.perfilId]
+                      .sort((a, b) => a.fecha.localeCompare(b.fecha))
+                      .map((n) => (
+                        <p key={n.fecha} className="text-xs text-gray-500">
+                          <span className="font-medium">{n.fecha}:</span> {n.nota}
+                        </p>
+                      ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>
