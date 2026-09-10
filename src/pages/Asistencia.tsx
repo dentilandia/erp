@@ -45,6 +45,17 @@ function fechaBogota(iso: string): string {
   return new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/Bogota" });
 }
 
+/** "31 de agosto de 2026" a partir de un YYYY-MM-DD. */
+function formatFechaLarga(fechaYMD: string): string {
+  const [y, m, d] = fechaYMD.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("es-CO", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 /** Lunes (YYYY-MM-DD) de la semana ISO a la que pertenece esa fecha. */
 function lunesDeSemana(fechaYMD: string): string {
   const [y, m, d] = fechaYMD.split("-").map(Number);
@@ -827,28 +838,30 @@ export function Asistencia() {
                     </tbody>
                   </table>
                 </div>
-                {ausenciasPorPersona[fila.perfilId]?.length > 0 && (
-                  <div className="mt-2 pt-2 border-t border-gray-100 space-y-0.5">
-                    {ausenciasPorPersona[fila.perfilId]
-                      .sort((a, b) => a.fecha.localeCompare(b.fecha))
-                      .map((a) => (
-                        <p key={a.fecha} className="text-xs text-sky-700">
-                          <span className="font-medium">{a.fecha}:</span> {ETIQUETAS_AUSENCIA[a.tipo]}
+                {(() => {
+                  const observaciones = [
+                    ...(ausenciasPorPersona[fila.perfilId] ?? []).map((a) => ({
+                      fecha: a.fecha,
+                      texto: ETIQUETAS_AUSENCIA[a.tipo],
+                      esAusencia: true,
+                    })),
+                    ...(notasPorPersona[fila.perfilId] ?? []).map((n) => ({
+                      fecha: n.fecha,
+                      texto: n.nota,
+                      esAusencia: false,
+                    })),
+                  ].sort((a, b) => a.fecha.localeCompare(b.fecha));
+                  if (observaciones.length === 0) return null;
+                  return (
+                    <div className="mt-2 pt-2 border-t border-gray-100 space-y-0.5">
+                      {observaciones.map((o, i) => (
+                        <p key={`${o.fecha}-${i}`} className={`text-xs ${o.esAusencia ? "text-sky-700" : "text-gray-500"}`}>
+                          <span className="font-medium">{formatFechaLarga(o.fecha)}:</span> {o.texto}
                         </p>
                       ))}
-                  </div>
-                )}
-                {notasPorPersona[fila.perfilId]?.length > 0 && (
-                  <div className="mt-2 pt-2 border-t border-gray-100 space-y-0.5">
-                    {notasPorPersona[fila.perfilId]
-                      .sort((a, b) => a.fecha.localeCompare(b.fecha))
-                      .map((n) => (
-                        <p key={n.fecha} className="text-xs text-gray-500">
-                          <span className="font-medium">{n.fecha}:</span> {n.nota}
-                        </p>
-                      ))}
-                  </div>
-                )}
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           </div>
