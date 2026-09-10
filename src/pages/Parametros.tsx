@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Check, X, Trash2, Bell, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, Check, X, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
 import {
@@ -32,23 +32,9 @@ const ETIQUETAS_PRECIOS: Record<string, string> = {
   horas_semana_meta: "Meta de horas semanales (jornada legal)",
 };
 
-interface PedidoPendiente {
-  movimientoId: string;
-  periodoId: string;
-  sedeId: string;
-  sedeNombre: string;
-  catalogoId: string;
-  categoria: string;
-  nombre: string;
-  pedido: number;
-}
-
 export function Parametros() {
   const { perfil } = useAuth();
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
-  const [pedidosPendientes, setPedidosPendientes] = useState<PedidoPendiente[]>([]);
-  const [entregandoPedidoId, setEntregandoPedidoId] = useState<string | null>(null);
-  const [errorPedido, setErrorPedido] = useState<string | null>(null);
   const [precios, setPrecios] = useState<{ clave: string; valor: number }[]>([]);
   const [nuevoNombre, setNuevoNombre] = useState("");
   const [nuevoColor, setNuevoColor] = useState(PALETA_SUGERIDA[0]);
@@ -119,88 +105,6 @@ export function Parametros() {
     if (data?.signedUrl) window.open(data.signedUrl, "_blank");
   }
 
-  // Últimos pedidos de bodega pendientes de las dos sedes — el período más
-  // reciente de cada sede, ítems con pedido > 0. Sirve como "notificación"
-  // visible ya que el sistema no manda avisos push ni por correo.
-  async function cargarPedidosPendientes() {
-    type PeriodoConSede = { id: string; sede_id: string; fecha_inicio: string; sedes: { nombre: string } | null };
-    const { data: periodosData } = await supabase
-      .from("insumos_generales_periodos")
-      .select("id, sede_id, fecha_inicio, sedes(nombre)")
-      .order("fecha_inicio", { ascending: false });
-    const masRecientePorSede = new Map<string, { periodoId: string; sedeId: string; sedeNombre: string }>();
-    for (const p of (periodosData as unknown as PeriodoConSede[]) ?? []) {
-      if (!masRecientePorSede.has(p.sede_id)) {
-        masRecientePorSede.set(p.sede_id, { periodoId: p.id, sedeId: p.sede_id, sedeNombre: p.sedes?.nombre ?? "—" });
-      }
-    }
-    const periodoAInfo = new Map(Array.from(masRecientePorSede.values()).map((v) => [v.periodoId, v]));
-    const periodoIds = Array.from(periodoAInfo.keys());
-    if (periodoIds.length === 0) {
-      setPedidosPendientes([]);
-      return;
-    }
-    type MovConCatalogo = {
-      id: string;
-      periodo_id: string;
-      catalogo_id: string;
-      pedido: number;
-      insumos_generales_catalogo: { categoria: string; nombre: string } | null;
-    };
-    const { data: movs } = await supabase
-      .from("insumos_generales_movimientos")
-      .select("id, periodo_id, catalogo_id, pedido, insumos_generales_catalogo(categoria, nombre)")
-      .in("periodo_id", periodoIds)
-      .gt("pedido", 0);
-    setPedidosPendientes(
-      ((movs as unknown as MovConCatalogo[]) ?? []).map((m) => {
-        const info = periodoAInfo.get(m.periodo_id);
-        return {
-          movimientoId: m.id,
-          periodoId: m.periodo_id,
-          sedeId: info?.sedeId ?? "",
-          sedeNombre: info?.sedeNombre ?? "—",
-          catalogoId: m.catalogo_id,
-          categoria: m.insumos_generales_catalogo?.categoria ?? "—",
-          nombre: m.insumos_generales_catalogo?.nombre ?? "—",
-          pedido: m.pedido,
-        };
-      }),
-    );
-  }
-
-  // Marcar "Entregado" hace lo mismo que "Entregar a una sede" en
-  // Administración de inventarios (resta de la bodega administrativa y suma
-  // "Entradas" en la sede), y además deja el pedido en 0 para que la línea
-  // desaparezca de este aviso.
-  async function marcarPedidoEntregado(p: PedidoPendiente) {
-    setEntregandoPedidoId(p.movimientoId);
-    setErrorPedido(null);
-    const { error: errorEntrega } = await supabase.from("insumos_generales_entregas").insert({
-      catalogo_id: p.catalogoId,
-      sede_id: p.sedeId,
-      periodo_id: p.periodoId,
-      cantidad: p.pedido,
-      fecha: today(),
-      created_by: perfil?.id ?? null,
-    });
-    if (errorEntrega) {
-      setEntregandoPedidoId(null);
-      setErrorPedido(errorEntrega.message);
-      return;
-    }
-    const { error: errorPedidoUpd } = await supabase
-      .from("insumos_generales_movimientos")
-      .update({ pedido: 0 })
-      .eq("id", p.movimientoId);
-    setEntregandoPedidoId(null);
-    if (errorPedidoUpd) {
-      setErrorPedido(errorPedidoUpd.message);
-      return;
-    }
-    setPedidosPendientes((prev) => prev.filter((x) => x.movimientoId !== p.movimientoId));
-  }
-
   async function cargarCatalogoGeneral() {
     const { data } = await supabase.from("insumos_generales_catalogo").select("*").order("orden");
     setCatalogoGeneral((data as InsumoGeneralCatalogo[]) ?? []);
@@ -208,7 +112,6 @@ export function Parametros() {
 
   useEffect(() => {
     cargar();
-    cargarPedidosPendientes();
     cargarCatalogoGeneral();
     cargarAsistencia();
   }, []);
@@ -342,37 +245,6 @@ export function Parametros() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      {pedidosPendientes.length > 0 && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
-          <div className="flex items-center gap-2 text-amber-800 font-semibold text-sm mb-2">
-            <Bell size={16} /> Pedidos de bodega pendientes ({pedidosPendientes.length})
-          </div>
-          <p className="text-xs text-amber-700 mb-2">
-            Del período más reciente de cada sede, en Operación → Inventario → Insumos generales. Al marcar
-            "Entregado" se resta de la bodega administrativa, se suma automático a las "Entradas" de esa sede, y la
-            línea desaparece de aquí.
-          </p>
-          {errorPedido && <p className="text-sm text-red-600 mb-2">{errorPedido}</p>}
-          <div className="space-y-1">
-            {pedidosPendientes.map((p) => (
-              <div key={p.movimientoId} className="flex items-center justify-between gap-2 text-sm flex-wrap">
-                <p className="text-amber-800">
-                  <span className="font-medium">{p.sedeNombre}</span> · {p.categoria} · {p.nombre}:{" "}
-                  <span className="font-semibold">pedir {p.pedido}</span>
-                </p>
-                <button
-                  onClick={() => marcarPedidoEntregado(p)}
-                  disabled={entregandoPedidoId === p.movimientoId}
-                  className="shrink-0 flex items-center gap-1 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700 disabled:opacity-40"
-                >
-                  <Check size={14} /> {entregandoPedidoId === p.movimientoId ? "Entregando…" : "Entregado"}
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       <section className="bg-white rounded-xl border border-gray-200 p-4">
         <h2 className="font-semibold text-tinta mb-1">Sedes — IP para control de asistencia</h2>
         <p className="text-xs text-gray-400 mb-3">
