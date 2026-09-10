@@ -337,6 +337,27 @@ export function AdministracionInventarios() {
     return Array.from(porPeriodo.entries());
   }, [historialSalidas]);
 
+  // Agrupa los pedidos pendientes por sede → categoría, para poder leerlos
+  // de corrido en vez de una lista plana mezclada.
+  const pedidosPendientesAgrupados = useMemo(() => {
+    const porSede = new Map<string, Map<string, PedidoPendiente[]>>();
+    for (const p of pedidosPendientes) {
+      if (!porSede.has(p.sedeNombre)) porSede.set(p.sedeNombre, new Map());
+      const porCategoria = porSede.get(p.sedeNombre)!;
+      if (!porCategoria.has(p.categoria)) porCategoria.set(p.categoria, []);
+      porCategoria.get(p.categoria)!.push(p);
+    }
+    return Array.from(porSede.entries()).map(([sedeNombre, porCategoria]) => ({
+      sedeNombre,
+      categorias: Array.from(porCategoria.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([categoria, items]) => ({
+          categoria,
+          items: [...items].sort((a, b) => a.nombre.localeCompare(b.nombre)),
+        })),
+    }));
+  }, [pedidosPendientes]);
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <BodegaAdminTabla editable />
@@ -353,29 +374,42 @@ export function AdministracionInventarios() {
             "Entradas").
           </p>
           {errorPedido && <p className="text-sm text-red-600 mb-2">{errorPedido}</p>}
-          <div className="space-y-1">
-            {pedidosPendientes.map((p) => (
-              <div key={p.movimientoId} className="flex items-center justify-between gap-2 text-sm flex-wrap">
-                <p className="text-amber-800">
-                  <span className="font-medium">{p.sedeNombre}</span> · {p.categoria} · {p.nombre}:{" "}
-                  <span className="font-semibold">pedir {p.pedido}</span>
-                </p>
-                <div className="flex items-center gap-2 shrink-0">
-                  <input
-                    type="number"
-                    value={cantidadesEntregaPedido[p.movimientoId] ?? String(p.pedido)}
-                    onChange={(e) =>
-                      setCantidadesEntregaPedido((prev) => ({ ...prev, [p.movimientoId]: e.target.value }))
-                    }
-                    className="w-20 rounded-lg border border-amber-300 px-2 py-1.5 text-sm"
-                  />
-                  <button
-                    onClick={() => marcarPedidoEntregado(p)}
-                    disabled={entregandoPedidoId === p.movimientoId}
-                    className="flex items-center gap-1 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700 disabled:opacity-40"
-                  >
-                    <Check size={14} /> {entregandoPedidoId === p.movimientoId ? "Entregando…" : "Entregado"}
-                  </button>
+          <div className="space-y-3">
+            {pedidosPendientesAgrupados.map((s) => (
+              <div key={s.sedeNombre}>
+                <p className="text-xs font-bold text-amber-900 uppercase tracking-wide mb-1">{s.sedeNombre}</p>
+                <div className="space-y-2.5">
+                  {s.categorias.map((c) => (
+                    <div key={c.categoria}>
+                      <p className="text-xs font-semibold text-amber-700 mb-1">{c.categoria}</p>
+                      <div className="space-y-1 pl-2">
+                        {c.items.map((p) => (
+                          <div key={p.movimientoId} className="flex items-center justify-between gap-2 text-sm flex-wrap">
+                            <p className="text-amber-800">
+                              {p.nombre}: <span className="font-semibold">pedir {p.pedido}</span>
+                            </p>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <input
+                                type="number"
+                                value={cantidadesEntregaPedido[p.movimientoId] ?? String(p.pedido)}
+                                onChange={(e) =>
+                                  setCantidadesEntregaPedido((prev) => ({ ...prev, [p.movimientoId]: e.target.value }))
+                                }
+                                className="w-20 rounded-lg border border-amber-300 px-2 py-1.5 text-sm"
+                              />
+                              <button
+                                onClick={() => marcarPedidoEntregado(p)}
+                                disabled={entregandoPedidoId === p.movimientoId}
+                                className="flex items-center gap-1 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700 disabled:opacity-40"
+                              >
+                                <Check size={14} /> {entregandoPedidoId === p.movimientoId ? "Entregando…" : "Entregado"}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             ))}
