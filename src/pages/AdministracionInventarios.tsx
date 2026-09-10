@@ -5,9 +5,14 @@ import { today } from "../lib/format";
 import { useAuth } from "../auth/AuthContext";
 import { BodegaAdminTabla } from "../components/BodegaAdminTabla";
 import { InsumosGeneralesPeriodo } from "../components/InsumosGeneralesPeriodo";
-import type { Sede, InsumoGeneralCatalogo, InsumoGeneralEntrega, InsumoGeneralSolicitud } from "../lib/types";
+import type { Sede, InsumoGeneralCatalogo, InsumoGeneralEntrega, InsumoGeneralSolicitud, InsumoGeneralSalida } from "../lib/types";
 
 interface EntregaHistorial extends InsumoGeneralEntrega {
+  insumos_generales_catalogo: { categoria: string; nombre: string } | null;
+  insumos_generales_periodos: { etiqueta: string } | null;
+}
+
+interface SalidaHistorial extends InsumoGeneralSalida {
   insumos_generales_catalogo: { categoria: string; nombre: string } | null;
   insumos_generales_periodos: { etiqueta: string } | null;
 }
@@ -45,6 +50,11 @@ export function AdministracionInventarios() {
   const [historial, setHistorial] = useState<EntregaHistorial[]>([]);
   const [cargandoHistorial, setCargandoHistorial] = useState(true);
   const [periodosAbiertos, setPeriodosAbiertos] = useState<Record<string, boolean>>({});
+
+  const [sedeIdHistorialSalidas, setSedeIdHistorialSalidas] = useState("todas");
+  const [historialSalidas, setHistorialSalidas] = useState<SalidaHistorial[]>([]);
+  const [cargandoHistorialSalidas, setCargandoHistorialSalidas] = useState(true);
+  const [periodosAbiertosSalidas, setPeriodosAbiertosSalidas] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     supabase.from("sedes").select("id, nombre, color_acento").order("nombre").then(({ data }) => {
@@ -85,6 +95,23 @@ export function AdministracionInventarios() {
     cargarHistorial();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sedeIdHistorial]);
+
+  async function cargarHistorialSalidas() {
+    setCargandoHistorialSalidas(true);
+    let query = supabase
+      .from("insumos_generales_salidas")
+      .select("*, insumos_generales_catalogo(categoria, nombre), insumos_generales_periodos(etiqueta)")
+      .order("fecha", { ascending: false });
+    if (sedeIdHistorialSalidas !== "todas") query = query.eq("sede_id", sedeIdHistorialSalidas);
+    const { data } = await query.limit(500);
+    setHistorialSalidas((data as unknown as SalidaHistorial[]) ?? []);
+    setCargandoHistorialSalidas(false);
+  }
+
+  useEffect(() => {
+    cargarHistorialSalidas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sedeIdHistorialSalidas]);
 
   async function cargarSolicitudesPendientes() {
     const { data } = await supabase
@@ -182,6 +209,22 @@ export function AdministracionInventarios() {
     }
     return Array.from(porPeriodo.entries());
   }, [historial]);
+
+  const historialSalidasPorPeriodo = useMemo(() => {
+    const porPeriodo = new Map<string, { total: number; porCategoria: Map<string, { total: number; items: SalidaHistorial[] }> }>();
+    for (const e of historialSalidas) {
+      const etiqueta = e.insumos_generales_periodos?.etiqueta ?? "—";
+      const categoria = e.insumos_generales_catalogo?.categoria ?? "—";
+      if (!porPeriodo.has(etiqueta)) porPeriodo.set(etiqueta, { total: 0, porCategoria: new Map() });
+      const p = porPeriodo.get(etiqueta)!;
+      p.total += e.cantidad;
+      if (!p.porCategoria.has(categoria)) p.porCategoria.set(categoria, { total: 0, items: [] });
+      const c = p.porCategoria.get(categoria)!;
+      c.total += e.cantidad;
+      c.items.push(e);
+    }
+    return Array.from(porPeriodo.entries());
+  }, [historialSalidas]);
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -346,6 +389,73 @@ export function AdministracionInventarios() {
                                 <span>
                                   {it.fecha} · {it.insumos_generales_catalogo?.nombre ?? "—"}
                                   {sedeIdHistorial === "todas" && ` · ${sedes.find((s) => s.id === it.sede_id)?.nombre ?? "—"}`}
+                                </span>
+                                <span className="font-medium">{it.cantidad}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="bg-white rounded-xl border border-gray-200 p-4">
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+          <h2 className="font-semibold text-tinta">Histórico de salidas (consumo por sede)</h2>
+          <select
+            value={sedeIdHistorialSalidas}
+            onChange={(e) => setSedeIdHistorialSalidas(e.target.value)}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          >
+            <option value="todas">Todas las sedes</option>
+            {sedes.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.nombre}
+              </option>
+            ))}
+          </select>
+        </div>
+        {cargandoHistorialSalidas ? (
+          <p className="text-sm text-gray-400">Cargando…</p>
+        ) : historialSalidasPorPeriodo.length === 0 ? (
+          <p className="text-sm text-gray-400">Todavía no hay salidas registradas.</p>
+        ) : (
+          <div className="space-y-2">
+            {historialSalidasPorPeriodo.map(([etiqueta, p]) => {
+              const abierto = !!periodosAbiertosSalidas[etiqueta];
+              return (
+                <div key={etiqueta} className="border border-gray-100 rounded-lg">
+                  <button
+                    onClick={() => setPeriodosAbiertosSalidas((prev) => ({ ...prev, [etiqueta]: !prev[etiqueta] }))}
+                    className="w-full flex items-center justify-between px-3 py-2 text-sm font-semibold text-tinta"
+                  >
+                    <span className="flex items-center gap-2">
+                      {abierto ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      {etiqueta}
+                    </span>
+                    <span className="text-gray-400 font-normal">{p.total} unidades salidas</span>
+                  </button>
+                  {abierto && (
+                    <div className="border-t border-gray-100 divide-y divide-gray-50">
+                      {Array.from(p.porCategoria.entries()).map(([categoria, c]) => (
+                        <div key={categoria} className="px-3 py-2">
+                          <div className="flex items-center justify-between text-sm font-medium text-gray-600 mb-1">
+                            <span>{categoria}</span>
+                            <span>{c.total}</span>
+                          </div>
+                          <div className="space-y-0.5">
+                            {c.items.map((it) => (
+                              <div key={it.id} className="flex items-center justify-between text-xs text-gray-500 pl-4">
+                                <span>
+                                  {it.fecha} · {it.insumos_generales_catalogo?.nombre ?? "—"}
+                                  {sedeIdHistorialSalidas === "todas" && ` · ${sedes.find((s) => s.id === it.sede_id)?.nombre ?? "—"}`}
+                                  {it.motivo ? ` · ${it.motivo}` : ""}
                                 </span>
                                 <span className="font-medium">{it.cantidad}</span>
                               </div>
