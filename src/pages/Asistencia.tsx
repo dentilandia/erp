@@ -488,7 +488,7 @@ export function Asistencia() {
 
     const { data: ausenciasData } = await supabase
       .from("asistencia_ausencias")
-      .select("perfil_id, fecha, tipo, perfiles(nombre)")
+      .select("perfil_id, fecha, tipo, perfiles!asistencia_vacaciones_perfil_id_fkey(nombre)")
       .gte("fecha", desde)
       .lt("fecha", hasta);
     const ausenciasRows =
@@ -540,7 +540,7 @@ export function Asistencia() {
     const hasta = sumarDias(desde, 31).slice(0, 7) + "-01";
     const { data } = await supabase
       .from("asistencia_ausencias")
-      .select("perfil_id, fecha, tipo, perfiles(nombre)")
+      .select("perfil_id, fecha, tipo, perfiles!asistencia_vacaciones_perfil_id_fkey(nombre)")
       .gte("fecha", desde)
       .lt("fecha", hasta);
     const filas = (
