@@ -285,6 +285,21 @@ export interface InsumoGeneralEntrega {
   visto: boolean;
 }
 
+/** Solicitud de una sede a la bodega administrativa — el primer paso del
+ *  flujo (solicitar → administración entrega → InsumoGeneralEntrega). */
+export interface InsumoGeneralSolicitud {
+  id: string;
+  sede_id: string;
+  catalogo_id: string;
+  cantidad: number;
+  nota: string | null;
+  estado: "pendiente" | "entregada";
+  entrega_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  entregada_en: string | null;
+}
+
 /** Caja menor por sede — acceso restringido a admin y a quien tenga
  *  perfiles.puede_caja_menor en esa sede. */
 export interface CajaMenorPeriodo {

@@ -5,11 +5,16 @@ import { today } from "../lib/format";
 import { useAuth } from "../auth/AuthContext";
 import { BodegaAdminTabla } from "../components/BodegaAdminTabla";
 import { InsumosGeneralesPeriodo } from "../components/InsumosGeneralesPeriodo";
-import type { Sede, InsumoGeneralCatalogo, InsumoGeneralEntrega } from "../lib/types";
+import type { Sede, InsumoGeneralCatalogo, InsumoGeneralEntrega, InsumoGeneralSolicitud } from "../lib/types";
 
 interface EntregaHistorial extends InsumoGeneralEntrega {
   insumos_generales_catalogo: { categoria: string; nombre: string } | null;
   insumos_generales_periodos: { etiqueta: string } | null;
+}
+
+interface SolicitudConDetalle extends InsumoGeneralSolicitud {
+  insumos_generales_catalogo: { nombre: string } | null;
+  sedes: { nombre: string } | null;
 }
 
 function etiquetaMesActual(): string {
@@ -30,6 +35,9 @@ export function AdministracionInventarios() {
   const [guardandoEntrega, setGuardandoEntrega] = useState(false);
   const [entregaOk, setEntregaOk] = useState(false);
   const [errorEntrega, setErrorEntrega] = useState<string | null>(null);
+  const [solicitudIdEnCurso, setSolicitudIdEnCurso] = useState<string | null>(null);
+
+  const [solicitudesPendientes, setSolicitudesPendientes] = useState<SolicitudConDetalle[]>([]);
 
   const [sedeIdVista, setSedeIdVista] = useState("");
 
@@ -78,6 +86,27 @@ export function AdministracionInventarios() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sedeIdHistorial]);
 
+  async function cargarSolicitudesPendientes() {
+    const { data } = await supabase
+      .from("insumos_generales_solicitudes")
+      .select("*, insumos_generales_catalogo(nombre), sedes(nombre)")
+      .eq("estado", "pendiente")
+      .order("created_at");
+    setSolicitudesPendientes((data as unknown as SolicitudConDetalle[]) ?? []);
+  }
+
+  useEffect(() => {
+    cargarSolicitudesPendientes();
+  }, []);
+
+  function prepararEntregaDesdeSolicitud(s: SolicitudConDetalle) {
+    setSedeIdEntrega(s.sede_id);
+    setCatalogoIdEntrega(s.catalogo_id);
+    setCantidadEntrega(String(s.cantidad));
+    setSolicitudIdEnCurso(s.id);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   async function registrarEntrega() {
     if (!sedeIdEntrega || !catalogoIdEntrega || !Number(cantidadEntrega)) return;
     setGuardandoEntrega(true);
@@ -105,18 +134,30 @@ export function AdministracionInventarios() {
       }
       periodo = nuevo;
     }
-    const { error } = await supabase.from("insumos_generales_entregas").insert({
-      catalogo_id: catalogoIdEntrega,
-      sede_id: sedeIdEntrega,
-      periodo_id: periodo.id,
-      cantidad: Number(cantidadEntrega),
-      fecha: fechaEntrega,
-      created_by: perfil?.id ?? null,
-    });
+    const { data: entrega, error } = await supabase
+      .from("insumos_generales_entregas")
+      .insert({
+        catalogo_id: catalogoIdEntrega,
+        sede_id: sedeIdEntrega,
+        periodo_id: periodo.id,
+        cantidad: Number(cantidadEntrega),
+        fecha: fechaEntrega,
+        created_by: perfil?.id ?? null,
+      })
+      .select("id")
+      .single();
     setGuardandoEntrega(false);
     if (error) {
       setErrorEntrega(error.message);
       return;
+    }
+    if (solicitudIdEnCurso) {
+      await supabase
+        .from("insumos_generales_solicitudes")
+        .update({ estado: "entregada", entrega_id: entrega.id, entregada_en: new Date().toISOString() })
+        .eq("id", solicitudIdEnCurso);
+      setSolicitudIdEnCurso(null);
+      cargarSolicitudesPendientes();
     }
     setCantidadEntrega("");
     setEntregaOk(true);
@@ -146,12 +187,43 @@ export function AdministracionInventarios() {
     <div className="max-w-4xl mx-auto space-y-6">
       <BodegaAdminTabla editable />
 
+      {solicitudesPendientes.length > 0 && (
+        <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
+          <p className="font-semibold text-amber-800 mb-2">📋 Solicitudes pendientes de las sedes</p>
+          <div className="space-y-1.5">
+            {solicitudesPendientes.map((s) => (
+              <div key={s.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
+                <span className="text-amber-700">
+                  <span className="font-medium">{s.sedes?.nombre ?? "—"}</span> · {s.insumos_generales_catalogo?.nombre ?? "—"} ·{" "}
+                  <span className="font-medium">{s.cantidad}</span>
+                  {s.nota ? ` · ${s.nota}` : ""}
+                </span>
+                <button
+                  onClick={() => prepararEntregaDesdeSolicitud(s)}
+                  className="shrink-0 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700"
+                >
+                  Entregar
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="bg-white rounded-xl border border-gray-200 p-4">
         <h2 className="font-semibold text-tinta mb-1">Entregar a una sede</h2>
         <p className="text-xs text-gray-400 mb-3">
           Resta de la bodega administrativa y suma como "Entradas" en el período activo de esa sede — queda como
           histórico de entrega abajo.
         </p>
+        {solicitudIdEnCurso && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-2 flex items-center justify-between gap-2">
+            Completando una solicitud pendiente — al entregar, queda marcada como resuelta.
+            <button onClick={() => setSolicitudIdEnCurso(null)} className="underline shrink-0">
+              Cancelar
+            </button>
+          </p>
+        )}
         <div className="flex items-end gap-2 flex-wrap">
           <select
             value={sedeIdEntrega}

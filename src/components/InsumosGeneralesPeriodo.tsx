@@ -9,6 +9,7 @@ import type {
   InsumoGeneralMovimiento,
   InsumoGeneralEntrega,
   InsumoGeneralSalida,
+  InsumoGeneralSolicitud,
 } from "../lib/types";
 
 interface EntregaConCatalogo extends InsumoGeneralEntrega {
@@ -16,6 +17,10 @@ interface EntregaConCatalogo extends InsumoGeneralEntrega {
 }
 
 interface SalidaConCatalogo extends InsumoGeneralSalida {
+  insumos_generales_catalogo: { nombre: string } | null;
+}
+
+interface SolicitudConCatalogo extends InsumoGeneralSolicitud {
   insumos_generales_catalogo: { nombre: string } | null;
 }
 
@@ -54,6 +59,14 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   const [guardandoSalida, setGuardandoSalida] = useState(false);
   const [salidaOk, setSalidaOk] = useState(false);
   const [errorSalida, setErrorSalida] = useState<string | null>(null);
+
+  const [solicitudes, setSolicitudes] = useState<SolicitudConCatalogo[]>([]);
+  const [catalogoIdSolicitud, setCatalogoIdSolicitud] = useState("");
+  const [cantidadSolicitud, setCantidadSolicitud] = useState("");
+  const [notaSolicitud, setNotaSolicitud] = useState("");
+  const [guardandoSolicitud, setGuardandoSolicitud] = useState(false);
+  const [solicitudOk, setSolicitudOk] = useState(false);
+  const [errorSolicitud, setErrorSolicitud] = useState<string | null>(null);
 
   useEffect(() => {
     supabase
@@ -109,11 +122,22 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     setSalidasRegistradas((data as unknown as SalidaConCatalogo[]) ?? []);
   }
 
+  async function cargarSolicitudes() {
+    const { data } = await supabase
+      .from("insumos_generales_solicitudes")
+      .select("*, insumos_generales_catalogo(nombre)")
+      .eq("sede_id", sedeId)
+      .order("created_at", { ascending: false })
+      .limit(10);
+    setSolicitudes((data as unknown as SolicitudConCatalogo[]) ?? []);
+  }
+
   useEffect(() => {
     setCargando(true);
     cargarPeriodos();
     cargarEntregasRecibidas();
     cargarSalidas();
+    cargarSolicitudes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sedeId]);
 
@@ -238,6 +262,29 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     cargarSalidas();
   }
 
+  async function crearSolicitud() {
+    if (!catalogoIdSolicitud || !Number(cantidadSolicitud)) return;
+    setGuardandoSolicitud(true);
+    setErrorSolicitud(null);
+    const { error } = await supabase.from("insumos_generales_solicitudes").insert({
+      sede_id: sedeId,
+      catalogo_id: catalogoIdSolicitud,
+      cantidad: Number(cantidadSolicitud),
+      nota: notaSolicitud.trim() || null,
+      created_by: perfil?.id ?? null,
+    });
+    setGuardandoSolicitud(false);
+    if (error) {
+      setErrorSolicitud(error.message);
+      return;
+    }
+    setCantidadSolicitud("");
+    setNotaSolicitud("");
+    setSolicitudOk(true);
+    setTimeout(() => setSolicitudOk(false), 2000);
+    cargarSolicitudes();
+  }
+
   const periodoActivo = periodos.find((p) => p.id === periodoId);
   const entregasNoVistas = entregasRecibidas.filter((e) => !e.visto);
 
@@ -320,6 +367,75 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
           columna "Entradas" se llena sola cuando administración registra una entrega desde la bodega administrativa;
           "Salidas" se llena con el formulario de abajo.
         </p>
+      </section>
+
+      <section className="bg-white rounded-xl border border-gray-200 p-4">
+        <h2 className="font-semibold text-tinta mb-1">Solicitar insumos a la bodega administrativa</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Queda como pendiente hasta que administración la entregue — ahí llega la notificación y se suma sola a
+          "Entradas" de esta sede.
+        </p>
+        <div className="flex items-end gap-2 flex-wrap">
+          <select
+            value={catalogoIdSolicitud}
+            onChange={(e) => setCatalogoIdSolicitud(e.target.value)}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm min-w-[200px]"
+          >
+            {categorias.map((categoria) => (
+              <optgroup key={categoria} label={categoria}>
+                {catalogo
+                  .filter((c) => c.categoria === categoria)
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.nombre}
+                    </option>
+                  ))}
+              </optgroup>
+            ))}
+          </select>
+          <input
+            type="number"
+            value={cantidadSolicitud}
+            onChange={(e) => setCantidadSolicitud(e.target.value)}
+            placeholder="Cantidad"
+            className="w-28 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          />
+          <input
+            value={notaSolicitud}
+            onChange={(e) => setNotaSolicitud(e.target.value)}
+            placeholder="Nota (opcional)"
+            className="flex-1 min-w-[160px] rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          />
+          <button
+            onClick={crearSolicitud}
+            disabled={!cantidadSolicitud || guardandoSolicitud}
+            className="flex items-center gap-2 rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+          >
+            {solicitudOk ? <Check size={16} /> : <Plus size={16} />}
+            {guardandoSolicitud ? "Guardando…" : solicitudOk ? "Solicitada" : "Solicitar"}
+          </button>
+        </div>
+        {errorSolicitud && <p className="text-sm text-red-600 mt-2">{errorSolicitud}</p>}
+        {solicitudes.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-gray-100 space-y-1">
+            <p className="text-xs font-medium text-gray-400 mb-1">Últimas solicitudes</p>
+            {solicitudes.map((s) => (
+              <div key={s.id} className="flex items-center justify-between text-xs text-gray-500">
+                <span>
+                  {s.insumos_generales_catalogo?.nombre ?? "—"} · <span className="font-medium">{s.cantidad}</span>
+                  {s.nota ? ` · ${s.nota}` : ""}
+                </span>
+                <span
+                  className={`shrink-0 rounded-full px-2 py-0.5 font-medium ${
+                    s.estado === "entregada" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+                  }`}
+                >
+                  {s.estado === "entregada" ? "Entregada" : "Pendiente"}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {periodoActivo && (
@@ -457,29 +573,11 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                                 className="w-16 rounded-md border border-gray-200 px-1.5 py-1 text-right"
                               />
                             </td>
-                            <td className="px-2 py-1.5 text-right">
-                              <input
-                                type="number"
-                                defaultValue={mov.salidas}
-                                onBlur={(e) => {
-                                  const v = Number(e.target.value) || 0;
-                                  actualizarCampo(item.id, "salidas", v);
-                                  guardarCampo(item.id, "salidas", v);
-                                }}
-                                className="w-16 rounded-md border border-gray-200 px-1.5 py-1 text-right"
-                              />
+                            <td className="px-2 py-1.5 text-right text-gray-500" title="Se llena sola con 'Registrar salida' — no editable a mano.">
+                              {mov.salidas}
                             </td>
-                            <td className="px-2 py-1.5 text-right">
-                              <input
-                                type="number"
-                                defaultValue={mov.entradas}
-                                onBlur={(e) => {
-                                  const v = Number(e.target.value) || 0;
-                                  actualizarCampo(item.id, "entradas", v);
-                                  guardarCampo(item.id, "entradas", v);
-                                }}
-                                className="w-16 rounded-md border border-gray-200 px-1.5 py-1 text-right"
-                              />
+                            <td className="px-2 py-1.5 text-right text-gray-500" title="Se llena sola cuando administración entrega — no editable a mano.">
+                              {mov.entradas}
                             </td>
                             <td className={`px-2 py-1.5 text-right font-semibold ${final <= 0 ? "text-red-600" : "text-tinta"}`}>
                               {final}
