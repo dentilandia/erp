@@ -52,13 +52,13 @@ export interface AsistenciaNotaDia {
   updated_at: string;
 }
 
-/** Día de vacaciones o incapacidad de una persona — no debe contar como
- *  "déficit" de horas en el reporte semanal. */
+/** Día de vacaciones, incapacidad o descanso sabatino de una persona — no
+ *  debe contar como "déficit" de horas en el reporte semanal. */
 export interface AsistenciaAusencia {
   id: string;
   perfil_id: string;
   fecha: string;
-  tipo: "vacaciones" | "incapacidad";
+  tipo: "vacaciones" | "incapacidad" | "descanso";
   nota: string | null;
   created_by: string | null;
   created_at: string;

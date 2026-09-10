@@ -25,6 +25,12 @@ function horasTrabajadasDeMarcas(marcas: { tipo: TipoAsistencia; marcado_en: str
   return Math.max(0, horas);
 }
 
+const ETIQUETAS_AUSENCIA: Record<"vacaciones" | "incapacidad" | "descanso", string> = {
+  vacaciones: "Vacaciones",
+  incapacidad: "Incapacidad",
+  descanso: "Descanso sabatino",
+};
+
 const ICONOS: Record<TipoAsistencia, typeof LogIn> = {
   llegada: LogIn,
   salida_almuerzo: Coffee,
@@ -227,7 +233,7 @@ export function Asistencia() {
   const [cargandoReporte, setCargandoReporte] = useState(true);
   const [notasPorPersona, setNotasPorPersona] = useState<Record<string, { fecha: string; nota: string }[]>>({});
   const [ausenciasPorPersona, setAusenciasPorPersona] = useState<
-    Record<string, { fecha: string; tipo: "vacaciones" | "incapacidad" }[]>
+    Record<string, { fecha: string; tipo: "vacaciones" | "incapacidad" | "descanso" }[]>
   >({});
 
   // Solo para admin: día que se está simulando al marcar, para poder probar
@@ -249,7 +255,10 @@ export function Asistencia() {
   const [notaOriginal, setNotaOriginal] = useState("");
   const [esCompensado, setEsCompensado] = useState(false);
   const [esCompensadoOriginal, setEsCompensadoOriginal] = useState(false);
-  const [ausenciaPersona, setAusenciaPersona] = useState<{ id: string; tipo: "vacaciones" | "incapacidad" } | null>(null);
+  const [ausenciaPersona, setAusenciaPersona] = useState<{
+    id: string;
+    tipo: "vacaciones" | "incapacidad" | "descanso";
+  } | null>(null);
   const [horaNueva, setHoraNueva] = useState<Record<TipoAsistencia, string>>(() =>
     horasPorDefecto(fechaBogota(new Date().toISOString())),
   );
@@ -377,7 +386,7 @@ export function Asistencia() {
     cargarReporte();
   }
 
-  async function marcarAusencia(tipo: "vacaciones" | "incapacidad") {
+  async function marcarAusencia(tipo: "vacaciones" | "incapacidad" | "descanso") {
     setGuardandoAdmin(true);
     setErrorAdmin(null);
     const { data, error } = await supabase
@@ -466,7 +475,7 @@ export function Asistencia() {
       (ausenciasData as unknown as {
         perfil_id: string;
         fecha: string;
-        tipo: "vacaciones" | "incapacidad";
+        tipo: "vacaciones" | "incapacidad" | "descanso";
         perfiles: { nombre: string } | null;
       }[]) ?? [];
     const ausencias: AusenciaReporte[] = ausenciasRows.map((a) => ({
@@ -474,7 +483,7 @@ export function Asistencia() {
       fecha: a.fecha,
       nombre: a.perfiles?.nombre ?? "—",
     }));
-    const ausenciasAgrupadas: Record<string, { fecha: string; tipo: "vacaciones" | "incapacidad" }[]> = {};
+    const ausenciasAgrupadas: Record<string, { fecha: string; tipo: "vacaciones" | "incapacidad" | "descanso" }[]> = {};
     for (const a of ausenciasRows) {
       (ausenciasAgrupadas[a.perfil_id] ??= []).push({ fecha: a.fecha, tipo: a.tipo });
     }
@@ -645,9 +654,7 @@ export function Asistencia() {
           <div className="rounded-lg bg-sky-50 border border-sky-200 px-3 py-2">
             {ausenciaPersona ? (
               <div className="flex items-center gap-2 text-sm">
-                <span className="font-medium text-sky-800">
-                  {ausenciaPersona.tipo === "vacaciones" ? "Día de vacaciones" : "Día de incapacidad"}
-                </span>
+                <span className="font-medium text-sky-800">Día de {ETIQUETAS_AUSENCIA[ausenciaPersona.tipo].toLowerCase()}</span>
                 <button onClick={quitarAusencia} className="text-xs text-red-500 hover:underline">
                   Quitar
                 </button>
@@ -667,6 +674,14 @@ export function Asistencia() {
                 >
                   Incapacidad
                 </button>
+                {diaDeSemana(fechaAdmin) === 6 && (
+                  <button
+                    onClick={() => marcarAusencia("descanso")}
+                    className="text-xs font-medium px-2.5 py-1.5 rounded-md bg-sky-600 text-white"
+                  >
+                    Descansó
+                  </button>
+                )}
               </div>
             )}
             <p className="text-xs text-sky-700 mt-1">
@@ -818,8 +833,7 @@ export function Asistencia() {
                       .sort((a, b) => a.fecha.localeCompare(b.fecha))
                       .map((a) => (
                         <p key={a.fecha} className="text-xs text-sky-700">
-                          <span className="font-medium">{a.fecha}:</span>{" "}
-                          {a.tipo === "vacaciones" ? "Vacaciones" : "Incapacidad"}
+                          <span className="font-medium">{a.fecha}:</span> {ETIQUETAS_AUSENCIA[a.tipo]}
                         </p>
                       ))}
                   </div>
