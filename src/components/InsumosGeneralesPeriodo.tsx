@@ -107,8 +107,11 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   async function marcarEntregasVistas() {
     const ids = entregasRecibidas.filter((e) => !e.visto).map((e) => e.id);
     if (ids.length === 0) return;
+    // Al confirmar es cuando de verdad se suman a "Entradas" del período —
+    // no antes, para no contarlo hasta que la sede confirme que llegó.
     await supabase.from("insumos_generales_entregas").update({ visto: true }).in("id", ids);
     cargarEntregasRecibidas();
+    cargarMovimientos();
   }
 
   async function cargarSalidas() {
@@ -304,14 +307,13 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
             ))}
           </div>
           <p className="text-xs text-emerald-600 mb-2">
-            Ya se sumaron solas a "Entradas" del período correspondiente — esto es solo para que no se te pase que
-            llegaron.
+            Confirma que ya las recibiste para que se sumen a "Entradas" del período correspondiente.
           </p>
           <button
             onClick={marcarEntregasVistas}
             className="rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-medium hover:bg-emerald-700"
           >
-            Entendido
+            Recibido
           </button>
         </section>
       )}
@@ -364,8 +366,8 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
         {errorPeriodo && <p className="text-sm text-red-600">{errorPeriodo}</p>}
         <p className="text-xs text-gray-400">
           El inventario inicial de un período nuevo parte del inventario final del período anterior de esta sede. La
-          columna "Entradas" se llena sola cuando administración registra una entrega desde la bodega administrativa;
-          "Salidas" se llena con el formulario de abajo.
+          columna "Entradas" se llena sola cuando confirmas que recibiste una entrega de la bodega administrativa
+          (aviso verde arriba); "Salidas" se llena con el formulario de abajo.
         </p>
       </section>
 

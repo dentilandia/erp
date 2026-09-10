@@ -56,6 +56,7 @@ export function AdministracionInventarios() {
   const [solicitudesPendientes, setSolicitudesPendientes] = useState<SolicitudConDetalle[]>([]);
 
   const [pedidosPendientes, setPedidosPendientes] = useState<PedidoPendiente[]>([]);
+  const [cantidadesEntregaPedido, setCantidadesEntregaPedido] = useState<Record<string, string>>({});
   const [entregandoPedidoId, setEntregandoPedidoId] = useState<string | null>(null);
   const [errorPedido, setErrorPedido] = useState<string | null>(null);
 
@@ -174,21 +175,21 @@ export function AdministracionInventarios() {
       .select("id, periodo_id, catalogo_id, pedido, insumos_generales_catalogo(categoria, nombre)")
       .in("periodo_id", periodoIds)
       .gt("pedido", 0);
-    setPedidosPendientes(
-      ((movs as unknown as MovConCatalogo[]) ?? []).map((m) => {
-        const info = periodoAInfo.get(m.periodo_id);
-        return {
-          movimientoId: m.id,
-          periodoId: m.periodo_id,
-          sedeId: info?.sedeId ?? "",
-          sedeNombre: info?.sedeNombre ?? "—",
-          catalogoId: m.catalogo_id,
-          categoria: m.insumos_generales_catalogo?.categoria ?? "—",
-          nombre: m.insumos_generales_catalogo?.nombre ?? "—",
-          pedido: m.pedido,
-        };
-      }),
-    );
+    const lista = ((movs as unknown as MovConCatalogo[]) ?? []).map((m) => {
+      const info = periodoAInfo.get(m.periodo_id);
+      return {
+        movimientoId: m.id,
+        periodoId: m.periodo_id,
+        sedeId: info?.sedeId ?? "",
+        sedeNombre: info?.sedeNombre ?? "—",
+        catalogoId: m.catalogo_id,
+        categoria: m.insumos_generales_catalogo?.categoria ?? "—",
+        nombre: m.insumos_generales_catalogo?.nombre ?? "—",
+        pedido: m.pedido,
+      };
+    });
+    setPedidosPendientes(lista);
+    setCantidadesEntregaPedido(Object.fromEntries(lista.map((p) => [p.movimientoId, String(p.pedido)])));
   }
 
   useEffect(() => {
@@ -196,16 +197,19 @@ export function AdministracionInventarios() {
   }, []);
 
   // Marcar "Entregado" hace lo mismo que "Entregar a una sede" (resta de la
-  // bodega administrativa y suma "Entradas" en la sede), y además deja el
-  // pedido en 0 para que la línea desaparezca de este aviso.
+  // bodega administrativa; "Entradas" en la sede queda pendiente de que
+  // ellos confirmen recibido). Si se entrega menos de lo pedido, el pedido
+  // no desaparece — se queda con lo que falta.
   async function marcarPedidoEntregado(p: PedidoPendiente) {
+    const cantidad = Number(cantidadesEntregaPedido[p.movimientoId]);
+    if (!cantidad || cantidad <= 0) return;
     setEntregandoPedidoId(p.movimientoId);
     setErrorPedido(null);
     const { error: errorEntregaPedido } = await supabase.from("insumos_generales_entregas").insert({
       catalogo_id: p.catalogoId,
       sede_id: p.sedeId,
       periodo_id: p.periodoId,
-      cantidad: p.pedido,
+      cantidad,
       fecha: today(),
       created_by: perfil?.id ?? null,
     });
@@ -214,16 +218,22 @@ export function AdministracionInventarios() {
       setErrorPedido(errorEntregaPedido.message);
       return;
     }
+    const pedidoRestante = Math.max(0, p.pedido - cantidad);
     const { error: errorPedidoUpd } = await supabase
       .from("insumos_generales_movimientos")
-      .update({ pedido: 0 })
+      .update({ pedido: pedidoRestante })
       .eq("id", p.movimientoId);
     setEntregandoPedidoId(null);
     if (errorPedidoUpd) {
       setErrorPedido(errorPedidoUpd.message);
       return;
     }
-    setPedidosPendientes((prev) => prev.filter((x) => x.movimientoId !== p.movimientoId));
+    if (pedidoRestante > 0) {
+      setPedidosPendientes((prev) => prev.map((x) => (x.movimientoId === p.movimientoId ? { ...x, pedido: pedidoRestante } : x)));
+      setCantidadesEntregaPedido((prev) => ({ ...prev, [p.movimientoId]: String(pedidoRestante) }));
+    } else {
+      setPedidosPendientes((prev) => prev.filter((x) => x.movimientoId !== p.movimientoId));
+    }
     if (sedeIdHistorial === "todas" || sedeIdHistorial === p.sedeId) cargarHistorial();
   }
 
@@ -337,9 +347,10 @@ export function AdministracionInventarios() {
             <Bell size={16} /> Pedidos de bodega pendientes ({pedidosPendientes.length})
           </div>
           <p className="text-xs text-amber-700 mb-2">
-            Del período más reciente de cada sede, en Operación → Inventario → Insumos generales. Al marcar
-            "Entregado" se resta de la bodega administrativa, se suma automático a las "Entradas" de esa sede, y la
-            línea desaparece de aquí.
+            Del período más reciente de cada sede, en Operación → Inventario → Insumos generales. Puedes cambiar la
+            cantidad si no entregas todo lo pedido — lo que falte se queda pendiente. Al marcar "Entregado" se resta
+            de la bodega administrativa y le llega el aviso a la sede para que confirme recibido (ahí se suma a sus
+            "Entradas").
           </p>
           {errorPedido && <p className="text-sm text-red-600 mb-2">{errorPedido}</p>}
           <div className="space-y-1">
@@ -349,13 +360,23 @@ export function AdministracionInventarios() {
                   <span className="font-medium">{p.sedeNombre}</span> · {p.categoria} · {p.nombre}:{" "}
                   <span className="font-semibold">pedir {p.pedido}</span>
                 </p>
-                <button
-                  onClick={() => marcarPedidoEntregado(p)}
-                  disabled={entregandoPedidoId === p.movimientoId}
-                  className="shrink-0 flex items-center gap-1 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700 disabled:opacity-40"
-                >
-                  <Check size={14} /> {entregandoPedidoId === p.movimientoId ? "Entregando…" : "Entregado"}
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <input
+                    type="number"
+                    value={cantidadesEntregaPedido[p.movimientoId] ?? String(p.pedido)}
+                    onChange={(e) =>
+                      setCantidadesEntregaPedido((prev) => ({ ...prev, [p.movimientoId]: e.target.value }))
+                    }
+                    className="w-20 rounded-lg border border-amber-300 px-2 py-1.5 text-sm"
+                  />
+                  <button
+                    onClick={() => marcarPedidoEntregado(p)}
+                    disabled={entregandoPedidoId === p.movimientoId}
+                    className="flex items-center gap-1 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700 disabled:opacity-40"
+                  >
+                    <Check size={14} /> {entregandoPedidoId === p.movimientoId ? "Entregando…" : "Entregado"}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -388,8 +409,8 @@ export function AdministracionInventarios() {
       <section className="bg-white rounded-xl border border-gray-200 p-4">
         <h2 className="font-semibold text-tinta mb-1">Entregar a una sede</h2>
         <p className="text-xs text-gray-400 mb-3">
-          Resta de la bodega administrativa y suma como "Entradas" en el período activo de esa sede — queda como
-          histórico de entrega abajo.
+          Resta de la bodega administrativa y le avisa a la sede — "Entradas" del período activo se suma cuando ellos
+          confirmen recibido, no antes. Queda como histórico de entrega abajo.
         </p>
         {solicitudIdEnCurso && (
           <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-2 flex items-center justify-between gap-2">

@@ -265,8 +265,8 @@ export interface InsumoGeneralSalida {
 
 /** Bodega administrativa central (una sola, no por sede) — donde llega lo
  *  que se compra. Desde ahí administración le entrega formalmente a cada
- *  sede (InsumoGeneralEntrega), lo que suma como "entradas" del período
- *  activo de esa sede y queda como histórico real de consumo. */
+ *  sede (InsumoGeneralEntrega), lo que queda como histórico real de
+ *  consumo — la sede debe confirmar recibido para que sume "entradas". */
 export interface InsumoGeneralBodegaAdmin {
   id: string;
   catalogo_id: string;
@@ -274,6 +274,9 @@ export interface InsumoGeneralBodegaAdmin {
   updated_at: string;
 }
 
+/** visto pasa de false a true cuando la sede confirma que recibió —
+ *  ese cambio es lo que dispara sumar la cantidad a "entradas" del período
+ *  activo de esa sede (no se suma antes, al solo registrar la entrega). */
 export interface InsumoGeneralEntrega {
   id: string;
   catalogo_id: string;
