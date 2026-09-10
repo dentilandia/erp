@@ -276,6 +276,13 @@ export function Asistencia() {
   const [guardandoAdmin, setGuardandoAdmin] = useState(false);
   const [errorAdmin, setErrorAdmin] = useState<string | null>(null);
 
+  // Listado aparte de control de vacaciones/incapacidades/descansos —
+  // independiente del reporte de horas, para verlos todos juntos por mes.
+  const [controlMes, setControlMes] = useState(() => new Date().toISOString().slice(0, 7));
+  const [controlAusencias, setControlAusencias] = useState<
+    { perfil_id: string; nombre: string; fecha: string; tipo: "vacaciones" | "incapacidad" | "descanso" }[]
+  >([]);
+
   useEffect(() => {
     if (perfil?.rol !== "admin") return;
     supabase
@@ -415,6 +422,7 @@ export function Asistencia() {
     }
     setAusenciaPersona(data);
     cargarReporte();
+    cargarControlAusencias();
   }
 
   async function quitarAusencia() {
@@ -429,6 +437,7 @@ export function Asistencia() {
     }
     setAusenciaPersona(null);
     cargarReporte();
+    cargarControlAusencias();
   }
 
   async function cargarRegistros() {
@@ -524,6 +533,31 @@ export function Asistencia() {
     cargarReporte();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesReporte, metaSemanal]);
+
+  async function cargarControlAusencias() {
+    if (perfil?.rol !== "admin") return;
+    const desde = `${controlMes}-01`;
+    const hasta = sumarDias(desde, 31).slice(0, 7) + "-01";
+    const { data } = await supabase
+      .from("asistencia_ausencias")
+      .select("perfil_id, fecha, tipo, perfiles(nombre)")
+      .gte("fecha", desde)
+      .lt("fecha", hasta);
+    const filas = (
+      (data as unknown as {
+        perfil_id: string;
+        fecha: string;
+        tipo: "vacaciones" | "incapacidad" | "descanso";
+        perfiles: { nombre: string } | null;
+      }[]) ?? []
+    ).map((r) => ({ perfil_id: r.perfil_id, fecha: r.fecha, tipo: r.tipo, nombre: r.perfiles?.nombre ?? "—" }));
+    setControlAusencias(filas);
+  }
+
+  useEffect(() => {
+    cargarControlAusencias();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perfil?.rol, controlMes]);
 
   const yaMarcado = useMemo(() => new Set(registros.map((r) => r.tipo)), [registros]);
 
@@ -773,6 +807,42 @@ export function Asistencia() {
           </div>
 
           {errorAdmin && <p className="text-sm text-red-600">{errorAdmin}</p>}
+        </div>
+      )}
+
+      {perfil?.rol === "admin" && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h2 className="font-semibold text-tinta">Control de vacaciones e incapacidades</h2>
+            <input
+              type="month"
+              value={controlMes}
+              onChange={(e) => setControlMes(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2 py-1 text-sm"
+            />
+          </div>
+          {(["vacaciones", "incapacidad", "descanso"] as const).map((tipo) => {
+            const filas = controlAusencias.filter((a) => a.tipo === tipo).sort((a, b) => a.fecha.localeCompare(b.fecha));
+            return (
+              <div key={tipo}>
+                <h3 className="text-sm font-semibold text-gray-500 mb-1">
+                  {ETIQUETAS_AUSENCIA[tipo]} ({filas.length})
+                </h3>
+                {filas.length === 0 ? (
+                  <p className="text-xs text-gray-400">Sin registros este mes.</p>
+                ) : (
+                  <div className="divide-y divide-gray-50">
+                    {filas.map((a) => (
+                      <div key={`${a.perfil_id}-${a.fecha}`} className="flex items-center justify-between py-1 text-sm">
+                        <span>{a.nombre}</span>
+                        <span className="text-gray-500">{formatFechaLarga(a.fecha)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
