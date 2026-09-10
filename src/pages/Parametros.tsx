@@ -33,7 +33,11 @@ const ETIQUETAS_PRECIOS: Record<string, string> = {
 };
 
 interface PedidoPendiente {
+  movimientoId: string;
+  periodoId: string;
+  sedeId: string;
   sedeNombre: string;
+  catalogoId: string;
   categoria: string;
   nombre: string;
   pedido: number;
@@ -43,6 +47,8 @@ export function Parametros() {
   const { perfil } = useAuth();
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
   const [pedidosPendientes, setPedidosPendientes] = useState<PedidoPendiente[]>([]);
+  const [entregandoPedidoId, setEntregandoPedidoId] = useState<string | null>(null);
+  const [errorPedido, setErrorPedido] = useState<string | null>(null);
   const [precios, setPrecios] = useState<{ clave: string; valor: number }[]>([]);
   const [nuevoNombre, setNuevoNombre] = useState("");
   const [nuevoColor, setNuevoColor] = useState(PALETA_SUGERIDA[0]);
@@ -122,32 +128,77 @@ export function Parametros() {
       .from("insumos_generales_periodos")
       .select("id, sede_id, fecha_inicio, sedes(nombre)")
       .order("fecha_inicio", { ascending: false });
-    const masRecientePorSede = new Map<string, { periodoId: string; sedeNombre: string }>();
+    const masRecientePorSede = new Map<string, { periodoId: string; sedeId: string; sedeNombre: string }>();
     for (const p of (periodosData as unknown as PeriodoConSede[]) ?? []) {
       if (!masRecientePorSede.has(p.sede_id)) {
-        masRecientePorSede.set(p.sede_id, { periodoId: p.id, sedeNombre: p.sedes?.nombre ?? "—" });
+        masRecientePorSede.set(p.sede_id, { periodoId: p.id, sedeId: p.sede_id, sedeNombre: p.sedes?.nombre ?? "—" });
       }
     }
-    const periodoASede = new Map(Array.from(masRecientePorSede.values()).map((v) => [v.periodoId, v.sedeNombre]));
-    const periodoIds = Array.from(periodoASede.keys());
+    const periodoAInfo = new Map(Array.from(masRecientePorSede.values()).map((v) => [v.periodoId, v]));
+    const periodoIds = Array.from(periodoAInfo.keys());
     if (periodoIds.length === 0) {
       setPedidosPendientes([]);
       return;
     }
-    type MovConCatalogo = { periodo_id: string; pedido: number; insumos_generales_catalogo: { categoria: string; nombre: string } | null };
+    type MovConCatalogo = {
+      id: string;
+      periodo_id: string;
+      catalogo_id: string;
+      pedido: number;
+      insumos_generales_catalogo: { categoria: string; nombre: string } | null;
+    };
     const { data: movs } = await supabase
       .from("insumos_generales_movimientos")
-      .select("periodo_id, pedido, insumos_generales_catalogo(categoria, nombre)")
+      .select("id, periodo_id, catalogo_id, pedido, insumos_generales_catalogo(categoria, nombre)")
       .in("periodo_id", periodoIds)
       .gt("pedido", 0);
     setPedidosPendientes(
-      ((movs as unknown as MovConCatalogo[]) ?? []).map((m) => ({
-        sedeNombre: periodoASede.get(m.periodo_id) ?? "—",
-        categoria: m.insumos_generales_catalogo?.categoria ?? "—",
-        nombre: m.insumos_generales_catalogo?.nombre ?? "—",
-        pedido: m.pedido,
-      })),
+      ((movs as unknown as MovConCatalogo[]) ?? []).map((m) => {
+        const info = periodoAInfo.get(m.periodo_id);
+        return {
+          movimientoId: m.id,
+          periodoId: m.periodo_id,
+          sedeId: info?.sedeId ?? "",
+          sedeNombre: info?.sedeNombre ?? "—",
+          catalogoId: m.catalogo_id,
+          categoria: m.insumos_generales_catalogo?.categoria ?? "—",
+          nombre: m.insumos_generales_catalogo?.nombre ?? "—",
+          pedido: m.pedido,
+        };
+      }),
     );
+  }
+
+  // Marcar "Entregado" hace lo mismo que "Entregar a una sede" en
+  // Administración de inventarios (resta de la bodega administrativa y suma
+  // "Entradas" en la sede), y además deja el pedido en 0 para que la línea
+  // desaparezca de este aviso.
+  async function marcarPedidoEntregado(p: PedidoPendiente) {
+    setEntregandoPedidoId(p.movimientoId);
+    setErrorPedido(null);
+    const { error: errorEntrega } = await supabase.from("insumos_generales_entregas").insert({
+      catalogo_id: p.catalogoId,
+      sede_id: p.sedeId,
+      periodo_id: p.periodoId,
+      cantidad: p.pedido,
+      fecha: today(),
+      created_by: perfil?.id ?? null,
+    });
+    if (errorEntrega) {
+      setEntregandoPedidoId(null);
+      setErrorPedido(errorEntrega.message);
+      return;
+    }
+    const { error: errorPedidoUpd } = await supabase
+      .from("insumos_generales_movimientos")
+      .update({ pedido: 0 })
+      .eq("id", p.movimientoId);
+    setEntregandoPedidoId(null);
+    if (errorPedidoUpd) {
+      setErrorPedido(errorPedidoUpd.message);
+      return;
+    }
+    setPedidosPendientes((prev) => prev.filter((x) => x.movimientoId !== p.movimientoId));
   }
 
   async function cargarCatalogoGeneral() {
@@ -297,14 +348,26 @@ export function Parametros() {
             <Bell size={16} /> Pedidos de bodega pendientes ({pedidosPendientes.length})
           </div>
           <p className="text-xs text-amber-700 mb-2">
-            Del período más reciente de cada sede, en Operación → Inventario → Insumos generales.
+            Del período más reciente de cada sede, en Operación → Inventario → Insumos generales. Al marcar
+            "Entregado" se resta de la bodega administrativa, se suma automático a las "Entradas" de esa sede, y la
+            línea desaparece de aquí.
           </p>
-          <div className="space-y-0.5">
-            {pedidosPendientes.map((p, i) => (
-              <p key={i} className="text-sm text-amber-800">
-                <span className="font-medium">{p.sedeNombre}</span> · {p.categoria} · {p.nombre}:{" "}
-                <span className="font-semibold">pedir {p.pedido}</span>
-              </p>
+          {errorPedido && <p className="text-sm text-red-600 mb-2">{errorPedido}</p>}
+          <div className="space-y-1">
+            {pedidosPendientes.map((p) => (
+              <div key={p.movimientoId} className="flex items-center justify-between gap-2 text-sm flex-wrap">
+                <p className="text-amber-800">
+                  <span className="font-medium">{p.sedeNombre}</span> · {p.categoria} · {p.nombre}:{" "}
+                  <span className="font-semibold">pedir {p.pedido}</span>
+                </p>
+                <button
+                  onClick={() => marcarPedidoEntregado(p)}
+                  disabled={entregandoPedidoId === p.movimientoId}
+                  className="shrink-0 flex items-center gap-1 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700 disabled:opacity-40"
+                >
+                  <Check size={14} /> {entregandoPedidoId === p.movimientoId ? "Entregando…" : "Entregado"}
+                </button>
+              </div>
             ))}
           </div>
         </div>
