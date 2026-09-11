@@ -170,6 +170,20 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
 
   const categorias = useMemo(() => Array.from(new Set(catalogo.map((c) => c.categoria))), [catalogo]);
 
+  // Lo que ya se pidió (columna "Pedido") pero administración todavía no ha
+  // entregado — para que la sede lo vea de un vistazo sin tener que abrir
+  // cada categoría a buscarlo.
+  const pendientesPorEntregar = useMemo(() => {
+    const porCategoria = new Map<string, { nombre: string; pedido: number }[]>();
+    for (const item of catalogo) {
+      const mov = movimientos[item.id];
+      if (!mov || mov.pedido <= 0) continue;
+      if (!porCategoria.has(item.categoria)) porCategoria.set(item.categoria, []);
+      porCategoria.get(item.categoria)!.push({ nombre: item.nombre, pedido: mov.pedido });
+    }
+    return Array.from(porCategoria.entries());
+  }, [catalogo, movimientos]);
+
   async function crearPeriodo() {
     setCreandoPeriodo(true);
     setErrorPeriodo(null);
@@ -326,6 +340,26 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
           >
             Recibido
           </button>
+        </section>
+      )}
+
+      {pendientesPorEntregar.length > 0 && (
+        <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
+          <p className="font-semibold text-amber-800 mb-2">📋 Pendiente por entregar (ya pedido, administración no lo ha entregado)</p>
+          <div className="space-y-2">
+            {pendientesPorEntregar.map(([categoria, items]) => (
+              <div key={categoria}>
+                <p className="text-xs font-semibold text-amber-700 mb-0.5">{categoria}</p>
+                <div className="pl-2 space-y-0.5">
+                  {items.map((it) => (
+                    <p key={it.nombre} className="text-sm text-amber-800">
+                      {it.nombre}: <span className="font-semibold">pedir {it.pedido}</span>
+                    </p>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </section>
       )}
 

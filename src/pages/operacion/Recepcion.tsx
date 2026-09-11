@@ -941,11 +941,14 @@ function ModalCobro({
           id: c.id,
           categoria: c.categoria,
           concepto: c.concepto,
-          valor: c.valor,
+          // valor es numeric en Postgres — Supabase lo devuelve como texto,
+          // no como número. Sin convertir acá, las sumas más abajo
+          // (totalCargos, etc.) concatenan texto en vez de sumar.
+          valor: Number(c.valor),
           pagos:
             c.cargo_pagos.length > 0
-              ? c.cargo_pagos.map((p) => ({ medio: p.medio_pago, valor: p.valor }))
-              : [{ medio: "efectivo" as MedioPago, valor: c.valor }],
+              ? c.cargo_pagos.map((p) => ({ medio: p.medio_pago, valor: Number(p.valor) }))
+              : [{ medio: "efectivo" as MedioPago, valor: Number(c.valor) }],
         })),
       );
       setCargosOriginalesIds(rows.map((c) => c.id));
