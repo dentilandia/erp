@@ -326,6 +326,7 @@ export function Recepcion() {
       </section>
 
       <ResumenOperacionDia sedeId={sedeActiva.id} fecha={fecha} />
+      <ResumenSaldosFavorDia sedeId={sedeActiva.id} fecha={fecha} />
 
       <section className="bg-white rounded-xl border border-dashed border-gray-300 p-4">
         {!mostrarSaldoExterno ? (
@@ -728,6 +729,52 @@ function ResumenOperacionDia({ sedeId, fecha }: { sedeId: string; fecha: string 
             {instalados.length === 0 && <p className="text-xs text-gray-400">Ninguno.</p>}
           </div>
         </div>
+      </div>
+    </section>
+  );
+}
+
+interface SaldoFavorFila {
+  id: string;
+  paciente: string;
+  valor: number;
+  motivo: string | null;
+}
+
+/** Saldos a favor que se crearon hoy en esta sede — para tener a la mano el
+ *  total que se generó en el día, sin tener que ir paciente por paciente. */
+function ResumenSaldosFavorDia({ sedeId, fecha }: { sedeId: string; fecha: string }) {
+  const [saldos, setSaldos] = useState<SaldoFavorFila[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from("saldos_favor")
+        .select("id, valor, motivo, pacientes(nombre)")
+        .eq("sede_origen_id", sedeId)
+        .eq("fecha", fecha);
+      const filas = (data as unknown as { id: string; valor: number; motivo: string | null; pacientes: { nombre: string } | null }[]) ?? [];
+      setSaldos(filas.map((s) => ({ id: s.id, paciente: s.pacientes?.nombre ?? "—", valor: s.valor, motivo: s.motivo })));
+    })();
+  }, [sedeId, fecha]);
+
+  if (saldos.length === 0) return null;
+
+  return (
+    <section className="bg-white rounded-xl border border-gray-200 p-4">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-semibold text-gray-500">Saldos a favor creados hoy ({saldos.length})</h3>
+        <span className="text-sm font-semibold text-[var(--acento)]">{fmtCOP(saldos.reduce((a, s) => a + s.valor, 0))}</span>
+      </div>
+      <div className="space-y-1">
+        {saldos.map((s) => (
+          <div key={s.id} className="flex items-center justify-between rounded-md bg-gray-50 px-2 py-1.5 text-sm">
+            <span>
+              {s.paciente} {s.motivo ? <span className="text-gray-400">· {s.motivo}</span> : null}
+            </span>
+            <span className="font-medium">{fmtCOP(s.valor)}</span>
+          </div>
+        ))}
       </div>
     </section>
   );
