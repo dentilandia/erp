@@ -379,14 +379,15 @@ export function AdministracionInventarios() {
   // Agrupa los pedidos pendientes por sede → categoría, para poder leerlos
   // de corrido en vez de una lista plana mezclada.
   const pedidosPendientesAgrupados = useMemo(() => {
-    const porSede = new Map<string, Map<string, PedidoPendiente[]>>();
+    const porSede = new Map<string, { sedeId: string; sedeNombre: string; porCategoria: Map<string, PedidoPendiente[]> }>();
     for (const p of pedidosPendientes) {
-      if (!porSede.has(p.sedeNombre)) porSede.set(p.sedeNombre, new Map());
-      const porCategoria = porSede.get(p.sedeNombre)!;
-      if (!porCategoria.has(p.categoria)) porCategoria.set(p.categoria, []);
-      porCategoria.get(p.categoria)!.push(p);
+      if (!porSede.has(p.sedeId)) porSede.set(p.sedeId, { sedeId: p.sedeId, sedeNombre: p.sedeNombre, porCategoria: new Map() });
+      const grupo = porSede.get(p.sedeId)!;
+      if (!grupo.porCategoria.has(p.categoria)) grupo.porCategoria.set(p.categoria, []);
+      grupo.porCategoria.get(p.categoria)!.push(p);
     }
-    return Array.from(porSede.entries()).map(([sedeNombre, porCategoria]) => ({
+    return Array.from(porSede.values()).map(({ sedeId, sedeNombre, porCategoria }) => ({
+      sedeId,
       sedeNombre,
       categorias: Array.from(porCategoria.entries())
         .sort((a, b) => a[0].localeCompare(b[0]))
@@ -396,6 +397,10 @@ export function AdministracionInventarios() {
         })),
     }));
   }, [pedidosPendientes]);
+
+  function colorSede(sedeId: string): string {
+    return sedes.find((s) => s.id === sedeId)?.color_acento ?? "#9CA3AF";
+  }
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -411,7 +416,8 @@ export function AdministracionInventarios() {
           <div className="space-y-1.5">
             {entregasNoRecibidas.map((e) => (
               <div key={e.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
-                <p className="text-rose-800">
+                <p className="text-rose-800 flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorSede(e.sede_id) }} />
                   <span className="font-medium">{(e as unknown as { sedes: { nombre: string } | null }).sedes?.nombre ?? "—"}</span> ·{" "}
                   {e.fecha} · {e.insumos_generales_catalogo?.nombre ?? "—"} ·{" "}
                   <span className="font-semibold">{e.cantidad}</span>
@@ -451,8 +457,11 @@ export function AdministracionInventarios() {
           {errorPedido && <p className="text-sm text-red-600 mb-2">{errorPedido}</p>}
           <div className="space-y-3">
             {pedidosPendientesAgrupados.map((s) => (
-              <div key={s.sedeNombre}>
-                <p className="text-xs font-bold text-amber-900 uppercase tracking-wide mb-1">{s.sedeNombre}</p>
+              <div key={s.sedeId}>
+                <p className="flex items-center gap-1.5 text-xs font-bold text-amber-900 uppercase tracking-wide mb-1">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorSede(s.sedeId) }} />
+                  {s.sedeNombre}
+                </p>
                 <div className="space-y-2.5">
                   {s.categorias.map((c) => (
                     <div key={c.categoria}>
@@ -498,7 +507,8 @@ export function AdministracionInventarios() {
           <div className="space-y-1.5">
             {solicitudesPendientes.map((s) => (
               <div key={s.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
-                <span className="text-amber-700">
+                <span className="text-amber-700 flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorSede(s.sede_id) }} />
                   <span className="font-medium">{s.sedes?.nombre ?? "—"}</span> · {s.insumos_generales_catalogo?.nombre ?? "—"} ·{" "}
                   <span className="font-medium">{s.cantidad}</span>
                   {s.nota ? ` · ${s.nota}` : ""}
@@ -529,18 +539,30 @@ export function AdministracionInventarios() {
             </button>
           </p>
         )}
+        <div className="mb-2">
+          <p className="text-xs font-medium text-gray-500 mb-1.5">Sede</p>
+          <div className="flex flex-wrap gap-2">
+            {sedes.map((s) => {
+              const activa = sedeIdEntrega === s.id;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setSedeIdEntrega(s.id)}
+                  className="text-sm font-semibold px-4 py-2 rounded-full border-2 transition-colors"
+                  style={{
+                    background: activa ? s.color_acento : "transparent",
+                    borderColor: s.color_acento,
+                    color: activa ? "#ffffff" : s.color_acento,
+                  }}
+                >
+                  {s.nombre}
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <div className="flex items-end gap-2 flex-wrap">
-          <select
-            value={sedeIdEntrega}
-            onChange={(e) => setSedeIdEntrega(e.target.value)}
-            className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-          >
-            {sedes.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.nombre}
-              </option>
-            ))}
-          </select>
           <select
             value={catalogoIdEntrega}
             onChange={(e) => setCatalogoIdEntrega(e.target.value)}
