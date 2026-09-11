@@ -235,6 +235,7 @@ export interface InsumoGeneralPeriodo {
   fecha_inicio: string;
   fecha_fin: string | null;
   cerrado: boolean;
+  nota_pedido: string | null;
 }
 
 export interface InsumoGeneralMovimiento {
@@ -274,9 +275,12 @@ export interface InsumoGeneralBodegaAdmin {
   updated_at: string;
 }
 
-/** visto pasa de false a true cuando la sede confirma que recibió —
- *  ese cambio es lo que dispara sumar la cantidad a "entradas" del período
- *  activo de esa sede (no se suma antes, al solo registrar la entrega). */
+/** visto pasa de false a true cuando la sede confirma que SÍ recibió esa
+ *  línea — eso es lo que dispara sumar la cantidad a "entradas" del período
+ *  activo de esa sede (no se suma antes, al solo registrar la entrega).
+ *  reportado_no_recibido es la otra respuesta posible por línea: la sede
+ *  dice que no le llegó, y eso se maneja administrativamente aparte —
+ *  tampoco suma a entradas. */
 export interface InsumoGeneralEntrega {
   id: string;
   catalogo_id: string;
@@ -286,6 +290,7 @@ export interface InsumoGeneralEntrega {
   fecha: string;
   created_at: string;
   visto: boolean;
+  reportado_no_recibido: boolean;
 }
 
 /** Solicitud de una sede a la bodega administrativa — el primer paso del

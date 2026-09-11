@@ -60,6 +60,8 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   const [salidaOk, setSalidaOk] = useState(false);
   const [errorSalida, setErrorSalida] = useState<string | null>(null);
 
+  const [notaPedido, setNotaPedido] = useState("");
+
   const [solicitudes, setSolicitudes] = useState<SolicitudConCatalogo[]>([]);
   const [catalogoIdSolicitud, setCatalogoIdSolicitud] = useState("");
   const [cantidadSolicitud, setCantidadSolicitud] = useState("");
@@ -104,14 +106,21 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     setEntregasRecibidas((data as unknown as EntregaConCatalogo[]) ?? []);
   }
 
-  async function marcarEntregasVistas() {
-    const ids = entregasRecibidas.filter((e) => !e.visto).map((e) => e.id);
-    if (ids.length === 0) return;
-    // Al confirmar es cuando de verdad se suman a "Entradas" del período —
+  // Cada línea se confirma por separado — no un solo botón para todas — para
+  // que la sede pueda decir exactamente cuál sí y cuál no le llegó.
+  async function marcarEntregaRecibida(id: string) {
+    // Al confirmar es cuando de verdad se suma a "Entradas" del período —
     // no antes, para no contarlo hasta que la sede confirme que llegó.
-    await supabase.from("insumos_generales_entregas").update({ visto: true }).in("id", ids);
+    await supabase.from("insumos_generales_entregas").update({ visto: true }).eq("id", id);
     cargarEntregasRecibidas();
     cargarMovimientos();
+  }
+
+  async function marcarEntregaNoRecibida(id: string) {
+    // No suma a "Entradas" — queda marcada para que administración la
+    // revise y decida cómo resolverla.
+    await supabase.from("insumos_generales_entregas").update({ reportado_no_recibido: true }).eq("id", id);
+    cargarEntregasRecibidas();
   }
 
   async function cargarSalidas() {
@@ -167,6 +176,21 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     cargarMovimientos();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [periodoId]);
+
+  useEffect(() => {
+    setNotaPedido(periodos.find((p) => p.id === periodoId)?.nota_pedido ?? "");
+  }, [periodoId, periodos]);
+
+  async function guardarNotaPedido() {
+    if (!periodoId) return;
+    const { error } = await supabase
+      .from("insumos_generales_periodos")
+      .update({ nota_pedido: notaPedido.trim() || null })
+      .eq("id", periodoId);
+    if (!error) {
+      setPeriodos((prev) => prev.map((p) => (p.id === periodoId ? { ...p, nota_pedido: notaPedido.trim() || null } : p)));
+    }
+  }
 
   const categorias = useMemo(() => Array.from(new Set(catalogo.map((c) => c.categoria))), [catalogo]);
 
@@ -314,7 +338,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   }
 
   const periodoActivo = periodos.find((p) => p.id === periodoId);
-  const entregasNoVistas = entregasRecibidas.filter((e) => !e.visto);
+  const entregasNoVistas = entregasRecibidas.filter((e) => !e.visto && !e.reportado_no_recibido);
 
   if (cargando) return <p className="text-sm text-gray-400">Cargando…</p>;
 
@@ -323,23 +347,34 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
       {entregasNoVistas.length > 0 && (
         <section className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-4">
           <p className="font-semibold text-emerald-800 mb-2">📦 Llegaron entregas nuevas de administración</p>
-          <div className="space-y-1 mb-3">
+          <p className="text-xs text-emerald-600 mb-2">
+            Confirma línea por línea si de verdad te llegó — lo que confirmes como recibido se suma solo a
+            "Entradas"; lo que marques como no recibido queda para que administración lo revise.
+          </p>
+          <div className="space-y-1.5">
             {entregasNoVistas.map((e) => (
-              <p key={e.id} className="text-sm text-emerald-700">
-                {e.fecha} · {e.insumos_generales_catalogo?.nombre ?? "—"} ·{" "}
-                <span className="font-semibold">{e.cantidad}</span>
-              </p>
+              <div key={e.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
+                <p className="text-emerald-700">
+                  {e.fecha} · {e.insumos_generales_catalogo?.nombre ?? "—"} ·{" "}
+                  <span className="font-semibold">{e.cantidad}</span>
+                </p>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => marcarEntregaRecibida(e.id)}
+                    className="rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-emerald-700"
+                  >
+                    Recibido
+                  </button>
+                  <button
+                    onClick={() => marcarEntregaNoRecibida(e.id)}
+                    className="rounded-lg border border-emerald-400 text-emerald-700 px-3 py-1.5 text-xs font-medium hover:bg-emerald-100"
+                  >
+                    No recibido
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
-          <p className="text-xs text-emerald-600 mb-2">
-            Confirma que ya las recibiste para que se sumen a "Entradas" del período correspondiente.
-          </p>
-          <button
-            onClick={marcarEntregasVistas}
-            className="rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-medium hover:bg-emerald-700"
-          >
-            Recibido
-          </button>
         </section>
       )}
 
@@ -409,11 +444,26 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
           </button>
         </div>
         {errorPeriodo && <p className="text-sm text-red-600">{errorPeriodo}</p>}
-        <p className="text-xs text-gray-400">
+        <p className="text-xs text-gray-400 mb-3">
           El inventario inicial de un período nuevo parte del inventario final del período anterior de esta sede. La
           columna "Entradas" se llena sola cuando confirmas que recibiste una entrega de la bodega administrativa
           (aviso verde arriba); "Salidas" se llena con el formulario de abajo.
         </p>
+        {periodoActivo && (
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              Observaciones del pedido (si necesitas algún insumo específico que no esté en la lista)
+            </label>
+            <textarea
+              value={notaPedido}
+              onChange={(e) => setNotaPedido(e.target.value)}
+              onBlur={guardarNotaPedido}
+              rows={2}
+              placeholder="Ej: necesitamos guantes talla M, se nos acabaron antes de lo previsto"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          </div>
+        )}
       </section>
 
       <section className="bg-white rounded-xl border border-gray-200 p-4">

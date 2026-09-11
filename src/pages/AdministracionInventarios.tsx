@@ -59,6 +59,9 @@ export function AdministracionInventarios() {
   const [cantidadesEntregaPedido, setCantidadesEntregaPedido] = useState<Record<string, string>>({});
   const [entregandoPedidoId, setEntregandoPedidoId] = useState<string | null>(null);
   const [errorPedido, setErrorPedido] = useState<string | null>(null);
+  const [notasPedidoPorSede, setNotasPedidoPorSede] = useState<{ sedeNombre: string; nota: string }[]>([]);
+
+  const [entregasNoRecibidas, setEntregasNoRecibidas] = useState<EntregaHistorial[]>([]);
 
   const [sedeIdVista, setSedeIdVista] = useState("");
 
@@ -146,17 +149,33 @@ export function AdministracionInventarios() {
   // reciente de cada una, ítems con pedido > 0. Sirve como "notificación"
   // visible ya que el sistema no manda avisos push ni por correo.
   async function cargarPedidosPendientes() {
-    type PeriodoConSede = { id: string; sede_id: string; fecha_inicio: string; sedes: { nombre: string } | null };
+    type PeriodoConSede = {
+      id: string;
+      sede_id: string;
+      fecha_inicio: string;
+      nota_pedido: string | null;
+      sedes: { nombre: string } | null;
+    };
     const { data: periodosData } = await supabase
       .from("insumos_generales_periodos")
-      .select("id, sede_id, fecha_inicio, sedes(nombre)")
+      .select("id, sede_id, fecha_inicio, nota_pedido, sedes(nombre)")
       .order("fecha_inicio", { ascending: false });
-    const masRecientePorSede = new Map<string, { periodoId: string; sedeId: string; sedeNombre: string }>();
+    const masRecientePorSede = new Map<string, { periodoId: string; sedeId: string; sedeNombre: string; nota: string | null }>();
     for (const p of (periodosData as unknown as PeriodoConSede[]) ?? []) {
       if (!masRecientePorSede.has(p.sede_id)) {
-        masRecientePorSede.set(p.sede_id, { periodoId: p.id, sedeId: p.sede_id, sedeNombre: p.sedes?.nombre ?? "—" });
+        masRecientePorSede.set(p.sede_id, {
+          periodoId: p.id,
+          sedeId: p.sede_id,
+          sedeNombre: p.sedes?.nombre ?? "—",
+          nota: p.nota_pedido,
+        });
       }
     }
+    setNotasPedidoPorSede(
+      Array.from(masRecientePorSede.values())
+        .filter((v) => v.nota && v.nota.trim())
+        .map((v) => ({ sedeNombre: v.sedeNombre, nota: v.nota as string })),
+    );
     const periodoAInfo = new Map(Array.from(masRecientePorSede.values()).map((v) => [v.periodoId, v]));
     const periodoIds = Array.from(periodoAInfo.keys());
     if (periodoIds.length === 0) {
@@ -195,6 +214,26 @@ export function AdministracionInventarios() {
   useEffect(() => {
     cargarPedidosPendientes();
   }, []);
+
+  async function cargarEntregasNoRecibidas() {
+    const { data } = await supabase
+      .from("insumos_generales_entregas")
+      .select("*, insumos_generales_catalogo(categoria, nombre), insumos_generales_periodos(etiqueta), sedes(nombre)")
+      .eq("reportado_no_recibido", true)
+      .order("fecha", { ascending: false });
+    setEntregasNoRecibidas((data as unknown as (EntregaHistorial & { sedes: { nombre: string } | null })[]) ?? []);
+  }
+
+  useEffect(() => {
+    cargarEntregasNoRecibidas();
+  }, []);
+
+  // Admin la marca resuelta después de investigar/re-entregar por fuera de
+  // este flujo — no suma a "Entradas" acá, solo saca el aviso.
+  async function resolverEntregaNoRecibida(id: string) {
+    await supabase.from("insumos_generales_entregas").update({ reportado_no_recibido: false }).eq("id", id);
+    cargarEntregasNoRecibidas();
+  }
 
   // Marcar "Entregado" hace lo mismo que "Entregar a una sede" (resta de la
   // bodega administrativa; "Entradas" en la sede queda pendiente de que
@@ -362,7 +401,34 @@ export function AdministracionInventarios() {
     <div className="max-w-4xl mx-auto space-y-6">
       <BodegaAdminTabla editable />
 
-      {pedidosPendientes.length > 0 && (
+      {entregasNoRecibidas.length > 0 && (
+        <section className="rounded-xl border-2 border-rose-300 bg-rose-50 p-4">
+          <p className="font-semibold text-rose-800 mb-2">🚨 Entregas reportadas como NO recibidas</p>
+          <p className="text-xs text-rose-700 mb-2">
+            La sede marcó que esto no le llegó — revisar y resolver por fuera (ej. volver a entregar), y luego
+            descartar el aviso.
+          </p>
+          <div className="space-y-1.5">
+            {entregasNoRecibidas.map((e) => (
+              <div key={e.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
+                <p className="text-rose-800">
+                  <span className="font-medium">{(e as unknown as { sedes: { nombre: string } | null }).sedes?.nombre ?? "—"}</span> ·{" "}
+                  {e.fecha} · {e.insumos_generales_catalogo?.nombre ?? "—"} ·{" "}
+                  <span className="font-semibold">{e.cantidad}</span>
+                </p>
+                <button
+                  onClick={() => resolverEntregaNoRecibida(e.id)}
+                  className="shrink-0 rounded-lg bg-rose-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-rose-700"
+                >
+                  Descartar aviso
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {(pedidosPendientes.length > 0 || notasPedidoPorSede.length > 0) && (
         <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
           <div className="flex items-center gap-2 text-amber-800 font-semibold text-sm mb-2">
             <Bell size={16} /> Pedidos de bodega pendientes ({pedidosPendientes.length})
@@ -373,6 +439,15 @@ export function AdministracionInventarios() {
             de la bodega administrativa y le llega el aviso a la sede para que confirme recibido (ahí se suma a sus
             "Entradas").
           </p>
+          {notasPedidoPorSede.length > 0 && (
+            <div className="space-y-1 mb-3">
+              {notasPedidoPorSede.map((n) => (
+                <p key={n.sedeNombre} className="text-sm bg-white/60 border border-amber-200 rounded-lg px-3 py-2 text-amber-900">
+                  <span className="font-semibold">{n.sedeNombre}:</span> {n.nota}
+                </p>
+              ))}
+            </div>
+          )}
           {errorPedido && <p className="text-sm text-red-600 mb-2">{errorPedido}</p>}
           <div className="space-y-3">
             {pedidosPendientesAgrupados.map((s) => (
