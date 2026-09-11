@@ -601,7 +601,7 @@ function ModalAtencion({
       });
     }
 
-    await supabase
+    const { data: actualizada, error: errorEstado } = await supabase
       .from("visitas")
       .update({
         estado: "consulta",
@@ -612,9 +612,25 @@ function ModalAtencion({
         ...(comprobanteDatafonoUrl ? { comprobante_datafono_url: comprobanteDatafonoUrl } : {}),
         updated_at: new Date().toISOString(),
       })
-      .eq("id", visitaId);
+      .eq("id", visitaId)
+      .select("id")
+      .maybeSingle();
 
     setGuardando(false);
+    if (errorEstado) {
+      setError(errorEstado.message);
+      return;
+    }
+    if (!actualizada) {
+      // La política de seguridad por sede puede bloquear el update sin
+      // lanzar error (0 filas afectadas) — sin este chequeo, el modal se
+      // cerraba como si hubiera guardado y la visita se quedaba varada sin
+      // pasar a "consulta", así que no aparecía en Recepción para cobrar.
+      setError(
+        "No se guardó: la visita no se pudo actualizar (puede ser que la sede de tu sesión no coincida con la del paciente). No se perdió lo que ya registraste — vuelve a intentar o avisa a soporte antes de borrar al paciente.",
+      );
+      return;
+    }
     onGuardado();
   }
 
