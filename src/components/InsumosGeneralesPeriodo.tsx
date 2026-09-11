@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Check, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, Check, X, ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
 import { useAuth } from "../auth/AuthContext";
@@ -265,6 +265,17 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     cargarSalidas();
   }
 
+  async function eliminarSalida(id: string) {
+    setErrorSalida(null);
+    const { error } = await supabase.from("insumos_generales_salidas").delete().eq("id", id);
+    if (error) {
+      setErrorSalida(error.message);
+      return;
+    }
+    cargarMovimientos();
+    cargarSalidas();
+  }
+
   async function crearSolicitud() {
     if (!catalogoIdSolicitud || !Number(cantidadSolicitud)) return;
     setGuardandoSolicitud(true);
@@ -516,9 +527,19 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
               <p className="text-xs font-medium text-gray-400 mb-1.5">Últimas salidas registradas</p>
               <div className="space-y-1">
                 {salidasRegistradas.map((s) => (
-                  <div key={s.id} className="text-xs text-gray-500">
-                    {s.fecha} · {s.insumos_generales_catalogo?.nombre ?? "—"} · <span className="font-medium">{s.cantidad}</span>
-                    {s.motivo ? ` · ${s.motivo}` : ""}
+                  <div key={s.id} className="flex items-center justify-between gap-2 text-xs text-gray-500">
+                    <span>
+                      {s.fecha} · {s.insumos_generales_catalogo?.nombre ?? "—"} ·{" "}
+                      <span className="font-medium">{s.cantidad}</span>
+                      {s.motivo ? ` · ${s.motivo}` : ""}
+                    </span>
+                    <button
+                      onClick={() => eliminarSalida(s.id)}
+                      title="Eliminar esta salida"
+                      className="shrink-0 text-gray-300 hover:text-red-500"
+                    >
+                      <X size={14} />
+                    </button>
                   </div>
                 ))}
               </div>
