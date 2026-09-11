@@ -1181,8 +1181,8 @@ function ModalCobro({
         ) : (
           <>
             {saldoDisponible > 0 && (
-              <p className="text-sm text-[var(--acento)] bg-[var(--acento)]/10 rounded-lg px-3 py-2 mb-3">
-                Saldo a favor disponible: {fmtCOP(saldoDisponible)}
+              <p className="rounded-lg bg-emerald-500 px-3 py-2.5 text-sm font-bold text-white shadow-sm mb-3">
+                💰 Saldo a favor disponible: {fmtCOP(saldoDisponible)}
               </p>
             )}
 

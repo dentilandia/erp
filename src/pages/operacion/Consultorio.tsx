@@ -629,8 +629,8 @@ function ModalAtencion({
         </div>
 
         {saldoFavor > 0 && (
-          <p className="rounded-lg bg-[var(--acento)]/10 border border-[var(--acento)] px-3 py-2 text-sm text-tinta">
-            <span className="font-semibold">💰 Saldo a favor disponible:</span> {fmtCOP(saldoFavor)}
+          <p className="rounded-lg bg-emerald-500 px-3 py-2.5 text-sm font-bold text-white shadow-sm">
+            💰 Saldo a favor disponible: {fmtCOP(saldoFavor)}
           </p>
         )}
 
