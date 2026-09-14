@@ -100,6 +100,7 @@ interface RegistroReporte {
 
 interface SemanaReporte {
   lunes: string;
+  horasTrabajadas: number;
   horas: number;
   horasExtra: number;
   horasDeficit: number;
@@ -217,7 +218,17 @@ function armarReporteHoras(
     const fila = porPersona.get(perfilId)!;
     const horasExtra = Math.max(0, horas - metaAjustada);
     const horasDeficit = Math.max(0, metaAjustada - horas);
-    fila.semanas.push({ lunes, horas, horasExtra, horasDeficit, diasAusencia, minutosCompensados, cuentaParaEsteMes });
+    const horasTrabajadas = horas - minutosCompensados / 60;
+    fila.semanas.push({
+      lunes,
+      horasTrabajadas,
+      horas,
+      horasExtra,
+      horasDeficit,
+      diasAusencia,
+      minutosCompensados,
+      cuentaParaEsteMes,
+    });
     if (cuentaParaEsteMes) fila.totalHorasExtra += horasExtra;
   }
 
@@ -882,7 +893,9 @@ export function Asistencia() {
                     <thead>
                       <tr className="text-xs text-gray-400 text-left">
                         <th className="font-normal pb-1">Semana</th>
-                        <th className="font-normal pb-1 text-right">Horas</th>
+                        <th className="font-normal pb-1 text-right">Trabajadas</th>
+                        <th className="font-normal pb-1 text-right">Compensadas</th>
+                        <th className="font-normal pb-1 text-right">Totales</th>
                         <th className="font-normal pb-1 text-right">Extra</th>
                         <th className="font-normal pb-1 text-right">Déficit</th>
                       </tr>
@@ -895,12 +908,13 @@ export function Asistencia() {
                             {s.diasAusencia > 0 && (
                               <span className="text-sky-600"> (−{s.diasAusencia}d ausencia)</span>
                             )}
-                            {s.minutosCompensados > 0 && (
-                              <span className="text-violet-600"> (+{s.minutosCompensados}min comp.)</span>
-                            )}
                             {!s.cuentaParaEsteMes && <span className="text-gray-400"> — se paga el mes anterior</span>}
                           </td>
-                          <td className="py-1 text-right">{s.horas.toFixed(1)}</td>
+                          <td className="py-1 text-right">{s.horasTrabajadas.toFixed(1)}</td>
+                          <td className="py-1 text-right text-violet-600">
+                            {s.minutosCompensados > 0 ? (s.minutosCompensados / 60).toFixed(1) : "—"}
+                          </td>
+                          <td className="py-1 text-right font-medium">{s.horas.toFixed(1)}</td>
                           <td className="py-1 text-right text-emerald-700">{s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
                           <td className="py-1 text-right text-amber-600">{s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>
                         </tr>
