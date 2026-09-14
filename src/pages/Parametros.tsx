@@ -56,6 +56,7 @@ export function Parametros() {
   const [saldosPaciente, setSaldosPaciente] = useState<SaldoFavor[]>([]);
   const [saldoGuardadoId, setSaldoGuardadoId] = useState<string | null>(null);
   const [errorSaldoExistente, setErrorSaldoExistente] = useState<string | null>(null);
+  const [mostrarSaldosAgotados, setMostrarSaldosAgotados] = useState(false);
 
   const [catalogoGeneral, setCatalogoGeneral] = useState<InsumoGeneralCatalogo[]>([]);
   const [categoriasAbiertas, setCategoriasAbiertas] = useState<Record<string, boolean>>({});
@@ -197,6 +198,7 @@ export function Parametros() {
 
   async function cargarSaldosPaciente(p: Paciente) {
     setPacienteEditar(p);
+    setMostrarSaldosAgotados(false);
     const { data } = await supabase
       .from("saldos_favor")
       .select("*")
@@ -458,7 +460,8 @@ export function Parametros() {
       <section className="bg-white rounded-xl border border-gray-200 p-4">
         <h2 className="font-semibold text-tinta mb-1">Corregir saldo a favor existente</h2>
         <p className="text-xs text-gray-400 mb-3">
-          Para arreglar la fecha o el valor de un saldo a favor que ya quedó mal registrado.
+          Para arreglar la fecha o el valor de un saldo a favor que ya quedó mal registrado. Los saldos que ya se
+          gastaron completos quedan ocultos por defecto — no hay nada que corregir ahí, ya se usaron de verdad.
         </p>
         {pacienteEditar ? (
           <div className="flex items-center justify-between rounded-lg border border-[var(--acento)] bg-[var(--acento)]/5 px-3 py-2 text-sm mb-2">
@@ -481,10 +484,22 @@ export function Parametros() {
             {errorSaldoExistente}
           </p>
         )}
-        {pacienteEditar && (
-          <div className="space-y-3 mt-2">
-            {saldosPaciente.map((s) => (
-              <div key={s.id} className="rounded-lg border border-gray-200 p-3 flex items-center gap-2 flex-wrap">
+        {pacienteEditar &&
+          (() => {
+            const activos = saldosPaciente.filter((s) => s.valor_disponible > 0);
+            const agotados = saldosPaciente.filter((s) => s.valor_disponible <= 0);
+            const fila = (s: SaldoFavor) => (
+              <div
+                key={s.id}
+                className={`rounded-lg border p-3 flex items-center gap-2 flex-wrap ${
+                  s.valor_disponible <= 0 ? "border-gray-100 bg-gray-50" : "border-gray-200"
+                }`}
+              >
+                {s.valor_disponible <= 0 && (
+                  <span className="text-[10px] font-semibold uppercase text-gray-400 bg-gray-200 rounded px-1.5 py-0.5 w-full sm:w-auto">
+                    Agotado — ya se usó completo
+                  </span>
+                )}
                 <input
                   type="date"
                   value={s.fecha}
@@ -538,10 +553,30 @@ export function Parametros() {
                   <Trash2 size={14} />
                 </button>
               </div>
-            ))}
-            {saldosPaciente.length === 0 && <p className="text-sm text-gray-400">Sin saldos a favor registrados.</p>}
-          </div>
-        )}
+            );
+            return (
+              <div className="space-y-3 mt-2">
+                {activos.map(fila)}
+                {activos.length === 0 && agotados.length === 0 && (
+                  <p className="text-sm text-gray-400">Sin saldos a favor registrados.</p>
+                )}
+                {activos.length === 0 && agotados.length > 0 && (
+                  <p className="text-sm text-gray-400">No tiene saldo a favor disponible — todo lo que tuvo ya se usó.</p>
+                )}
+                {agotados.length > 0 && (
+                  <div>
+                    <button
+                      onClick={() => setMostrarSaldosAgotados((v) => !v)}
+                      className="text-xs font-medium text-gray-400 hover:text-gray-600"
+                    >
+                      {mostrarSaldosAgotados ? "Ocultar" : "Ver"} saldos ya usados ({agotados.length})
+                    </button>
+                    {mostrarSaldosAgotados && <div className="space-y-3 mt-2">{agotados.map(fila)}</div>}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
       </section>
 
       <section className="bg-white rounded-xl border border-gray-200 p-4">
