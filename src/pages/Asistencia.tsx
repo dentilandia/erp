@@ -121,6 +121,7 @@ interface AusenciaReporte {
   perfil_id: string;
   nombre: string;
   fecha: string;
+  tipo: "vacaciones" | "incapacidad" | "descanso";
 }
 
 interface CompensacionReporte {
@@ -182,9 +183,13 @@ function armarReporteHoras(
     });
   }
 
-  // Un día de vacaciones/incapacidad resta una jornada ordinaria (8.5h entre
-  // semana, 4h el sábado) de la meta semanal de esa semana, para no
-  // marcarlo como déficit.
+  // Un día de vacaciones/incapacidad resta una jornada ordinaria (8.5h) de
+  // la meta semanal, para no marcarlo como déficit — entre semana sola
+  // (8.5h × 5 días = 42.5h) ya se alcanza la meta legal de 42h/semana, así
+  // que perder un día entre semana sí puede dejar a alguien por debajo.
+  // El descanso sabatino NO resta nada: el sábado siempre fue tiempo extra
+  // por encima de esas 42.5h entre semana, nunca parte de la meta — así que
+  // descansarlo no crea ningún faltante que compensar.
   const ausenciasPorSemana = new Map<string, { nombre: string; dias: number; horasDescuento: number }>();
   for (const a of ausencias) {
     const lunes = lunesDeSemana(a.fecha);
@@ -193,7 +198,7 @@ function armarReporteHoras(
     ausenciasPorSemana.set(claveSemana, {
       nombre: a.nombre,
       dias: (acumulado?.dias ?? 0) + 1,
-      horasDescuento: (acumulado?.horasDescuento ?? 0) + jornadaOrdinariaHoras(a.fecha),
+      horasDescuento: (acumulado?.horasDescuento ?? 0) + (a.tipo === "descanso" ? 0 : jornadaOrdinariaHoras(a.fecha)),
     });
   }
 
@@ -517,6 +522,7 @@ export function Asistencia() {
       perfil_id: a.perfil_id,
       fecha: a.fecha,
       nombre: a.perfiles?.nombre ?? "—",
+      tipo: a.tipo,
     }));
     const ausenciasAgrupadas: Record<string, { fecha: string; tipo: "vacaciones" | "incapacidad" | "descanso" }[]> = {};
     for (const a of ausenciasRows) {
@@ -901,8 +907,8 @@ export function Asistencia() {
                         <th className="font-normal pb-1">Semana</th>
                         <th className="font-normal pb-1 text-right">Trabajadas</th>
                         <th className="font-normal pb-1 text-right">Compensadas</th>
-                        <th className="font-normal pb-1 text-right">Sábado</th>
                         <th className="font-normal pb-1 text-right">Totales</th>
+                        <th className="font-normal pb-1 text-right">Sábado</th>
                         <th className="font-normal pb-1 text-right">Extra</th>
                         <th className="font-normal pb-1 text-right">Déficit</th>
                       </tr>
@@ -918,10 +924,10 @@ export function Asistencia() {
                           <td className="py-1 text-right text-violet-600">
                             {s.minutosCompensados > 0 ? (s.minutosCompensados / 60).toFixed(1) : "—"}
                           </td>
+                          <td className="py-1 text-right font-medium">{s.horas.toFixed(1)}</td>
                           <td className="py-1 text-right text-sky-600">
                             {s.horasDescuentoAusencia > 0 ? `−${s.horasDescuentoAusencia.toFixed(1)}` : "—"}
                           </td>
-                          <td className="py-1 text-right font-medium">{s.horas.toFixed(1)}</td>
                           <td className="py-1 text-right text-emerald-700">{s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
                           <td className="py-1 text-right text-amber-600">{s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>
                         </tr>
