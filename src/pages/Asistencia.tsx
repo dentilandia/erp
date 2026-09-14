@@ -112,7 +112,7 @@ interface SemanaReporte {
   horasDeficit: number;
   diasAusencia: number;
   horasDescuentoAusencia: number;
-  horasDescuentoFestivo: number;
+  horasFestivo: number;
   minutosCompensados: number;
   cuentaParaEsteMes: boolean;
 }
@@ -135,18 +135,6 @@ interface CompensacionReporte {
   perfil_id: string;
   fecha: string;
   minutos: number;
-}
-
-/** Cuánto resta un festivo entre semana a la meta de esa semana — aplica
- *  parejo a todo el mundo (no es por persona, como sí lo es vacaciones). El
- *  sábado nunca resta porque nunca fue parte de la meta. */
-function horasFestivoSemana(lunes: string, festivos: Set<string>): number {
-  let total = 0;
-  for (let i = 0; i < 5; i++) {
-    const dia = sumarDias(lunes, i);
-    if (festivos.has(dia)) total += jornadaOrdinariaHoras(dia);
-  }
-  return total;
 }
 
 /** Arma el reporte de horas del rango (mes calendario o período de
@@ -183,7 +171,37 @@ function armarReporteHoras(
     if (!entrada.marcas[r.tipo]) entrada.marcas[r.tipo] = r.marcado_en;
   }
 
-  const porPersonaYSemana = new Map<string, { nombre: string; horas: number; minutosCompensados: number }>();
+  // Por ley, un festivo entre semana no se le puede descontar a nadie de la
+  // meta — se le debe sumar como si hubiera trabajado, igual que el
+  // compensado. Es automático (no depende de que alguien lo marque): para
+  // cada persona con actividad ese mes, si trabajó menos que la jornada ese
+  // día festivo (o nada), se le suma de vuelta la diferencia.
+  const personasConocidas = new Map<string, string>();
+  for (const clave of porPersonaYDia.keys()) {
+    const [perfilId] = clave.split("|");
+    if (!personasConocidas.has(perfilId)) personasConocidas.set(perfilId, porPersonaYDia.get(clave)!.nombre);
+  }
+  const creditoFestivoPorDia = new Map<string, number>();
+  for (const [perfilId, nombre] of personasConocidas) {
+    for (const fecha of festivos) {
+      if (diaDeSemana(fecha) === 6 || diaDeSemana(fecha) === 0) continue; // festivo en fin de semana no aplica
+      const marcas = porPersonaYDia.get(`${perfilId}|${fecha}`)?.marcas;
+      let horasReales = 0;
+      if (marcas?.llegada && marcas?.salida) {
+        horasReales = (new Date(marcas.salida).getTime() - new Date(marcas.llegada).getTime()) / 3_600_000;
+        if (marcas.salida_almuerzo && marcas.entrada_almuerzo) {
+          horasReales -= (new Date(marcas.entrada_almuerzo).getTime() - new Date(marcas.salida_almuerzo).getTime()) / 3_600_000;
+        }
+      }
+      const credito = Math.max(0, jornadaOrdinariaHoras(fecha) - horasReales);
+      if (credito > 0) creditoFestivoPorDia.set(`${perfilId}|${fecha}|${nombre}`, credito);
+    }
+  }
+
+  const porPersonaYSemana = new Map<
+    string,
+    { nombre: string; horas: number; minutosCompensados: number; horasFestivo: number }
+  >();
   for (const [clave, { nombre, marcas }] of porPersonaYDia) {
     const [perfilId, dia] = clave.split("|");
     if (!marcas.llegada || !marcas.salida) continue;
@@ -201,6 +219,19 @@ function armarReporteHoras(
       nombre,
       horas: (acumulado?.horas ?? 0) + horas,
       minutosCompensados: (acumulado?.minutosCompensados ?? 0) + minutosDia,
+      horasFestivo: acumulado?.horasFestivo ?? 0,
+    });
+  }
+  for (const [clave, credito] of creditoFestivoPorDia) {
+    const [perfilId, dia, nombre] = clave.split("|");
+    const lunes = lunesDeSemana(dia);
+    const claveSemana = `${perfilId}|${lunes}`;
+    const acumulado = porPersonaYSemana.get(claveSemana);
+    porPersonaYSemana.set(claveSemana, {
+      nombre: acumulado?.nombre ?? nombre,
+      horas: (acumulado?.horas ?? 0) + credito,
+      minutosCompensados: acumulado?.minutosCompensados ?? 0,
+      horasFestivo: (acumulado?.horasFestivo ?? 0) + credito,
     });
   }
 
@@ -235,16 +266,18 @@ function armarReporteHoras(
     const cuentaParaEsteMes = lunes >= rangoInicio && lunes < rangoFin;
     const horas = porPersonaYSemana.get(claveSemana)?.horas ?? 0;
     const minutosCompensados = porPersonaYSemana.get(claveSemana)?.minutosCompensados ?? 0;
+    const horasFestivo = porPersonaYSemana.get(claveSemana)?.horasFestivo ?? 0;
     const diasAusencia = ausenciasPorSemana.get(claveSemana)?.dias ?? 0;
     const nombre = porPersonaYSemana.get(claveSemana)?.nombre ?? ausenciasPorSemana.get(claveSemana)?.nombre ?? "—";
     const horasDescuentoAusencia = ausenciasPorSemana.get(claveSemana)?.horasDescuento ?? 0;
-    const horasDescuentoFestivo = horasFestivoSemana(lunes, festivos);
-    const metaAjustada = Math.max(0, metaSemanal - horasDescuentoAusencia - horasDescuentoFestivo);
+    // El festivo no se resta de la meta (por ley no se le puede descontar a
+    // nadie) — ya viene sumado dentro de "horas" como si se hubiera trabajado.
+    const metaAjustada = Math.max(0, metaSemanal - horasDescuentoAusencia);
     if (!porPersona.has(perfilId)) porPersona.set(perfilId, { perfilId, nombre, semanas: [], totalHorasExtra: 0 });
     const fila = porPersona.get(perfilId)!;
     const horasExtra = Math.max(0, horas - metaAjustada);
     const horasDeficit = Math.max(0, metaAjustada - horas);
-    const horasTrabajadas = horas - minutosCompensados / 60;
+    const horasTrabajadas = horas - minutosCompensados / 60 - horasFestivo;
     fila.semanas.push({
       lunes,
       horasTrabajadas,
@@ -253,7 +286,7 @@ function armarReporteHoras(
       horasDeficit,
       diasAusencia,
       horasDescuentoAusencia,
-      horasDescuentoFestivo,
+      horasFestivo,
       minutosCompensados,
       cuentaParaEsteMes,
     });
@@ -1028,8 +1061,9 @@ export function Asistencia() {
         <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
           <h2 className="font-semibold text-tinta">Festivos de Colombia</h2>
           <p className="text-xs text-gray-400">
-            Un festivo entre semana resta su jornada (8.5h) de la meta de esa semana para todo el mundo, igual que un
-            día de vacaciones — no hace falta marcarlo persona por persona.
+            Por ley el tiempo del festivo no se le puede descontar a nadie de la meta — se le suma a sus horas como si
+            lo hubiera trabajado (igual que un compensado), automático para todo el mundo, sin marcarlo persona por
+            persona.
           </p>
           <div className="flex items-end gap-2 flex-wrap">
             <input
@@ -1196,9 +1230,9 @@ export function Asistencia() {
                         <th className="font-normal pb-1">Semana</th>
                         <th className="font-normal pb-1 text-right">Trabajadas</th>
                         <th className="font-normal pb-1 text-right">Compensadas</th>
+                        <th className="font-normal pb-1 text-right">Festivo</th>
                         <th className="font-normal pb-1 text-right">Totales</th>
                         <th className="font-normal pb-1 text-right">Sábado</th>
-                        <th className="font-normal pb-1 text-right">Festivo</th>
                         <th className="font-normal pb-1 text-right">Extra</th>
                         <th className="font-normal pb-1 text-right">Déficit</th>
                       </tr>
@@ -1216,12 +1250,10 @@ export function Asistencia() {
                           <td className="py-1 text-right text-violet-600">
                             {s.minutosCompensados > 0 ? (s.minutosCompensados / 60).toFixed(1) : "—"}
                           </td>
+                          <td className="py-1 text-right text-indigo-600">{s.horasFestivo > 0 ? `+${s.horasFestivo.toFixed(1)}` : "—"}</td>
                           <td className="py-1 text-right font-medium">{s.horas.toFixed(1)}</td>
                           <td className="py-1 text-right text-sky-600">
                             {s.horasDescuentoAusencia > 0 ? `−${s.horasDescuentoAusencia.toFixed(1)}` : "—"}
-                          </td>
-                          <td className="py-1 text-right text-indigo-600">
-                            {s.horasDescuentoFestivo > 0 ? `−${s.horasDescuentoFestivo.toFixed(1)}` : "—"}
                           </td>
                           <td className="py-1 text-right text-emerald-700">{s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
                           <td className="py-1 text-right text-amber-600">{s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>
