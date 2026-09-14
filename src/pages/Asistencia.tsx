@@ -327,17 +327,34 @@ export function Asistencia() {
       .gte("marcado_en", desde)
       .lt("marcado_en", hasta)
       .order("marcado_en");
-    setMarcasPersona((data as AsistenciaRegistro[]) ?? []);
+    const marcas = (data as AsistenciaRegistro[]) ?? [];
+    setMarcasPersona(marcas);
     const { data: nota } = await supabase
       .from("asistencia_notas_dia")
       .select("nota, minutos_compensados")
       .eq("perfil_id", personaAdminId)
       .eq("fecha", fechaAdmin)
       .maybeSingle();
+    let minutosCompensados = nota?.minutos_compensados ?? 0;
+    // Si ya había un "compensado" guardado pero después se corrigieron las
+    // marcas de ese día (ej. se arregló la hora de llegada), el valor
+    // guardado queda desactualizado — se recalcula cada vez que se cargan
+    // las marcas, para que no se quede sumando un crédito que ya no aplica.
+    if (minutosCompensados > 0) {
+      const recalculado = Math.round(Math.max(0, jornadaOrdinariaHoras(fechaAdmin) - horasTrabajadasDeMarcas(marcas)) * 60);
+      if (recalculado !== minutosCompensados) {
+        await supabase
+          .from("asistencia_notas_dia")
+          .update({ minutos_compensados: recalculado })
+          .eq("perfil_id", personaAdminId)
+          .eq("fecha", fechaAdmin);
+        minutosCompensados = recalculado;
+      }
+    }
     setNotaPersona(nota?.nota ?? "");
     setNotaOriginal(nota?.nota ?? "");
-    setEsCompensado((nota?.minutos_compensados ?? 0) > 0);
-    setEsCompensadoOriginal((nota?.minutos_compensados ?? 0) > 0);
+    setEsCompensado(minutosCompensados > 0);
+    setEsCompensadoOriginal(minutosCompensados > 0);
     const { data: ausencia } = await supabase
       .from("asistencia_ausencias")
       .select("id, tipo")
@@ -371,7 +388,7 @@ export function Asistencia() {
       setErrorAdmin(error.message);
       return;
     }
-    cargarMarcasPersona();
+    await cargarMarcasPersona();
     cargarReporte();
   }
 
@@ -382,7 +399,7 @@ export function Asistencia() {
       setErrorAdmin(error.message);
       return;
     }
-    cargarMarcasPersona();
+    await cargarMarcasPersona();
     cargarReporte();
   }
 
