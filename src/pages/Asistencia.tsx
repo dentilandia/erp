@@ -901,7 +901,7 @@ export function Asistencia() {
                         <th className="font-normal pb-1">Semana</th>
                         <th className="font-normal pb-1 text-right">Trabajadas</th>
                         <th className="font-normal pb-1 text-right">Compensadas</th>
-                        <th className="font-normal pb-1 text-right">Ausencia</th>
+                        <th className="font-normal pb-1 text-right">Sábado</th>
                         <th className="font-normal pb-1 text-right">Totales</th>
                         <th className="font-normal pb-1 text-right">Extra</th>
                         <th className="font-normal pb-1 text-right">Déficit</th>
