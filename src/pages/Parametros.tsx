@@ -251,9 +251,15 @@ export function Parametros() {
         <h2 className="font-semibold text-tinta mb-1">Sedes — IP para control de asistencia</h2>
         <p className="text-xs text-gray-400 mb-3">
           Restringe "Marcar asistencia" a la red de la sede — se compara contra la IP pública real de quien marca (no
-          se puede falsificar desde el navegador). Busca "cuál es mi IP" en Google desde un computador de esa sede
-          para saber cuál poner. Si la dejas vacía, no se restringe. Si el internet de la sede cambia de IP, hay que
-          actualizarla acá.
+          se puede falsificar desde el navegador). Si la dejas vacía, no se restringe. Si el internet de la sede
+          cambia de IP, hay que actualizarla acá.
+        </p>
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+          Si al buscar "cuál es mi IP" te sale algo con muchos ":" (IPv6, ej. 2800:e6:4000:ae7f:809:7e18:67f8:823c) —
+          cada computador de la misma red muestra un final distinto a propósito (por privacidad), así que NO copies
+          la dirección completa. Copia solo los primeros 4 grupos, separados por ":" (ej. 2800:e6:4000:ae7f) — eso sí
+          es igual en todos los equipos de esa sede. Si en cambio te sale una IP con puntos (IPv4, ej.
+          190.85.12.34), esa sí se copia completa.
         </p>
         <div className="divide-y divide-gray-100">
           {sedes.map((s) => (

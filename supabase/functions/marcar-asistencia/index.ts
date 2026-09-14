@@ -3,6 +3,24 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 const TIPOS_VALIDOS = ["llegada", "salida_almuerzo", "entrada_almuerzo", "salida"];
 
+// IPv6: el sistema operativo/navegador genera un sufijo aleatorio distinto
+// por dispositivo (y a veces por reinicio) por privacidad — solo el
+// prefijo de red (primeros 4 grupos, los 64 bits que asigna el ISP a esa
+// conexión) es estable y realmente identifica "la red de la sede". Si lo
+// que se guardó en ip_permitida tiene menos de 8 grupos (osea es un
+// prefijo, no una IP completa), se compara solo por prefijo; si tiene los
+// 8 grupos o es IPv4, se exige coincidencia exacta.
+function ipCoincide(ipCliente: string, permitida: string): boolean {
+  if (permitida.includes(":")) {
+    const esPrefijo = permitida.split(":").filter((g) => g.length > 0).length < 8;
+    if (esPrefijo) {
+      const prefijo = permitida.replace(/:+$/, "");
+      return ipCliente.startsWith(prefijo + ":") || ipCliente === prefijo;
+    }
+  }
+  return ipCliente === permitida;
+}
+
 // Registra una marca de la jornada (llegada, salida/entrada de almuerzo,
 // salida final). Se ejecuta con el rol de servicio a propósito: la tabla
 // asistencia_registros no tiene policy de insert para usuarios normales, así
@@ -66,7 +84,7 @@ Deno.serve(async (req: Request) => {
       .split(",")
       .map((s: string) => s.trim())
       .filter(Boolean);
-    if (permitidas.length > 0 && (!ipCliente || !permitidas.includes(ipCliente))) {
+    if (permitidas.length > 0 && (!ipCliente || !permitidas.some((p) => ipCoincide(ipCliente, p)))) {
       return new Response(
         JSON.stringify({ error: "Debes estar conectado a la red de la sede para marcar asistencia." }),
         { status: 403, headers: cors },
