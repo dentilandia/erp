@@ -2,7 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { LogIn, LogOut, Coffee, Utensils, Sunrise, PartyPopper } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthContext";
-import { TIPOS_ASISTENCIA, type AsistenciaRegistro, type TipoAsistencia } from "../lib/types";
+import {
+  TIPOS_ASISTENCIA,
+  type AsistenciaRegistro,
+  type TipoAsistencia,
+  type FestivoColombia,
+  type PeriodoLiquidacion,
+} from "../lib/types";
 
 // Jornada ordinaria: 8:30am-6:00pm con 1h de almuerzo entre semana (8.5h),
 // 8am-12m el sábado sin almuerzo (4h). Un día de vacaciones/incapacidad
@@ -106,6 +112,7 @@ interface SemanaReporte {
   horasDeficit: number;
   diasAusencia: number;
   horasDescuentoAusencia: number;
+  horasDescuentoFestivo: number;
   minutosCompensados: number;
   cuentaParaEsteMes: boolean;
 }
@@ -130,22 +137,36 @@ interface CompensacionReporte {
   minutos: number;
 }
 
-/** Arma el reporte de horas del mes: agrupa las marcas por persona y día
- *  calendario, calcula horas trabajadas (llegada→salida, descontando el
- *  almuerzo si hay salida/entrada de almuerzo, y sumando de vuelta los
- *  minutos ya compensados de un período anterior — si no, se le estaría
- *  restando esa diferencia dos veces) y las junta en semanas lunes-domingo.
- *  Se muestra cualquier semana que toque el mes seleccionado (aunque
- *  arranque en el mes anterior), pero el total de horas extra del mes solo
- *  suma las semanas cuyo lunes cae DENTRO del mes seleccionado — así una
- *  semana partida entre dos meses se ve en ambos, pero solo se paga una vez,
- *  en el mes donde arrancó (el mes siguiente al que se generó).
+/** Cuánto resta un festivo entre semana a la meta de esa semana — aplica
+ *  parejo a todo el mundo (no es por persona, como sí lo es vacaciones). El
+ *  sábado nunca resta porque nunca fue parte de la meta. */
+function horasFestivoSemana(lunes: string, festivos: Set<string>): number {
+  let total = 0;
+  for (let i = 0; i < 5; i++) {
+    const dia = sumarDias(lunes, i);
+    if (festivos.has(dia)) total += jornadaOrdinariaHoras(dia);
+  }
+  return total;
+}
+
+/** Arma el reporte de horas del rango (mes calendario o período de
+ *  liquidación): agrupa las marcas por persona y día calendario, calcula
+ *  horas trabajadas (llegada→salida, descontando el almuerzo si hay
+ *  salida/entrada de almuerzo, y sumando de vuelta los minutos ya
+ *  compensados de un período anterior — si no, se le estaría restando esa
+ *  diferencia dos veces) y las junta en semanas lunes-domingo.
+ *  Se muestra cualquier semana que toque el rango (aunque arranque antes),
+ *  pero el total de horas extra solo suma las semanas cuyo lunes cae DENTRO
+ *  del rango — así una semana partida entre dos rangos se ve en ambos, pero
+ *  solo se paga una vez, en el rango donde arrancó.
  */
 function armarReporteHoras(
   registros: RegistroReporte[],
   ausencias: AusenciaReporte[],
   compensaciones: CompensacionReporte[],
-  mesSeleccionado: string,
+  festivos: Set<string>,
+  rangoInicio: string,
+  rangoFin: string,
   metaSemanal: number,
 ): FilaPersona[] {
   const compensadosPorDia = new Map<string, number>();
@@ -203,23 +224,22 @@ function armarReporteHoras(
   }
 
   const clavesSemana = new Set([...porPersonaYSemana.keys(), ...ausenciasPorSemana.keys()]);
-  const mesInicio = `${mesSeleccionado}-01`;
-  const mesFin = sumarDias(`${mesSeleccionado}-01`, 31).slice(0, 7) + "-01"; // primer día del mes siguiente
 
   const porPersona = new Map<string, FilaPersona>();
   for (const claveSemana of clavesSemana) {
     const [perfilId, lunes] = claveSemana.split("|");
     const domingo = sumarDias(lunes, 6);
-    // La semana se muestra si toca el mes seleccionado (aunque haya arrancado
-    // el mes anterior); el total del mes solo cuenta las que arrancan en él.
-    if (domingo < mesInicio || lunes >= mesFin) continue;
-    const cuentaParaEsteMes = lunes.slice(0, 7) === mesSeleccionado;
+    // La semana se muestra si toca el rango (aunque haya arrancado antes del
+    // rango); el total solo cuenta las semanas que arrancan dentro de él.
+    if (domingo < rangoInicio || lunes >= rangoFin) continue;
+    const cuentaParaEsteMes = lunes >= rangoInicio && lunes < rangoFin;
     const horas = porPersonaYSemana.get(claveSemana)?.horas ?? 0;
     const minutosCompensados = porPersonaYSemana.get(claveSemana)?.minutosCompensados ?? 0;
     const diasAusencia = ausenciasPorSemana.get(claveSemana)?.dias ?? 0;
     const nombre = porPersonaYSemana.get(claveSemana)?.nombre ?? ausenciasPorSemana.get(claveSemana)?.nombre ?? "—";
     const horasDescuentoAusencia = ausenciasPorSemana.get(claveSemana)?.horasDescuento ?? 0;
-    const metaAjustada = Math.max(0, metaSemanal - horasDescuentoAusencia);
+    const horasDescuentoFestivo = horasFestivoSemana(lunes, festivos);
+    const metaAjustada = Math.max(0, metaSemanal - horasDescuentoAusencia - horasDescuentoFestivo);
     if (!porPersona.has(perfilId)) porPersona.set(perfilId, { perfilId, nombre, semanas: [], totalHorasExtra: 0 });
     const fila = porPersona.get(perfilId)!;
     const horasExtra = Math.max(0, horas - metaAjustada);
@@ -233,6 +253,7 @@ function armarReporteHoras(
       horasDeficit,
       diasAusencia,
       horasDescuentoAusencia,
+      horasDescuentoFestivo,
       minutosCompensados,
       cuentaParaEsteMes,
     });
@@ -266,6 +287,25 @@ export function Asistencia() {
   const [ausenciasPorPersona, setAusenciasPorPersona] = useState<
     Record<string, { fecha: string; tipo: "vacaciones" | "incapacidad" | "descanso" }[]>
   >({});
+
+  // El reporte se puede ver por mes calendario o por período de liquidación
+  // real (ej. 31 ago - 27 sept) — el ciclo de pago no coincide con el mes.
+  const [modoReporte, setModoReporte] = useState<"mes" | "periodo">("mes");
+  const [periodosLiquidacion, setPeriodosLiquidacion] = useState<PeriodoLiquidacion[]>([]);
+  const [periodoReporteId, setPeriodoReporteId] = useState("");
+  const [etiquetaPeriodoNueva, setEtiquetaPeriodoNueva] = useState("");
+  const [inicioPeriodoNuevo, setInicioPeriodoNuevo] = useState("");
+  const [finPeriodoNuevo, setFinPeriodoNuevo] = useState("");
+  const [guardandoPeriodo, setGuardandoPeriodo] = useState(false);
+  const [errorPeriodoLiq, setErrorPeriodoLiq] = useState<string | null>(null);
+
+  // Festivos de Colombia — aplican parejo a todo el mundo, no se marcan
+  // persona por persona.
+  const [festivos, setFestivos] = useState<FestivoColombia[]>([]);
+  const [fechaFestivoNueva, setFechaFestivoNueva] = useState("");
+  const [nombreFestivoNuevo, setNombreFestivoNuevo] = useState("");
+  const [guardandoFestivo, setGuardandoFestivo] = useState(false);
+  const [errorFestivo, setErrorFestivo] = useState<string | null>(null);
 
   // Solo para admin: día que se está simulando al marcar, para poder probar
   // el conteo de horas de varios días seguidos sin esperar a que pasen de
@@ -507,13 +547,30 @@ export function Asistencia() {
       });
   }, []);
 
+  // Rango real que se está mostrando: mes calendario, o el período de
+  // liquidación elegido (ej. 31 ago - 27 sept, que no coincide con el mes).
+  function rangoReporte(): { inicio: string; fin: string } | null {
+    if (modoReporte === "periodo") {
+      const p = periodosLiquidacion.find((x) => x.id === periodoReporteId);
+      if (!p) return null;
+      return { inicio: p.fecha_inicio, fin: sumarDias(p.fecha_fin, 1) };
+    }
+    return { inicio: `${mesReporte}-01`, fin: sumarDias(`${mesReporte}-01`, 31).slice(0, 7) + "-01" };
+  }
+
   async function cargarReporte() {
+    const rango = rangoReporte();
+    if (!rango) {
+      setReporte([]);
+      setCargandoReporte(false);
+      return;
+    }
     setCargandoReporte(true);
     // Se pide con 8 días de colchón a cada lado para que las semanas que
-    // cruzan el borde del mes queden completas (armarReporteHoras las filtra
-    // después por el mes del lunes de cada semana).
-    const desde = sumarDias(`${mesReporte}-01`, -8);
-    const hasta = sumarDias(`${mesReporte}-01`, 39);
+    // cruzan el borde del rango queden completas (armarReporteHoras las
+    // filtra después por si el lunes de cada semana cae dentro o no).
+    const desde = sumarDias(rango.inicio, -8);
+    const hasta = sumarDias(rango.fin, 8);
     const { data } = await supabase
       .from("asistencia_registros")
       .select("perfil_id, tipo, marcado_en, perfiles(nombre)")
@@ -565,14 +622,93 @@ export function Asistencia() {
       .filter((n) => n.minutos_compensados)
       .map((n) => ({ perfil_id: n.perfil_id, fecha: n.fecha, minutos: n.minutos_compensados }));
 
-    setReporte(armarReporteHoras(filas, ausencias, compensaciones, mesReporte, metaSemanal));
+    const { data: festivosData } = await supabase.from("festivos_colombia").select("fecha").gte("fecha", desde).lt("fecha", hasta);
+    const festivosSet = new Set((festivosData ?? []).map((f) => f.fecha as string));
+
+    setReporte(armarReporteHoras(filas, ausencias, compensaciones, festivosSet, rango.inicio, rango.fin, metaSemanal));
     setCargandoReporte(false);
   }
 
   useEffect(() => {
     cargarReporte();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mesReporte, metaSemanal]);
+  }, [mesReporte, metaSemanal, modoReporte, periodoReporteId]);
+
+  async function cargarFestivos() {
+    const { data } = await supabase.from("festivos_colombia").select("*").order("fecha");
+    setFestivos((data as FestivoColombia[]) ?? []);
+  }
+
+  useEffect(() => {
+    cargarFestivos();
+  }, []);
+
+  async function agregarFestivo() {
+    if (!fechaFestivoNueva || !nombreFestivoNuevo.trim()) return;
+    setGuardandoFestivo(true);
+    setErrorFestivo(null);
+    const { error } = await supabase
+      .from("festivos_colombia")
+      .insert({ fecha: fechaFestivoNueva, nombre: nombreFestivoNuevo.trim() });
+    setGuardandoFestivo(false);
+    if (error) {
+      setErrorFestivo(error.message);
+      return;
+    }
+    setFechaFestivoNueva("");
+    setNombreFestivoNuevo("");
+    cargarFestivos();
+    cargarReporte();
+  }
+
+  async function eliminarFestivo(fecha: string) {
+    await supabase.from("festivos_colombia").delete().eq("fecha", fecha);
+    cargarFestivos();
+    cargarReporte();
+  }
+
+  async function cargarPeriodosLiquidacion() {
+    const { data } = await supabase.from("periodos_liquidacion").select("*").order("fecha_inicio", { ascending: false });
+    const filas = (data as PeriodoLiquidacion[]) ?? [];
+    setPeriodosLiquidacion(filas);
+    if (filas.length > 0) setPeriodoReporteId((prev) => prev || filas[0].id);
+  }
+
+  useEffect(() => {
+    cargarPeriodosLiquidacion();
+  }, []);
+
+  async function crearPeriodoLiquidacion() {
+    if (!etiquetaPeriodoNueva.trim() || !inicioPeriodoNuevo || !finPeriodoNuevo) return;
+    setGuardandoPeriodo(true);
+    setErrorPeriodoLiq(null);
+    const { data, error } = await supabase
+      .from("periodos_liquidacion")
+      .insert({
+        etiqueta: etiquetaPeriodoNueva.trim(),
+        fecha_inicio: inicioPeriodoNuevo,
+        fecha_fin: finPeriodoNuevo,
+        created_by: perfil?.id ?? null,
+      })
+      .select("id")
+      .single();
+    setGuardandoPeriodo(false);
+    if (error) {
+      setErrorPeriodoLiq(error.message);
+      return;
+    }
+    setEtiquetaPeriodoNueva("");
+    setInicioPeriodoNuevo("");
+    setFinPeriodoNuevo("");
+    await cargarPeriodosLiquidacion();
+    if (data) setPeriodoReporteId(data.id);
+  }
+
+  async function eliminarPeriodoLiquidacion(id: string) {
+    await supabase.from("periodos_liquidacion").delete().eq("id", id);
+    if (periodoReporteId === id) setPeriodoReporteId("");
+    cargarPeriodosLiquidacion();
+  }
 
   async function cargarControlAusencias() {
     if (perfil?.rol !== "admin") return;
@@ -636,6 +772,7 @@ export function Asistencia() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
+      {perfil?.rol === "admin" && (
       <div className="max-w-md mx-auto space-y-4">
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
         <h2 className="font-semibold text-tinta">Marcar asistencia</h2>
@@ -708,6 +845,7 @@ export function Asistencia() {
         )}
       </div>
       </div>
+      )}
 
       {perfil?.rol === "admin" && (
         <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
@@ -886,24 +1024,158 @@ export function Asistencia() {
         </div>
       )}
 
+      {perfil?.rol === "admin" && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          <h2 className="font-semibold text-tinta">Festivos de Colombia</h2>
+          <p className="text-xs text-gray-400">
+            Un festivo entre semana resta su jornada (8.5h) de la meta de esa semana para todo el mundo, igual que un
+            día de vacaciones — no hace falta marcarlo persona por persona.
+          </p>
+          <div className="flex items-end gap-2 flex-wrap">
+            <input
+              type="date"
+              value={fechaFestivoNueva}
+              onChange={(e) => setFechaFestivoNueva(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <input
+              value={nombreFestivoNuevo}
+              onChange={(e) => setNombreFestivoNuevo(e.target.value)}
+              placeholder="Ej: Amor y amistad"
+              className="flex-1 min-w-[160px] rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <button
+              onClick={agregarFestivo}
+              disabled={!fechaFestivoNueva || !nombreFestivoNuevo.trim() || guardandoFestivo}
+              className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+            >
+              {guardandoFestivo ? "Guardando…" : "Agregar"}
+            </button>
+          </div>
+          {errorFestivo && <p className="text-sm text-red-600">{errorFestivo}</p>}
+          {festivos.length > 0 && (
+            <div className="divide-y divide-gray-50">
+              {festivos.map((f) => (
+                <div key={f.fecha} className="flex items-center justify-between py-1 text-sm">
+                  <span>
+                    {formatFechaLarga(f.fecha)} — {f.nombre}
+                  </span>
+                  <button onClick={() => eliminarFestivo(f.fecha)} className="text-xs text-red-500 hover:underline">
+                    Quitar
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {perfil?.rol === "admin" && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          <h2 className="font-semibold text-tinta">Períodos de liquidación</h2>
+          <p className="text-xs text-gray-400">
+            El ciclo real de pago no coincide con el mes calendario (ej. 31 de agosto al 27 de septiembre). Crea acá
+            esos rangos para poder ver el reporte de abajo agrupado por período en vez de por mes.
+          </p>
+          <div className="flex items-end gap-2 flex-wrap">
+            <input
+              value={etiquetaPeriodoNueva}
+              onChange={(e) => setEtiquetaPeriodoNueva(e.target.value)}
+              placeholder="Ej: 31 ago - 27 sept"
+              className="flex-1 min-w-[140px] rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <input
+              type="date"
+              value={inicioPeriodoNuevo}
+              onChange={(e) => setInicioPeriodoNuevo(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <span className="text-xs text-gray-400">a</span>
+            <input
+              type="date"
+              value={finPeriodoNuevo}
+              onChange={(e) => setFinPeriodoNuevo(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <button
+              onClick={crearPeriodoLiquidacion}
+              disabled={!etiquetaPeriodoNueva.trim() || !inicioPeriodoNuevo || !finPeriodoNuevo || guardandoPeriodo}
+              className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+            >
+              {guardandoPeriodo ? "Guardando…" : "Crear período"}
+            </button>
+          </div>
+          {errorPeriodoLiq && <p className="text-sm text-red-600">{errorPeriodoLiq}</p>}
+          {periodosLiquidacion.length > 0 && (
+            <div className="divide-y divide-gray-50">
+              {periodosLiquidacion.map((p) => (
+                <div key={p.id} className="flex items-center justify-between py-1 text-sm">
+                  <span>
+                    {p.etiqueta} <span className="text-gray-400">({p.fecha_inicio} — {p.fecha_fin})</span>
+                  </span>
+                  <button onClick={() => eliminarPeriodoLiquidacion(p.id)} className="text-xs text-red-500 hover:underline">
+                    Quitar
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <h2 className="font-semibold text-tinta">Horas trabajadas por mes</h2>
-          <input
-            type="month"
-            value={mesReporte}
-            onChange={(e) => setMesReporte(e.target.value)}
-            className="rounded-lg border border-gray-300 px-2 py-1 text-sm"
-          />
+          <h2 className="font-semibold text-tinta">Horas trabajadas por {modoReporte === "periodo" ? "período" : "mes"}</h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            {periodosLiquidacion.length > 0 && (
+              <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
+                <button
+                  onClick={() => setModoReporte("mes")}
+                  className={`px-3 py-1.5 font-medium ${modoReporte === "mes" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
+                >
+                  Mes
+                </button>
+                <button
+                  onClick={() => setModoReporte("periodo")}
+                  className={`px-3 py-1.5 font-medium ${modoReporte === "periodo" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
+                >
+                  Período
+                </button>
+              </div>
+            )}
+            {modoReporte === "periodo" ? (
+              <select
+                value={periodoReporteId}
+                onChange={(e) => setPeriodoReporteId(e.target.value)}
+                className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+              >
+                {periodosLiquidacion.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.etiqueta}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="month"
+                value={mesReporte}
+                onChange={(e) => setMesReporte(e.target.value)}
+                className="rounded-lg border border-gray-300 px-2 py-1 text-sm"
+              />
+            )}
+          </div>
         </div>
         <p className="text-xs text-gray-400">
-          Meta: {metaSemanal} h/semana (jornada legal). Las horas extra de cada semana se atribuyen al mes en que
-          empieza esa semana (lunes) — así se sabe cuánto se paga el mes siguiente.
+          Meta: {metaSemanal} h/semana (jornada legal). Las horas extra de cada semana se atribuyen al{" "}
+          {modoReporte === "periodo" ? "período" : "mes"} en que empieza esa semana (lunes) — así se sabe cuánto se
+          paga después.
         </p>
         {cargandoReporte ? (
           <p className="text-sm text-gray-400">Cargando…</p>
         ) : reporte.length === 0 ? (
-          <p className="text-sm text-gray-400">Sin marcas completas (llegada + salida) este mes.</p>
+          <p className="text-sm text-gray-400">
+            Sin marcas completas (llegada + salida) {modoReporte === "periodo" ? "en este período" : "este mes"}.
+          </p>
         ) : (
           <div className="space-y-4">
             {reporte.map((fila) => (
@@ -911,7 +1183,7 @@ export function Asistencia() {
                 <div className="flex items-center justify-between mb-2">
                   <p className="font-medium text-sm">{fila.nombre}</p>
                   <p className="text-sm">
-                    <span className="text-gray-500">Horas extra del mes: </span>
+                    <span className="text-gray-500">Horas extra del {modoReporte === "periodo" ? "período" : "mes"}: </span>
                     <span className={`font-semibold ${fila.totalHorasExtra > 0 ? "text-emerald-700" : "text-gray-400"}`}>
                       {fila.totalHorasExtra.toFixed(1)} h
                     </span>
@@ -926,6 +1198,7 @@ export function Asistencia() {
                         <th className="font-normal pb-1 text-right">Compensadas</th>
                         <th className="font-normal pb-1 text-right">Totales</th>
                         <th className="font-normal pb-1 text-right">Sábado</th>
+                        <th className="font-normal pb-1 text-right">Festivo</th>
                         <th className="font-normal pb-1 text-right">Extra</th>
                         <th className="font-normal pb-1 text-right">Déficit</th>
                       </tr>
@@ -935,7 +1208,9 @@ export function Asistencia() {
                         <tr key={s.lunes} className={s.cuentaParaEsteMes ? "" : "opacity-50"}>
                           <td className="py-1">
                             {s.lunes} — {sumarDias(s.lunes, 6)}
-                            {!s.cuentaParaEsteMes && <span className="text-gray-400"> — se paga el mes anterior</span>}
+                            {!s.cuentaParaEsteMes && (
+                              <span className="text-gray-400"> — se paga el {modoReporte === "periodo" ? "período" : "mes"} anterior</span>
+                            )}
                           </td>
                           <td className="py-1 text-right">{s.horasTrabajadas.toFixed(1)}</td>
                           <td className="py-1 text-right text-violet-600">
@@ -944,6 +1219,9 @@ export function Asistencia() {
                           <td className="py-1 text-right font-medium">{s.horas.toFixed(1)}</td>
                           <td className="py-1 text-right text-sky-600">
                             {s.horasDescuentoAusencia > 0 ? `−${s.horasDescuentoAusencia.toFixed(1)}` : "—"}
+                          </td>
+                          <td className="py-1 text-right text-indigo-600">
+                            {s.horasDescuentoFestivo > 0 ? `−${s.horasDescuentoFestivo.toFixed(1)}` : "—"}
                           </td>
                           <td className="py-1 text-right text-emerald-700">{s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
                           <td className="py-1 text-right text-amber-600">{s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>

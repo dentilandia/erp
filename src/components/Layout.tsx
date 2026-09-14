@@ -178,9 +178,11 @@ export function Layout() {
               </NavLink>
             );
           })}
-        {perfil?.rol === "admin" && (
-          // Módulo todavía en diseño/pruebas — se queda privado (solo admin)
-          // hasta que se decida lanzarlo para todo el equipo.
+        {perfil && (
+          // El marcado y las herramientas administrativas siguen solo para
+          // admin (gate adentro del componente) — acá se abre la pestaña
+          // para todo el mundo porque cada quien puede ver su propio
+          // resumen de horas.
           <NavLink
             to="/asistencia"
             className={({ isActive }) =>

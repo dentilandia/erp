@@ -64,6 +64,26 @@ export interface AsistenciaAusencia {
   created_at: string;
 }
 
+/** Festivo colombiano — aplica parejo a todo el mundo, no se marca persona
+ *  por persona. Un festivo entre semana resta su jornada de la meta
+ *  semanal, igual que un día de vacaciones. */
+export interface FestivoColombia {
+  fecha: string;
+  nombre: string;
+}
+
+/** Rango de fechas del ciclo real de pago (no coincide con el mes
+ *  calendario) — permite armar el mismo reporte de horas agrupado por
+ *  período de liquidación en vez de por mes. */
+export interface PeriodoLiquidacion {
+  id: string;
+  etiqueta: string;
+  fecha_inicio: string;
+  fecha_fin: string;
+  created_by: string | null;
+  created_at: string;
+}
+
 /** Frase mostrada al marcar llegada (motivadora) o salida final
  *  (agradecimiento/felicitación) — rota una nueva cada día. */
 export interface FraseMotivacional {
