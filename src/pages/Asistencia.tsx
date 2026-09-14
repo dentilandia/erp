@@ -105,6 +105,7 @@ interface SemanaReporte {
   horasExtra: number;
   horasDeficit: number;
   diasAusencia: number;
+  horasDescuentoAusencia: number;
   minutosCompensados: number;
   cuentaParaEsteMes: boolean;
 }
@@ -226,6 +227,7 @@ function armarReporteHoras(
       horasExtra,
       horasDeficit,
       diasAusencia,
+      horasDescuentoAusencia,
       minutosCompensados,
       cuentaParaEsteMes,
     });
@@ -253,7 +255,9 @@ export function Asistencia() {
   const [metaSemanal, setMetaSemanal] = useState(42);
   const [reporte, setReporte] = useState<FilaPersona[]>([]);
   const [cargandoReporte, setCargandoReporte] = useState(true);
-  const [notasPorPersona, setNotasPorPersona] = useState<Record<string, { fecha: string; nota: string }[]>>({});
+  const [notasPorPersona, setNotasPorPersona] = useState<
+    Record<string, { fecha: string; nota: string; minutosCompensados: number }[]>
+  >({});
   const [ausenciasPorPersona, setAusenciasPorPersona] = useState<
     Record<string, { fecha: string; tipo: "vacaciones" | "incapacidad" | "descanso" }[]>
   >({});
@@ -527,9 +531,11 @@ export function Asistencia() {
       .lt("fecha", hasta);
     const notasRows =
       (notas as { perfil_id: string; fecha: string; nota: string; minutos_compensados: number }[]) ?? [];
-    const notasAgrupadas: Record<string, { fecha: string; nota: string }[]> = {};
+    const notasAgrupadas: Record<string, { fecha: string; nota: string; minutosCompensados: number }[]> = {};
     for (const n of notasRows) {
-      if (n.nota) (notasAgrupadas[n.perfil_id] ??= []).push({ fecha: n.fecha, nota: n.nota });
+      if (n.nota || n.minutos_compensados) {
+        (notasAgrupadas[n.perfil_id] ??= []).push({ fecha: n.fecha, nota: n.nota, minutosCompensados: n.minutos_compensados });
+      }
     }
     setNotasPorPersona(notasAgrupadas);
     const compensaciones: CompensacionReporte[] = notasRows
@@ -895,6 +901,7 @@ export function Asistencia() {
                         <th className="font-normal pb-1">Semana</th>
                         <th className="font-normal pb-1 text-right">Trabajadas</th>
                         <th className="font-normal pb-1 text-right">Compensadas</th>
+                        <th className="font-normal pb-1 text-right">Ausencia</th>
                         <th className="font-normal pb-1 text-right">Totales</th>
                         <th className="font-normal pb-1 text-right">Extra</th>
                         <th className="font-normal pb-1 text-right">Déficit</th>
@@ -905,14 +912,14 @@ export function Asistencia() {
                         <tr key={s.lunes} className={s.cuentaParaEsteMes ? "" : "opacity-50"}>
                           <td className="py-1">
                             {s.lunes} — {sumarDias(s.lunes, 6)}
-                            {s.diasAusencia > 0 && (
-                              <span className="text-sky-600"> (−{s.diasAusencia}d ausencia)</span>
-                            )}
                             {!s.cuentaParaEsteMes && <span className="text-gray-400"> — se paga el mes anterior</span>}
                           </td>
                           <td className="py-1 text-right">{s.horasTrabajadas.toFixed(1)}</td>
                           <td className="py-1 text-right text-violet-600">
                             {s.minutosCompensados > 0 ? (s.minutosCompensados / 60).toFixed(1) : "—"}
+                          </td>
+                          <td className="py-1 text-right text-sky-600">
+                            {s.horasDescuentoAusencia > 0 ? `−${s.horasDescuentoAusencia.toFixed(1)}` : "—"}
                           </td>
                           <td className="py-1 text-right font-medium">{s.horas.toFixed(1)}</td>
                           <td className="py-1 text-right text-emerald-700">{s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
@@ -928,11 +935,13 @@ export function Asistencia() {
                       fecha: a.fecha,
                       texto: ETIQUETAS_AUSENCIA[a.tipo],
                       esAusencia: true,
+                      minutosCompensados: 0,
                     })),
                     ...(notasPorPersona[fila.perfilId] ?? []).map((n) => ({
                       fecha: n.fecha,
                       texto: n.nota,
                       esAusencia: false,
+                      minutosCompensados: n.minutosCompensados,
                     })),
                   ].sort((a, b) => a.fecha.localeCompare(b.fecha));
                   if (observaciones.length === 0) return null;
@@ -941,6 +950,9 @@ export function Asistencia() {
                       {observaciones.map((o, i) => (
                         <p key={`${o.fecha}-${i}`} className={`text-xs ${o.esAusencia ? "text-sky-700" : "text-gray-500"}`}>
                           <span className="font-medium">{formatFechaLarga(o.fecha)}:</span> {o.texto}
+                          {o.minutosCompensados > 0 && (
+                            <span className="text-violet-600 font-medium"> (+{o.minutosCompensados}min comp.)</span>
+                          )}
                         </p>
                       ))}
                     </div>
