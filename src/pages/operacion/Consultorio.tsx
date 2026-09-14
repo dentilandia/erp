@@ -882,6 +882,7 @@ function ModalEditarValor({
   const [cargando, setCargando] = useState(true);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [precios, setPrecios] = useState<Record<string, number>>({});
 
   const [visitaDatos, setVisitaDatos] = useState<{ sede_id: string; doctora_id: string; paciente_id: string; fecha: string } | null>(
     null,
@@ -892,6 +893,28 @@ function ModalEditarValor({
   const [laboratorioId, setLaboratorioId] = useState("");
   const [tipoServicio, setTipoServicio] = useState(TIPOS_SERVICIO_LAB[0].value);
   const [guardandoLab, setGuardandoLab] = useState(false);
+
+  // El resto de lo que se puede dar en una atención — mismos campos que
+  // "Atención" (ModalAtencion), para poder corregir cualquier aspecto antes
+  // de que recepción cobre, no solo el valor. Se cargan los que ya existan
+  // para no duplicarlos al guardar (insertar solo lo nuevo, borrar lo que se
+  // desmarque).
+  const [rxTomada, setRxTomada] = useState(false);
+  const [cargoRxId, setCargoRxId] = useState<string | null>(null);
+  const [botonTraccion, setBotonTraccion] = useState(false);
+  const [botonConCadeneta, setBotonConCadeneta] = useState(false);
+  const [cargoBotonId, setCargoBotonId] = useState<string | null>(null);
+  const [entregaBotonId, setEntregaBotonId] = useState<string | null>(null);
+  const [insumos, setInsumos] = useState<Record<string, boolean>>({});
+  const [insumoIds, setInsumoIds] = useState<Record<string, string>>({});
+  const [remitido, setRemitido] = useState(false);
+  const [remisionEspecialidad, setRemisionEspecialidad] = useState("");
+  const [interconsulta, setInterconsulta] = useState(false);
+  const [interconsultaEspecialidad, setInterconsultaEspecialidad] = useState("");
+  const [interconsultaId, setInterconsultaId] = useState<string | null>(null);
+  const [comprobanteDatafono, setComprobanteDatafono] = useState(false);
+  const [comprobanteDatafonoUrlExistente, setComprobanteDatafonoUrlExistente] = useState<string | null>(null);
+  const [archivoDatafono, setArchivoDatafono] = useState<File | null>(null);
 
   async function cargarLabOrdenes() {
     const { data } = await supabase
@@ -911,7 +934,9 @@ function ModalEditarValor({
     (async () => {
       const { data: v } = await supabase
         .from("visitas")
-        .select("tratamiento, proxima_cita, observacion, sede_id, doctora_id, paciente_id, fecha, pacientes(nombre)")
+        .select(
+          "tratamiento, proxima_cita, observacion, sede_id, doctora_id, paciente_id, fecha, remision_especialidad, comprobante_datafono_url, pacientes(nombre)",
+        )
         .eq("id", visitaId)
         .single();
       const visita = v as unknown as {
@@ -922,12 +947,22 @@ function ModalEditarValor({
         doctora_id: string;
         paciente_id: string;
         fecha: string;
+        remision_especialidad: string | null;
+        comprobante_datafono_url: string | null;
         pacientes: { nombre: string };
       } | null;
       setPacienteNombre(visita?.pacientes?.nombre ?? "");
       setTratamiento(visita?.tratamiento ?? "");
       setProximaCita(visita?.proxima_cita ?? "");
       setObservacion(visita?.observacion ?? "");
+      if (visita?.remision_especialidad) {
+        setRemitido(true);
+        setRemisionEspecialidad(visita.remision_especialidad);
+      }
+      if (visita?.comprobante_datafono_url) {
+        setComprobanteDatafono(true);
+        setComprobanteDatafonoUrlExistente(visita.comprobante_datafono_url);
+      }
       if (visita) {
         setVisitaDatos({
           sede_id: visita.sede_id,
@@ -936,16 +971,54 @@ function ModalEditarValor({
           fecha: visita.fecha,
         });
       }
-      const { data: cargo } = await supabase
-        .from("cargos")
-        .select("id, valor")
-        .eq("visita_id", visitaId)
-        .eq("categoria", "procedimiento")
-        .maybeSingle();
-      if (cargo) {
-        setCargoId(cargo.id);
-        setValor(String(cargo.valor));
+      const { data: cargosExistentes } = await supabase.from("cargos").select("id, categoria, concepto, valor").eq("visita_id", visitaId);
+      for (const c of (cargosExistentes as { id: string; categoria: string; concepto: string; valor: number }[]) ?? []) {
+        if (c.categoria === "procedimiento") {
+          setCargoId(c.id);
+          setValor(String(c.valor));
+        } else if (c.categoria === "rx") {
+          setRxTomada(true);
+          setCargoRxId(c.id);
+        } else if (c.categoria === "concepto_administrativo" && c.concepto === "Botón de tracción") {
+          setBotonTraccion(true);
+          setCargoBotonId(c.id);
+        }
       }
+      if (visita?.paciente_id) {
+        const { data: entrega } = await supabase
+          .from("entregas_boton")
+          .select("id, con_cadeneta")
+          .eq("paciente_id", visita.paciente_id)
+          .eq("fecha", visita.fecha)
+          .maybeSingle();
+        if (entrega) {
+          setEntregaBotonId(entrega.id);
+          setBotonConCadeneta(entrega.con_cadeneta);
+        }
+      }
+      const { data: insumosExistentes } = await supabase.from("insumos_consulta").select("id, tipo").eq("visita_id", visitaId);
+      const insumosMap: Record<string, boolean> = {};
+      const insumoIdsMap: Record<string, string> = {};
+      for (const i of (insumosExistentes as { id: string; tipo: string }[]) ?? []) {
+        insumosMap[i.tipo] = true;
+        insumoIdsMap[i.tipo] = i.id;
+      }
+      setInsumos(insumosMap);
+      setInsumoIds(insumoIdsMap);
+      const { data: inter } = await supabase
+        .from("interconsultas")
+        .select("id, especialidad")
+        .eq("visita_id", visitaId)
+        .maybeSingle();
+      if (inter) {
+        setInterconsulta(true);
+        setInterconsultaId(inter.id);
+        setInterconsultaEspecialidad(inter.especialidad);
+      }
+      const { data: preciosData } = await supabase.from("precios_config").select("clave, valor");
+      const preciosMap: Record<string, number> = {};
+      (preciosData ?? []).forEach((p) => (preciosMap[p.clave] = Number(p.valor)));
+      setPrecios(preciosMap);
       await cargarLabOrdenes();
       const { data: labs } = await supabase.from("laboratorios").select("*").eq("activo", true);
       setLaboratorios((labs as Laboratorio[]) ?? []);
@@ -989,14 +1062,33 @@ function ModalEditarValor({
   }
 
   async function guardar() {
+    if (comprobanteDatafono && !archivoDatafono && !comprobanteDatafonoUrlExistente) {
+      setError('Marcaste "Comprobante de datáfono" pero falta adjuntar el archivo.');
+      return;
+    }
     setGuardando(true);
     setError(null);
+
+    let comprobanteDatafonoUrl: string | null = comprobanteDatafono ? comprobanteDatafonoUrlExistente : null;
+    if (comprobanteDatafono && archivoDatafono && visitaDatos) {
+      const path = `${visitaDatos.sede_id}/datafono-${visitaId}-${archivoDatafono.name}`;
+      const { error: errorSubida } = await supabase.storage.from("comprobantes").upload(path, archivoDatafono, { upsert: true });
+      if (errorSubida) {
+        setGuardando(false);
+        setError(`No se pudo subir el comprobante de datáfono: ${errorSubida.message}`);
+        return;
+      }
+      comprobanteDatafonoUrl = path;
+    }
+
     const { error: errorVisita } = await supabase
       .from("visitas")
       .update({
         tratamiento,
         proxima_cita: proximaCita.trim() || null,
         observacion: observacion.trim() || null,
+        remision_especialidad: remitido ? remisionEspecialidad.trim() || null : null,
+        comprobante_datafono_url: comprobanteDatafonoUrl,
         updated_at: new Date().toISOString(),
       })
       .eq("id", visitaId);
@@ -1005,6 +1097,9 @@ function ModalEditarValor({
       setError(errorVisita.message);
       return;
     }
+
+    // Procedimiento (tratamiento/valor) — actualiza el cargo si ya existe,
+    // lo crea si se le está poniendo valor por primera vez.
     if (cargoId) {
       const { error: errorCargo } = await supabase
         .from("cargos")
@@ -1015,14 +1110,138 @@ function ModalEditarValor({
         setError(errorCargo.message);
         return;
       }
+    } else if (Number(valor) > 0) {
+      const { error: errorCargo } = await supabase.from("cargos").insert({
+        visita_id: visitaId,
+        categoria: "procedimiento",
+        concepto: tratamiento || "Procedimiento",
+        valor: Number(valor),
+        registrado_en: "consultorio",
+      });
+      if (errorCargo) {
+        setGuardando(false);
+        setError(errorCargo.message);
+        return;
+      }
     }
+
+    // RX — inserta si se marcó y no existía, borra si se desmarcó.
+    if (rxTomada && !cargoRxId) {
+      const { error: errorRx } = await supabase.from("cargos").insert({
+        visita_id: visitaId,
+        categoria: "rx",
+        concepto: "RX",
+        valor: precios["rx"] ?? 0,
+        registrado_en: "consultorio",
+      });
+      if (errorRx) {
+        setGuardando(false);
+        setError(errorRx.message);
+        return;
+      }
+    } else if (!rxTomada && cargoRxId) {
+      const { error: errorRx } = await supabase.from("cargos").delete().eq("id", cargoRxId);
+      if (errorRx) {
+        setGuardando(false);
+        setError(errorRx.message);
+        return;
+      }
+    }
+
+    // Botón de tracción — cargo e inventario (entregas_boton) se reconcilian
+    // por separado, porque uno puede faltar sin que falte el otro.
+    if (botonTraccion && !cargoBotonId) {
+      const { error: errorCargoBoton } = await supabase.from("cargos").insert({
+        visita_id: visitaId,
+        categoria: "concepto_administrativo",
+        concepto: "Botón de tracción",
+        valor: precios["boton_traccion"] ?? 0,
+        registrado_en: "consultorio",
+      });
+      if (errorCargoBoton) {
+        setGuardando(false);
+        setError(errorCargoBoton.message);
+        return;
+      }
+    } else if (!botonTraccion && cargoBotonId) {
+      const { error: errorCargoBoton } = await supabase.from("cargos").delete().eq("id", cargoBotonId);
+      if (errorCargoBoton) {
+        setGuardando(false);
+        setError(errorCargoBoton.message);
+        return;
+      }
+    }
+    if (botonTraccion && !entregaBotonId && visitaDatos) {
+      const { error: errorEntregaBoton } = await supabase.from("entregas_boton").insert({
+        sede_id: visitaDatos.sede_id,
+        paciente_id: visitaDatos.paciente_id,
+        doctora_id: visitaDatos.doctora_id,
+        fecha: visitaDatos.fecha,
+        con_cadeneta: botonConCadeneta,
+      });
+      if (errorEntregaBoton) {
+        setGuardando(false);
+        setError(errorEntregaBoton.message);
+        return;
+      }
+    } else if (!botonTraccion && entregaBotonId) {
+      await supabase.from("entregas_boton").delete().eq("id", entregaBotonId);
+    } else if (botonTraccion && entregaBotonId) {
+      await supabase.from("entregas_boton").update({ con_cadeneta: botonConCadeneta }).eq("id", entregaBotonId);
+    }
+
+    // Insumos de aparatología entregados — mismo patrón: inserta lo nuevo,
+    // borra lo que se desmarcó.
+    for (const t of TIPOS_INSUMO_CONSULTA) {
+      const marcado = !!insumos[t.value];
+      const existenteId = insumoIds[t.value];
+      if (marcado && !existenteId) {
+        const { error: errorInsumo } = await supabase
+          .from("insumos_consulta")
+          .insert({ visita_id: visitaId, tipo: t.value, valor_costo: precios[t.value] ?? 0 });
+        if (errorInsumo) {
+          setGuardando(false);
+          setError(errorInsumo.message);
+          return;
+        }
+      } else if (!marcado && existenteId) {
+        const { error: errorInsumo } = await supabase.from("insumos_consulta").delete().eq("id", existenteId);
+        if (errorInsumo) {
+          setGuardando(false);
+          setError(errorInsumo.message);
+          return;
+        }
+      }
+    }
+
+    // Interconsulta — no se borra una vez creada desde acá (puede ya tener
+    // seguimiento hecho en Recepción); solo se crea si no existía, o se le
+    // corrige la especialidad si se equivocaron al escribirla.
+    if (interconsulta && interconsultaEspecialidad.trim() && !interconsultaId && visitaDatos) {
+      const { error: errorInter } = await supabase.from("interconsultas").insert({
+        visita_id: visitaId,
+        sede_id: visitaDatos.sede_id,
+        paciente_id: visitaDatos.paciente_id,
+        doctora_id: visitaDatos.doctora_id,
+        especialidad: interconsultaEspecialidad.trim(),
+        fecha: visitaDatos.fecha,
+      });
+      if (errorInter) {
+        setGuardando(false);
+        setError(errorInter.message);
+        return;
+      }
+    } else if (interconsultaId && interconsultaEspecialidad.trim()) {
+      await supabase.from("interconsultas").update({ especialidad: interconsultaEspecialidad.trim() }).eq("id", interconsultaId);
+    }
+
     setGuardando(false);
     onGuardado();
   }
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-20">
-      <div className="bg-white rounded-xl max-w-md w-full p-5 space-y-4">
+      <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-5 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-tinta">Corregir — {pacienteNombre}</h3>
           <button onClick={onClose}>
@@ -1041,22 +1260,15 @@ function ModalEditarValor({
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
               />
             </div>
-            {cargoId ? (
-              <div>
-                <label className="block text-sm font-medium mb-1">Valor de venta</label>
-                <input
-                  type="number"
-                  value={valor}
-                  onChange={(e) => setValor(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                />
-              </div>
-            ) : (
-              <p className="text-xs text-gray-400">
-                Este paciente quedó sin cargo (cobro $0) — el valor solo se puede corregir aquí si ya existe un cargo
-                de procedimiento.
-              </p>
-            )}
+            <div>
+              <label className="block text-sm font-medium mb-1">Valor de venta</label>
+              <input
+                type="number"
+                value={valor}
+                onChange={(e) => setValor(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            </div>
             <div>
               <label className="block text-sm font-medium mb-1">Próxima cita</label>
               <input
@@ -1075,6 +1287,122 @@ function ModalEditarValor({
                 className="w-full rounded-lg border border-sky-200 px-3 py-2 text-sm"
               />
             </div>
+
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={rxTomada} onChange={(e) => setRxTomada(e.target.checked)} />
+              RX tomada {precios["rx"] ? `(${fmtCOP(precios["rx"])})` : ""}
+            </label>
+
+            {visitaDatos?.sede_id === SEDE_LAS_AMERICAS_ID && (
+              <div>
+                <label className="flex items-center gap-2 text-sm mb-2">
+                  <input
+                    type="checkbox"
+                    checked={comprobanteDatafono}
+                    onChange={(e) => {
+                      setComprobanteDatafono(e.target.checked);
+                      if (!e.target.checked) {
+                        setArchivoDatafono(null);
+                        setComprobanteDatafonoUrlExistente(null);
+                      }
+                    }}
+                  />
+                  Comprobante de datáfono {comprobanteDatafonoUrlExistente && !archivoDatafono ? "(ya adjunto)" : ""}
+                </label>
+                {comprobanteDatafono && (
+                  <label className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-[var(--acento)] text-white cursor-pointer w-fit">
+                    <Paperclip size={14} />
+                    {archivoDatafono ? archivoDatafono.name : "Adjuntar/reemplazar comprobante"}
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      className="hidden"
+                      onChange={(e) => setArchivoDatafono(e.target.files?.[0] ?? null)}
+                    />
+                  </label>
+                )}
+              </div>
+            )}
+
+            <div>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={botonTraccion} onChange={(e) => setBotonTraccion(e.target.checked)} />
+                Botón de tracción entregado {precios["boton_traccion"] ? `(${fmtCOP(precios["boton_traccion"])})` : ""}
+              </label>
+              {botonTraccion && (
+                <label className="flex items-center gap-2 text-sm mt-1.5 ml-6 text-gray-500">
+                  <input type="checkbox" checked={botonConCadeneta} onChange={(e) => setBotonConCadeneta(e.target.checked)} />
+                  Con cadeneta
+                </label>
+              )}
+            </div>
+
+            <div>
+              <label className="flex items-center gap-2 text-sm mb-2">
+                <input type="checkbox" checked={remitido} onChange={(e) => setRemitido(e.target.checked)} />
+                Remisión a otra especialidad
+              </label>
+              {remitido && (
+                <input
+                  value={remisionEspecialidad}
+                  onChange={(e) => setRemisionEspecialidad(e.target.value)}
+                  placeholder="Ej: Endodoncia, Ortodoncia interceptiva…"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                />
+              )}
+            </div>
+
+            <div>
+              {interconsultaId ? (
+                <p className="text-sm">
+                  <span className="font-medium">Interconsulta:</span>{" "}
+                  <input
+                    value={interconsultaEspecialidad}
+                    onChange={(e) => setInterconsultaEspecialidad(e.target.value)}
+                    className="rounded-lg border border-gray-300 px-2 py-1 text-sm mt-1 w-full"
+                  />
+                  <span className="block text-xs text-gray-400 mt-1">
+                    Ya está creada y se gestiona desde Recepción — acá solo se puede corregir cómo quedó escrita la
+                    especialidad.
+                  </span>
+                </p>
+              ) : (
+                <>
+                  <label className="flex items-center gap-2 text-sm mb-2">
+                    <input type="checkbox" checked={interconsulta} onChange={(e) => setInterconsulta(e.target.checked)} />
+                    Interconsulta con otra especialidad
+                  </label>
+                  {interconsulta && (
+                    <input
+                      value={interconsultaEspecialidad}
+                      onChange={(e) => setInterconsultaEspecialidad(e.target.value)}
+                      placeholder="Especialidad a la que se remite"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    />
+                  )}
+                  <p className="text-xs text-gray-400 mt-1">
+                    Queda registrada en Recepción para hacerle seguimiento hasta que llegue la respuesta.
+                  </p>
+                </>
+              )}
+            </div>
+
+            <div>
+              <p className="text-sm font-medium mb-1">Insumos de aparatología entregados</p>
+              <div className="flex flex-col gap-1.5">
+                {TIPOS_INSUMO_CONSULTA.map((t) => (
+                  <label key={t.value} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={!!insumos[t.value]}
+                      onChange={(e) => setInsumos((prev) => ({ ...prev, [t.value]: e.target.checked }))}
+                    />
+                    {t.label} {precios[t.value] ? `(${fmtCOP(precios[t.value])})` : ""}
+                  </label>
+                ))}
+              </div>
+            </div>
+
             <div>
               <p className="text-sm font-medium mb-1">Envío a laboratorio</p>
               {labOrdenes.length > 0 && (
