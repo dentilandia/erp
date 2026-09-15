@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Check, Bell, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, Check, Bell, ChevronDown, ChevronRight, Download } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
 import { useAuth } from "../auth/AuthContext";
@@ -37,6 +37,10 @@ function etiquetaMesActual(): string {
   const d = new Date();
   const mes = d.toLocaleDateString("es-CO", { month: "long" });
   return `${mes.charAt(0).toUpperCase()}${mes.slice(1)} ${d.getFullYear()}`;
+}
+
+function escPdf(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 export function AdministracionInventarios() {
@@ -402,6 +406,84 @@ export function AdministracionInventarios() {
     return sedes.find((s) => s.id === sedeId)?.color_acento ?? "#9CA3AF";
   }
 
+  // Consolida el pedido de todas las sedes en un solo listado por ítem
+  // (sumando cantidades), para poder mandarlo de una vez a cotizar con
+  // proveedores en vez de mandar un pedido por sede.
+  const pedidoConsolidado = useMemo(() => {
+    const porCatalogo = new Map<
+      string,
+      { categoria: string; nombre: string; total: number; porSede: { sedeNombre: string; cantidad: number }[] }
+    >();
+    for (const p of pedidosPendientes) {
+      if (!porCatalogo.has(p.catalogoId)) {
+        porCatalogo.set(p.catalogoId, { categoria: p.categoria, nombre: p.nombre, total: 0, porSede: [] });
+      }
+      const item = porCatalogo.get(p.catalogoId)!;
+      item.total += p.pedido;
+      item.porSede.push({ sedeNombre: p.sedeNombre, cantidad: p.pedido });
+    }
+    const porCategoria = new Map<string, { categoria: string; nombre: string; total: number; porSede: { sedeNombre: string; cantidad: number }[] }[]>();
+    for (const item of porCatalogo.values()) {
+      if (!porCategoria.has(item.categoria)) porCategoria.set(item.categoria, []);
+      porCategoria.get(item.categoria)!.push(item);
+    }
+    return Array.from(porCategoria.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([categoria, items]) => ({ categoria, items: items.sort((a, b) => a.nombre.localeCompare(b.nombre)) }));
+  }, [pedidosPendientes]);
+
+  function descargarPedidoConsolidadoPdf() {
+    const filas = pedidoConsolidado
+      .map(
+        ({ categoria, items }) =>
+          `<tr><td colspan="3" class="categoria">${escPdf(categoria)}</td></tr>` +
+          items
+            .map((it) => {
+              const detalle = it.porSede.length > 1 ? it.porSede.map((s) => `${escPdf(s.sedeNombre)}: ${s.cantidad}`).join(" · ") : "";
+              return `<tr><td>${escPdf(it.nombre)}</td><td class="num">${it.total}</td><td class="nota">${detalle}</td></tr>`;
+            })
+            .join(""),
+      )
+      .join("");
+    const html = `<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>Pedido consolidado - ${escPdf(today())}</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; color: #2E253A; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  p.fecha { color: #666; font-size: 12px; margin: 0 0 22px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { border: 1px solid #ddd; padding: 5px 7px; text-align: left; }
+  th { background: #f5f5f5; }
+  .categoria { background: #f0f0f0; font-weight: 600; }
+  .num { text-align: right; width: 80px; }
+  .nota { color: #888; font-size: 10px; }
+  .btn-imprimir {
+    position: fixed; top: 14px; right: 14px; background: #2E253A; color: #fff; border: none;
+    border-radius: 8px; padding: 8px 14px; font-size: 13px; font-family: inherit; cursor: pointer;
+  }
+  @media print { body { padding: 0; } .btn-imprimir { display: none; } }
+</style>
+</head>
+<body>
+  <button class="btn-imprimir" onclick="window.print()">Imprimir / Guardar como PDF</button>
+  <h1>Dentilandia — Pedido consolidado de insumos</h1>
+  <p class="fecha">Generado el ${escPdf(today())} — todas las sedes</p>
+  <table>
+    <thead><tr><th>Ítem</th><th class="num">Cantidad</th><th>Detalle por sede</th></tr></thead>
+    <tbody>${filas || `<tr><td colspan="3">Sin pedidos pendientes.</td></tr>`}</tbody>
+  </table>
+</body></html>`;
+    const ventana = window.open("", "_blank");
+    if (!ventana) {
+      window.alert("El navegador bloqueó la ventana de impresión — permite ventanas emergentes para este sitio e inténtalo de nuevo.");
+      return;
+    }
+    ventana.document.write(html);
+    ventana.document.close();
+    ventana.focus();
+  }
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <BodegaAdminTabla editable />
@@ -436,8 +518,18 @@ export function AdministracionInventarios() {
 
       {(pedidosPendientes.length > 0 || notasPedidoPorSede.length > 0) && (
         <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
-          <div className="flex items-center gap-2 text-amber-800 font-semibold text-sm mb-2">
-            <Bell size={16} /> Pedidos de bodega pendientes ({pedidosPendientes.length})
+          <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <div className="flex items-center gap-2 text-amber-800 font-semibold text-sm">
+              <Bell size={16} /> Pedidos de bodega pendientes ({pedidosPendientes.length})
+            </div>
+            {pedidosPendientes.length > 0 && (
+              <button
+                onClick={descargarPedidoConsolidadoPdf}
+                className="flex items-center gap-1.5 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700"
+              >
+                <Download size={14} /> Pedido consolidado (PDF, todas las sedes)
+              </button>
+            )}
           </div>
           <p className="text-xs text-amber-700 mb-2">
             Del período más reciente de cada sede, en Operación → Inventario → Insumos generales. Puedes cambiar la
