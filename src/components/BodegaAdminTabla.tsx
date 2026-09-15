@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Check, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, Check, ChevronDown, ChevronRight, Pencil } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthContext";
 import type { Sede, InsumoGeneralCatalogo, InsumoGeneralBodegaAdmin } from "../lib/types";
@@ -274,9 +274,12 @@ export function BodegaAdminTabla({ editable, sedeId }: { editable: boolean; sede
                               }}
                               disabled={!puedeEditar}
                               title={puedeEditar ? "Clic para corregir por conteo físico" : undefined}
-                              className={`font-semibold ${cantidad <= 0 ? "text-red-600" : "text-tinta"} ${puedeEditar ? "hover:underline" : ""}`}
+                              className={`flex items-center gap-1 font-semibold ${cantidad <= 0 ? "text-red-600" : "text-tinta"} ${
+                                puedeEditar ? "cursor-pointer hover:underline" : ""
+                              }`}
                             >
                               {cantidad}
+                              {puedeEditar && <Pencil size={12} className="opacity-50" />}
                             </button>
                           )}
                         </div>
