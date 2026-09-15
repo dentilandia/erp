@@ -28,6 +28,15 @@ export function BodegaAdminTabla({ editable, sedeId }: { editable: boolean; sede
   const [compraOk, setCompraOk] = useState(false);
   const [errorCompra, setErrorCompra] = useState<string | null>(null);
 
+  // Corrección rápida por conteo físico: en vez de calcular a mano el
+  // ajuste (positivo o negativo) para "Registrar compra", se escribe el
+  // número real que hay hoy en la bodega y el sistema calcula solo la
+  // diferencia contra lo que llevaba acumulado.
+  const [catalogoIdEditando, setCatalogoIdEditando] = useState<string | null>(null);
+  const [valorConteo, setValorConteo] = useState("");
+  const [guardandoConteo, setGuardandoConteo] = useState(false);
+  const [errorConteo, setErrorConteo] = useState<string | null>(null);
+
   useEffect(() => {
     if (sedeId) return;
     supabase.from("sedes").select("id, nombre, color_acento").order("nombre").then(({ data }) => {
@@ -92,6 +101,33 @@ export function BodegaAdminTabla({ editable, sedeId }: { editable: boolean; sede
     } else {
       cargar();
     }
+  }
+
+  async function guardarConteoFisico(catalogoId: string) {
+    if (sedeIdVista === CONSOLIDADO) return;
+    const nuevoValor = Number(valorConteo);
+    if (!Number.isFinite(nuevoValor)) return;
+    const actual = cantidadPorCatalogo[catalogoId] ?? 0;
+    const delta = nuevoValor - actual;
+    setGuardandoConteo(true);
+    setErrorConteo(null);
+    if (delta !== 0) {
+      const { error } = await supabase.from("insumos_generales_bodega_admin_movimientos").insert({
+        sede_id: sedeIdVista,
+        catalogo_id: catalogoId,
+        cantidad: delta,
+        motivo: "Ajuste por conteo físico",
+        created_by: perfil?.id ?? null,
+      });
+      if (error) {
+        setGuardandoConteo(false);
+        setErrorConteo(error.message);
+        return;
+      }
+    }
+    setGuardandoConteo(false);
+    setCatalogoIdEditando(null);
+    cargar();
   }
 
   if (cargando) return <p className="text-sm text-gray-400">Cargando…</p>;
@@ -182,7 +218,9 @@ export function BodegaAdminTabla({ editable, sedeId }: { editable: boolean; sede
         <p className="text-xs text-gray-400 mb-3">
           Cada sede tiene su propia bodega administrativa — Las Américas solo se entrega a Las Américas, Fabricato solo
           a Fabricato. {!sedeId && "Aquí se ve por separado o consolidada."}
+          {editable && sedeIdVista !== CONSOLIDADO && " Haz clic en un número para corregirlo por conteo físico."}
         </p>
+        {errorConteo && <p className="text-sm text-red-600 mb-2">{errorConteo}</p>}
         <div className="space-y-1">
           {categorias.map((categoria) => {
             const items = catalogo.filter((c) => c.categoria === categoria);
@@ -200,10 +238,47 @@ export function BodegaAdminTabla({ editable, sedeId }: { editable: boolean; sede
                   <div className="border-t border-gray-100 divide-y divide-gray-50">
                     {items.map((item) => {
                       const cantidad = cantidadPorCatalogo[item.id] ?? 0;
+                      const puedeEditar = editable && sedeIdVista !== CONSOLIDADO;
+                      const editando = catalogoIdEditando === item.id;
                       return (
-                        <div key={item.id} className="flex items-center justify-between px-3 py-1.5 text-sm">
+                        <div key={item.id} className="flex items-center justify-between px-3 py-1.5 text-sm gap-2">
                           <span>{item.nombre}</span>
-                          <span className={`font-semibold ${cantidad <= 0 ? "text-red-600" : "text-tinta"}`}>{cantidad}</span>
+                          {editando ? (
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="number"
+                                autoFocus
+                                value={valorConteo}
+                                onChange={(e) => setValorConteo(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") guardarConteoFisico(item.id);
+                                  if (e.key === "Escape") setCatalogoIdEditando(null);
+                                }}
+                                className="w-20 rounded-md border border-[var(--acento)] px-1.5 py-0.5 text-right"
+                              />
+                              <button
+                                onClick={() => guardarConteoFisico(item.id)}
+                                disabled={guardandoConteo}
+                                className="text-xs font-medium text-[var(--acento)] disabled:opacity-40"
+                              >
+                                <Check size={14} />
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                if (!puedeEditar) return;
+                                setCatalogoIdEditando(item.id);
+                                setValorConteo(String(cantidad));
+                                setErrorConteo(null);
+                              }}
+                              disabled={!puedeEditar}
+                              title={puedeEditar ? "Clic para corregir por conteo físico" : undefined}
+                              className={`font-semibold ${cantidad <= 0 ? "text-red-600" : "text-tinta"} ${puedeEditar ? "hover:underline" : ""}`}
+                            >
+                              {cantidad}
+                            </button>
+                          )}
                         </div>
                       );
                     })}
