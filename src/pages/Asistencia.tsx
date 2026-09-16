@@ -796,8 +796,8 @@ export function Asistencia() {
                   ? (extraAtencionPorPersonaYSemana[`${fila.perfilId}|${s.lunes}`] ?? 0).toFixed(1)
                   : "—"
               }</td>
-              <td class="num">${s.horasDescuentoAusencia > 0 ? "−" + s.horasDescuentoAusencia.toFixed(1) : "—"}</td>
-              <td class="num tot">${s.horas.toFixed(1)}</td>
+              <td class="num">${s.horasDescuentoAusencia > 0 ? "+" + s.horasDescuentoAusencia.toFixed(1) : "—"}</td>
+              <td class="num tot">${(s.horas + s.horasDescuentoAusencia).toFixed(1)}</td>
               <td class="num">${s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
               <td class="num">${s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>
             </tr>`,
@@ -1749,9 +1749,9 @@ export function Asistencia() {
                               : "—"}
                           </td>
                           <td className="py-1 text-right text-sky-600">
-                            {s.horasDescuentoAusencia > 0 ? `−${s.horasDescuentoAusencia.toFixed(1)}` : "—"}
+                            {s.horasDescuentoAusencia > 0 ? `+${s.horasDescuentoAusencia.toFixed(1)}` : "—"}
                           </td>
-                          <td className="py-1 text-right font-medium">{s.horas.toFixed(1)}</td>
+                          <td className="py-1 text-right font-medium">{(s.horas + s.horasDescuentoAusencia).toFixed(1)}</td>
                           <td className="py-1 text-right text-emerald-700">{s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
                           <td className="py-1 text-right text-amber-600">{s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>
                         </tr>
