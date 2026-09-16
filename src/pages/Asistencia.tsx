@@ -44,6 +44,44 @@ function escPdf(texto: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/** Si el día ya tenía un "compensado" guardado pero después cambiaron las
+ *  marcas de ese día (ej. se corrigió la llegada, o se cargó la salida de
+ *  una hora extra), el valor guardado queda desactualizado — se recalcula
+ *  contra las marcas actuales y se corrige en la base si no coincide. */
+async function recalcularCompensadoDia(perfilId: string, fecha: string): Promise<number> {
+  const { data: nota } = await supabase
+    .from("asistencia_notas_dia")
+    .select("minutos_compensados")
+    .eq("perfil_id", perfilId)
+    .eq("fecha", fecha)
+    .maybeSingle();
+  const minutosGuardados = nota?.minutos_compensados ?? 0;
+  if (minutosGuardados <= 0) return minutosGuardados;
+  const desde = `${fecha}T00:00:00-05:00`;
+  const hasta = `${sumarDias(fecha, 1)}T00:00:00-05:00`;
+  const { data: marcas } = await supabase
+    .from("asistencia_registros")
+    .select("tipo, marcado_en")
+    .eq("perfil_id", perfilId)
+    .gte("marcado_en", desde)
+    .lt("marcado_en", hasta);
+  const recalculado = Math.round(
+    Math.max(
+      0,
+      jornadaOrdinariaHoras(fecha) -
+        horasTrabajadasDeMarcas((marcas as { tipo: TipoAsistencia; marcado_en: string }[]) ?? []),
+    ) * 60,
+  );
+  if (recalculado !== minutosGuardados) {
+    await supabase
+      .from("asistencia_notas_dia")
+      .update({ minutos_compensados: recalculado })
+      .eq("perfil_id", perfilId)
+      .eq("fecha", fecha);
+  }
+  return recalculado;
+}
+
 const ETIQUETAS_AUSENCIA: Record<"vacaciones" | "incapacidad" | "descanso", string> = {
   vacaciones: "Vacaciones",
   incapacidad: "Incapacidad",
@@ -445,26 +483,11 @@ export function Asistencia() {
     setMarcasPersona(marcas);
     const { data: nota } = await supabase
       .from("asistencia_notas_dia")
-      .select("nota, minutos_compensados")
+      .select("nota")
       .eq("perfil_id", personaAdminId)
       .eq("fecha", fechaAdmin)
       .maybeSingle();
-    let minutosCompensados = nota?.minutos_compensados ?? 0;
-    // Si ya había un "compensado" guardado pero después se corrigieron las
-    // marcas de ese día (ej. se arregló la hora de llegada), el valor
-    // guardado queda desactualizado — se recalcula cada vez que se cargan
-    // las marcas, para que no se quede sumando un crédito que ya no aplica.
-    if (minutosCompensados > 0) {
-      const recalculado = Math.round(Math.max(0, jornadaOrdinariaHoras(fechaAdmin) - horasTrabajadasDeMarcas(marcas)) * 60);
-      if (recalculado !== minutosCompensados) {
-        await supabase
-          .from("asistencia_notas_dia")
-          .update({ minutos_compensados: recalculado })
-          .eq("perfil_id", personaAdminId)
-          .eq("fecha", fechaAdmin);
-        minutosCompensados = recalculado;
-      }
-    }
+    const minutosCompensados = await recalcularCompensadoDia(personaAdminId, fechaAdmin);
     setNotaPersona(nota?.nota ?? "");
     setNotaOriginal(nota?.nota ?? "");
     setEsCompensado(minutosCompensados > 0);
@@ -1063,6 +1086,9 @@ export function Asistencia() {
       setErrorHE(errorUpd.message);
       return;
     }
+    // La salida cambió — si ese día ya tenía un "compensado" guardado
+    // (calculado contra la salida anterior), queda desactualizado.
+    await recalcularCompensadoDia(colaborador.perfil_id, solicitud.fecha);
     cargarSolicitudesHE();
     cargarReporte();
   }
