@@ -462,6 +462,7 @@ export function Asistencia() {
   // solicitudes finalizadas de arriba) — se muestran aparte en el reporte
   // para diferenciarlas del resto de horas trabajadas normales.
   const [extraAtencionPorPersonaYSemana, setExtraAtencionPorPersonaYSemana] = useState<Record<string, number>>({});
+  const [extraAtencionPorPersonaYDia, setExtraAtencionPorPersonaYDia] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (perfil?.rol !== "admin") return;
@@ -739,6 +740,7 @@ export function Asistencia() {
       .select("perfil_id, hora_salida, asistencia_horas_extra(fecha)")
       .not("hora_salida", "is", null);
     const extraAtencion: Record<string, number> = {};
+    const extraAtencionDia: Record<string, number> = {};
     for (const row of (heData as unknown as {
       perfil_id: string;
       hora_salida: string;
@@ -750,10 +752,13 @@ export function Asistencia() {
       const finNormalMs = new Date(`${fechaHE}T${finNormal}:00-05:00`).getTime();
       const extra = Math.max(0, (new Date(row.hora_salida).getTime() - finNormalMs) / 3_600_000);
       if (extra <= 0) continue;
-      const clave = `${row.perfil_id}|${lunesDeSemana(fechaHE)}`;
-      extraAtencion[clave] = (extraAtencion[clave] ?? 0) + extra;
+      const claveSemana = `${row.perfil_id}|${lunesDeSemana(fechaHE)}`;
+      extraAtencion[claveSemana] = (extraAtencion[claveSemana] ?? 0) + extra;
+      const claveDia = `${row.perfil_id}|${fechaHE}`;
+      extraAtencionDia[claveDia] = (extraAtencionDia[claveDia] ?? 0) + extra;
     }
     setExtraAtencionPorPersonaYSemana(extraAtencion);
+    setExtraAtencionPorPersonaYDia(extraAtencionDia);
 
     setReporte(armarReporteHoras(filas, ausencias, compensaciones, festivosSet, rango.inicio, rango.fin, metaSemanal));
     setCargandoReporte(false);
@@ -814,6 +819,13 @@ export function Asistencia() {
             texto: n.nota + (n.minutosCompensados > 0 ? ` (+${n.minutosCompensados}min comp.)` : ""),
             color: "#666",
           })),
+          ...Object.entries(extraAtencionPorPersonaYDia)
+            .filter(([clave]) => clave.startsWith(`${fila.perfilId}|`))
+            .map(([clave, horas]) => ({
+              fecha: clave.split("|")[1],
+              texto: `${Math.round(horas * 60)} minutos extra acumulados por atención de paciente`,
+              color: "#db2777",
+            })),
         ].sort((a, b) => a.fecha.localeCompare(b.fecha));
         const observacionesHtml =
           observaciones.length > 0
@@ -1752,21 +1764,29 @@ export function Asistencia() {
                     ...(ausenciasPorPersona[fila.perfilId] ?? []).map((a) => ({
                       fecha: a.fecha,
                       texto: ETIQUETAS_AUSENCIA[a.tipo],
-                      tipo: a.tipo as "vacaciones" | "incapacidad" | "descanso" | null,
+                      color: COLOR_AUSENCIA[a.tipo],
                       minutosCompensados: 0,
                     })),
                     ...(notasPorPersona[fila.perfilId] ?? []).map((n) => ({
                       fecha: n.fecha,
                       texto: n.nota,
-                      tipo: null,
+                      color: "text-gray-500",
                       minutosCompensados: n.minutosCompensados,
                     })),
+                    ...Object.entries(extraAtencionPorPersonaYDia)
+                      .filter(([clave]) => clave.startsWith(`${fila.perfilId}|`))
+                      .map(([clave, horas]) => ({
+                        fecha: clave.split("|")[1],
+                        texto: `${Math.round(horas * 60)} minutos extra acumulados por atención de paciente`,
+                        color: "text-pink-600",
+                        minutosCompensados: 0,
+                      })),
                   ].sort((a, b) => a.fecha.localeCompare(b.fecha));
                   if (observaciones.length === 0) return null;
                   return (
                     <div className="mt-2 pt-2 border-t border-gray-100 space-y-0.5">
                       {observaciones.map((o, i) => (
-                        <p key={`${o.fecha}-${i}`} className={`text-xs ${o.tipo ? COLOR_AUSENCIA[o.tipo] : "text-gray-500"}`}>
+                        <p key={`${o.fecha}-${i}`} className={`text-xs ${o.color}`}>
                           <span className="font-medium">{formatFechaLarga(o.fecha)}:</span> {o.texto}
                           {o.minutosCompensados > 0 && (
                             <span className="text-violet-600 font-medium"> (+{o.minutosCompensados}min comp.)</span>
