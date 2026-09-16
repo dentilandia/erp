@@ -8,6 +8,9 @@ import {
   type TipoAsistencia,
   type FestivoColombia,
   type PeriodoLiquidacion,
+  type Doctora,
+  type SolicitudHorasExtra,
+  type ColaboradorHorasExtra,
 } from "../lib/types";
 
 // Jornada ordinaria: 8:30am-6:00pm con 1h de almuerzo entre semana (8.5h),
@@ -386,6 +389,34 @@ export function Asistencia() {
     { perfil_id: string; nombre: string; fecha: string; tipo: "vacaciones" | "incapacidad" | "descanso" }[]
   >([]);
 
+  // Solicitudes de horas extra por atención de un paciente fuera de la
+  // jornada normal — antes se avisaba por un grupo de WhatsApp aparte y no
+  // quedaba nada registrado. Al finalizar la solicitud se carga sola la
+  // hora de salida real de cada colaborador involucrado.
+  const [doctoras, setDoctoras] = useState<Doctora[]>([]);
+  const [solicitudesHE, setSolicitudesHE] = useState<
+    (SolicitudHorasExtra & { colaboradores: (ColaboradorHorasExtra & { nombre: string })[] })[]
+  >([]);
+  const [heFecha, setHeFecha] = useState(() => fechaBogota(new Date().toISOString()));
+  const [heDoctoraId, setHeDoctoraId] = useState("");
+  const [heColaboradoresIds, setHeColaboradoresIds] = useState<string[]>([]);
+  const [hePacienteNombre, setHePacienteNombre] = useState("");
+  const [heMotivo, setHeMotivo] = useState("");
+  const [heHoraIngreso, setHeHoraIngreso] = useState("");
+  const [guardandoHE, setGuardandoHE] = useState(false);
+  const [errorHE, setErrorHE] = useState<string | null>(null);
+  const [horaSalidaInput, setHoraSalidaInput] = useState<Record<string, string>>({});
+  const [guardandoSalidaHE, setGuardandoSalidaHE] = useState<string | null>(null);
+  const [finalizarForm, setFinalizarForm] = useState<
+    Record<string, { pacientePago: boolean | null; seAgendoCita: boolean | null; tareas: Record<string, string> }>
+  >({});
+  const [guardandoFinalizarHE, setGuardandoFinalizarHE] = useState<string | null>(null);
+
+  // Horas extra de atención acumuladas por persona y semana (a partir de las
+  // solicitudes finalizadas de arriba) — se muestran aparte en el reporte
+  // para diferenciarlas del resto de horas trabajadas normales.
+  const [extraAtencionPorPersonaYSemana, setExtraAtencionPorPersonaYSemana] = useState<Record<string, number>>({});
+
   useEffect(() => {
     if (perfil?.rol !== "admin") return;
     supabase
@@ -668,6 +699,31 @@ export function Asistencia() {
     const { data: festivosData } = await supabase.from("festivos_colombia").select("fecha").gte("fecha", desde).lt("fecha", hasta);
     const festivosSet = new Set((festivosData ?? []).map((f) => f.fecha as string));
 
+    // Horas extra por atención de paciente ya cargadas (ver sección de
+    // solicitudes arriba) — se calculan aparte de "horas" porque ya están
+    // incluidas ahí a través de la marca de salida real; esto solo separa
+    // cuánto de esa hora extra vino de una atención documentada.
+    const { data: heData } = await supabase
+      .from("asistencia_horas_extra_colaboradores")
+      .select("perfil_id, hora_salida, asistencia_horas_extra(fecha)")
+      .not("hora_salida", "is", null);
+    const extraAtencion: Record<string, number> = {};
+    for (const row of (heData as unknown as {
+      perfil_id: string;
+      hora_salida: string;
+      asistencia_horas_extra: { fecha: string } | null;
+    }[]) ?? []) {
+      const fechaHE = row.asistencia_horas_extra?.fecha;
+      if (!fechaHE || fechaHE < desde || fechaHE >= hasta) continue;
+      const finNormal = horasPorDefecto(fechaHE).salida;
+      const finNormalMs = new Date(`${fechaHE}T${finNormal}:00-05:00`).getTime();
+      const extra = Math.max(0, (new Date(row.hora_salida).getTime() - finNormalMs) / 3_600_000);
+      if (extra <= 0) continue;
+      const clave = `${row.perfil_id}|${lunesDeSemana(fechaHE)}`;
+      extraAtencion[clave] = (extraAtencion[clave] ?? 0) + extra;
+    }
+    setExtraAtencionPorPersonaYSemana(extraAtencion);
+
     setReporte(armarReporteHoras(filas, ausencias, compensaciones, festivosSet, rango.inicio, rango.fin, metaSemanal));
     setCargandoReporte(false);
   }
@@ -700,6 +756,11 @@ export function Asistencia() {
               <td class="num">${s.minutosCompensados > 0 ? (s.minutosCompensados / 60).toFixed(1) : "—"}</td>
               <td class="num">${s.horasFestivo > 0 ? "+" + s.horasFestivo.toFixed(1) : "—"}</td>
               <td class="num tot">${s.horas.toFixed(1)}</td>
+              <td class="num">${
+                (extraAtencionPorPersonaYSemana[`${fila.perfilId}|${s.lunes}`] ?? 0) > 0
+                  ? (extraAtencionPorPersonaYSemana[`${fila.perfilId}|${s.lunes}`] ?? 0).toFixed(1)
+                  : "—"
+              }</td>
               <td class="num">${s.horasDescuentoAusencia > 0 ? "−" + s.horasDescuentoAusencia.toFixed(1) : "—"}</td>
               <td class="num">${s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
               <td class="num">${s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>
@@ -726,7 +787,7 @@ export function Asistencia() {
               <span>Horas extra: <strong>${fila.totalHorasExtra.toFixed(1)} h</strong></span>
             </div>
             <table>
-              <thead><tr><th>Semana</th><th>Trabaj.</th><th>Comp.</th><th>Festivo</th><th>Total</th><th>Ausencia</th><th>Extra</th><th>Déficit</th></tr></thead>
+              <thead><tr><th>Semana</th><th>Trabaj.</th><th>Comp.</th><th>Festivo</th><th>Total</th><th>Atención</th><th>Ausencia</th><th>Extra</th><th>Déficit</th></tr></thead>
               <tbody>${filasSemana}</tbody>
             </table>
             ${observacionesHtml}
@@ -885,6 +946,162 @@ export function Asistencia() {
     cargarControlAusencias();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [perfil?.rol, controlMes]);
+
+  async function cargarDoctoras() {
+    const { data } = await supabase.from("doctoras").select("*").eq("activa", true).order("nombre");
+    setDoctoras((data as Doctora[]) ?? []);
+  }
+
+  async function cargarSolicitudesHE() {
+    if (perfil?.rol !== "admin") return;
+    const { data } = await supabase
+      .from("asistencia_horas_extra")
+      .select("*, asistencia_horas_extra_colaboradores(*, perfiles(nombre))")
+      .order("fecha", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(30);
+    const filas = (
+      (data as unknown as (SolicitudHorasExtra & {
+        asistencia_horas_extra_colaboradores: (ColaboradorHorasExtra & { perfiles: { nombre: string } | null })[];
+      })[]) ?? []
+    ).map((s) => ({
+      ...s,
+      colaboradores: s.asistencia_horas_extra_colaboradores.map((c) => ({ ...c, nombre: c.perfiles?.nombre ?? "—" })),
+    }));
+    setSolicitudesHE(filas);
+  }
+
+  useEffect(() => {
+    if (perfil?.rol !== "admin") return;
+    cargarDoctoras();
+    cargarSolicitudesHE();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perfil?.rol]);
+
+  async function crearSolicitudHE() {
+    if (!heDoctoraId || heColaboradoresIds.length === 0 || !hePacienteNombre.trim() || !heMotivo.trim()) return;
+    setGuardandoHE(true);
+    setErrorHE(null);
+    const { data: solicitud, error } = await supabase
+      .from("asistencia_horas_extra")
+      .insert({
+        fecha: heFecha,
+        doctora_id: heDoctoraId,
+        paciente_nombre: hePacienteNombre.trim(),
+        motivo: heMotivo.trim(),
+        hora_ingreso_consultorio: heHoraIngreso || null,
+        created_by: perfil?.id ?? null,
+      })
+      .select("id")
+      .single();
+    if (error || !solicitud) {
+      setGuardandoHE(false);
+      setErrorHE(error?.message ?? "No se pudo crear la solicitud.");
+      return;
+    }
+    const { error: errorColab } = await supabase
+      .from("asistencia_horas_extra_colaboradores")
+      .insert(heColaboradoresIds.map((perfilId) => ({ solicitud_id: solicitud.id, perfil_id: perfilId })));
+    setGuardandoHE(false);
+    if (errorColab) {
+      setErrorHE(errorColab.message);
+      return;
+    }
+    setHeDoctoraId("");
+    setHeColaboradoresIds([]);
+    setHePacienteNombre("");
+    setHeMotivo("");
+    setHeHoraIngreso("");
+    cargarSolicitudesHE();
+  }
+
+  // Si ya había una salida marcada ese día, se reemplaza por esta — la idea
+  // es que quede una sola salida real por día en asistencia_registros, sin
+  // tener que corregirla a mano una segunda vez.
+  async function guardarSalidaColaborador(
+    solicitud: SolicitudHorasExtra,
+    colaborador: ColaboradorHorasExtra & { nombre: string },
+  ) {
+    const hora = horaSalidaInput[colaborador.id];
+    if (!hora) return;
+    setGuardandoSalidaHE(colaborador.id);
+    setErrorHE(null);
+    const marcadoEn = new Date(`${solicitud.fecha}T${hora}:00-05:00`).toISOString();
+    const desde = `${solicitud.fecha}T00:00:00-05:00`;
+    const hasta = `${sumarDias(solicitud.fecha, 1)}T00:00:00-05:00`;
+    const { data: existentes } = await supabase
+      .from("asistencia_registros")
+      .select("id")
+      .eq("perfil_id", colaborador.perfil_id)
+      .eq("tipo", "salida")
+      .gte("marcado_en", desde)
+      .lt("marcado_en", hasta);
+    for (const ex of existentes ?? []) {
+      await supabase.from("asistencia_registros").delete().eq("id", ex.id);
+    }
+    const { data: nuevaMarca, error } = await supabase
+      .from("asistencia_registros")
+      .insert({
+        perfil_id: colaborador.perfil_id,
+        sede_id: personas.find((p) => p.id === colaborador.perfil_id)?.sede_id ?? null,
+        tipo: "salida",
+        marcado_en: marcadoEn,
+      })
+      .select("id")
+      .single();
+    if (error || !nuevaMarca) {
+      setGuardandoSalidaHE(null);
+      setErrorHE(error?.message ?? "No se pudo registrar la salida.");
+      return;
+    }
+    const { error: errorUpd } = await supabase
+      .from("asistencia_horas_extra_colaboradores")
+      .update({ hora_salida: marcadoEn, marca_registro_id: nuevaMarca.id })
+      .eq("id", colaborador.id);
+    setGuardandoSalidaHE(null);
+    if (errorUpd) {
+      setErrorHE(errorUpd.message);
+      return;
+    }
+    cargarSolicitudesHE();
+    cargarReporte();
+  }
+
+  async function finalizarSolicitudHE(
+    solicitud: SolicitudHorasExtra & { colaboradores: (ColaboradorHorasExtra & { nombre: string })[] },
+  ) {
+    const form = finalizarForm[solicitud.id];
+    if (!form || form.pacientePago === null || form.seAgendoCita === null) return;
+    setGuardandoFinalizarHE(solicitud.id);
+    setErrorHE(null);
+    const { error } = await supabase
+      .from("asistencia_horas_extra")
+      .update({
+        estado: "finalizada",
+        paciente_pago: form.pacientePago,
+        se_agendo_cita: form.seAgendoCita,
+        finalizada_en: new Date().toISOString(),
+      })
+      .eq("id", solicitud.id);
+    if (error) {
+      setGuardandoFinalizarHE(null);
+      setErrorHE(error.message);
+      return;
+    }
+    for (const c of solicitud.colaboradores) {
+      const tarea = form.tareas[c.id]?.trim();
+      if (tarea) {
+        await supabase.from("asistencia_horas_extra_colaboradores").update({ tareas_realizadas: tarea }).eq("id", c.id);
+      }
+    }
+    setGuardandoFinalizarHE(null);
+    cargarSolicitudesHE();
+  }
+
+  async function cancelarSolicitudHE(id: string) {
+    await supabase.from("asistencia_horas_extra").delete().eq("id", id);
+    cargarSolicitudesHE();
+  }
 
   const yaMarcado = useMemo(() => new Set(registros.map((r) => r.tipo)), [registros]);
 
@@ -1139,6 +1356,234 @@ export function Asistencia() {
         </div>
       )}
 
+      {perfil?.rol === "admin" && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
+          <div>
+            <h2 className="font-semibold text-tinta">Horas extra por atención de paciente</h2>
+            <p className="text-xs text-gray-400">
+              Reemplaza el aviso por el grupo de WhatsApp — se registra acá y al finalizar se carga sola la hora de
+              salida real de cada colaborador involucrado.
+            </p>
+          </div>
+
+          <div className="rounded-lg bg-gray-50 border border-gray-200 p-3 space-y-2">
+            <p className="text-sm font-medium text-gray-600">Nueva solicitud</p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <input
+                type="date"
+                value={heFecha}
+                onChange={(e) => setHeFecha(e.target.value)}
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+              <select
+                value={heDoctoraId}
+                onChange={(e) => setHeDoctoraId(e.target.value)}
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              >
+                <option value="">Doctora…</option>
+                {doctoras.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.nombre}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="time"
+                value={heHoraIngreso}
+                onChange={(e) => setHeHoraIngreso(e.target.value)}
+                title="Hora de ingreso al consultorio"
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            </div>
+            <input
+              value={hePacienteNombre}
+              onChange={(e) => setHePacienteNombre(e.target.value)}
+              placeholder="Nombre del paciente"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <input
+              value={heMotivo}
+              onChange={(e) => setHeMotivo(e.target.value)}
+              placeholder="Motivo del atraso"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <div>
+              <p className="text-xs text-gray-500 mb-1">Colaboradores que atendieron:</p>
+              <div className="flex flex-wrap gap-2">
+                {personas.map((p) => {
+                  const marcado = heColaboradoresIds.includes(p.id);
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() =>
+                        setHeColaboradoresIds((prev) =>
+                          marcado ? prev.filter((id) => id !== p.id) : [...prev, p.id],
+                        )
+                      }
+                      className={`text-xs font-medium px-2.5 py-1.5 rounded-full border ${
+                        marcado ? "bg-[var(--acento)] text-white border-[var(--acento)]" : "border-gray-300 text-gray-600"
+                      }`}
+                    >
+                      {p.nombre}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {errorHE && <p className="text-sm text-red-600">{errorHE}</p>}
+            <button
+              onClick={crearSolicitudHE}
+              disabled={
+                guardandoHE || !heDoctoraId || heColaboradoresIds.length === 0 || !hePacienteNombre.trim() || !heMotivo.trim()
+              }
+              className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+            >
+              {guardandoHE ? "Guardando…" : "Registrar solicitud"}
+            </button>
+          </div>
+
+          {solicitudesHE.length > 0 && (
+            <div className="space-y-3">
+              {solicitudesHE.map((s) => {
+                const todasConSalida = s.colaboradores.every((c) => c.hora_salida);
+                const form = finalizarForm[s.id] ?? { pacientePago: null, seAgendoCita: null, tareas: {} };
+                return (
+                  <div
+                    key={s.id}
+                    className={`border rounded-lg p-3 text-sm ${
+                      s.estado === "finalizada" ? "border-gray-100 bg-gray-50" : "border-amber-200 bg-amber-50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between flex-wrap gap-1 mb-1">
+                      <p className="font-medium">
+                        {formatFechaLarga(s.fecha)} — {s.paciente_nombre}
+                        {s.estado === "finalizada" && (
+                          <span className="ml-2 text-xs text-emerald-700 font-normal">Finalizada</span>
+                        )}
+                      </p>
+                      {s.estado === "abierta" && (
+                        <button onClick={() => cancelarSolicitudHE(s.id)} className="text-xs text-red-500 hover:underline">
+                          Cancelar
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500 mb-2">
+                      Doctora: {doctoras.find((d) => d.id === s.doctora_id)?.nombre ?? "—"}
+                      {s.hora_ingreso_consultorio && ` · Ingreso: ${s.hora_ingreso_consultorio}`} · Motivo: {s.motivo}
+                    </p>
+                    <div className="space-y-1.5">
+                      {s.colaboradores.map((c) => (
+                        <div key={c.id} className="flex items-center gap-2">
+                          <span className="w-40 shrink-0">{c.nombre}</span>
+                          {c.hora_salida ? (
+                            <span className="text-tinta font-medium">
+                              Salida: {new Date(c.hora_salida).toLocaleTimeString("es-CO")}
+                            </span>
+                          ) : s.estado === "finalizada" ? (
+                            <span className="text-gray-400">Sin salida registrada</span>
+                          ) : (
+                            <>
+                              <input
+                                type="time"
+                                value={horaSalidaInput[c.id] ?? ""}
+                                onChange={(e) => setHoraSalidaInput((prev) => ({ ...prev, [c.id]: e.target.value }))}
+                                className="rounded-md border border-gray-300 px-2 py-1 text-sm"
+                              />
+                              <button
+                                onClick={() => guardarSalidaColaborador(s, c)}
+                                disabled={!horaSalidaInput[c.id] || guardandoSalidaHE === c.id}
+                                className="text-xs font-medium px-2.5 py-1.5 rounded-md bg-[var(--acento)] text-white disabled:opacity-40"
+                              >
+                                {guardandoSalidaHE === c.id ? "Guardando…" : "Guardar salida"}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {s.estado === "abierta" && todasConSalida && (
+                      <div className="mt-3 pt-3 border-t border-amber-200 space-y-2">
+                        <p className="text-xs font-medium text-gray-600">Para finalizar:</p>
+                        <div className="flex items-center gap-2 flex-wrap text-xs">
+                          <span className="text-gray-500">¿El paciente pagó?</span>
+                          {[true, false].map((v) => (
+                            <button
+                              key={String(v)}
+                              onClick={() =>
+                                setFinalizarForm((prev) => ({ ...prev, [s.id]: { ...form, pacientePago: v } }))
+                              }
+                              className={`px-2.5 py-1 rounded-md font-medium ${
+                                form.pacientePago === v ? "bg-[var(--acento)] text-white" : "bg-white border border-gray-300 text-gray-600"
+                              }`}
+                            >
+                              {v ? "Sí" : "No"}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap text-xs">
+                          <span className="text-gray-500">¿Se agendó cita?</span>
+                          {[true, false].map((v) => (
+                            <button
+                              key={String(v)}
+                              onClick={() =>
+                                setFinalizarForm((prev) => ({ ...prev, [s.id]: { ...form, seAgendoCita: v } }))
+                              }
+                              className={`px-2.5 py-1 rounded-md font-medium ${
+                                form.seAgendoCita === v ? "bg-[var(--acento)] text-white" : "bg-white border border-gray-300 text-gray-600"
+                              }`}
+                            >
+                              {v ? "Sí" : "No"}
+                            </button>
+                          ))}
+                        </div>
+                        {s.colaboradores.map((c) => (
+                          <input
+                            key={c.id}
+                            value={form.tareas[c.id] ?? ""}
+                            onChange={(e) =>
+                              setFinalizarForm((prev) => ({
+                                ...prev,
+                                [s.id]: { ...form, tareas: { ...form.tareas, [c.id]: e.target.value } },
+                              }))
+                            }
+                            placeholder={`Tareas realizadas por ${c.nombre}`}
+                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                          />
+                        ))}
+                        <button
+                          onClick={() => finalizarSolicitudHE(s)}
+                          disabled={form.pacientePago === null || form.seAgendoCita === null || guardandoFinalizarHE === s.id}
+                          className="rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+                        >
+                          {guardandoFinalizarHE === s.id ? "Guardando…" : "Finalizar solicitud"}
+                        </button>
+                      </div>
+                    )}
+
+                    {s.estado === "finalizada" && (
+                      <div className="mt-2 pt-2 border-t border-gray-200 text-xs text-gray-500 space-y-0.5">
+                        <p>
+                          Pagó: {s.paciente_pago ? "Sí" : "No"} · Cita agendada: {s.se_agendo_cita ? "Sí" : "No"}
+                        </p>
+                        {s.colaboradores
+                          .filter((c) => c.tareas_realizadas)
+                          .map((c) => (
+                            <p key={c.id}>
+                              <span className="font-medium">{c.nombre}:</span> {c.tareas_realizadas}
+                            </p>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="font-semibold text-tinta">Horas trabajadas por {modoReporte === "periodo" ? "período" : "mes"}</h2>
@@ -1222,7 +1667,8 @@ export function Asistencia() {
                         <th className="font-normal pb-1 text-right">Compensadas</th>
                         <th className="font-normal pb-1 text-right">Festivo</th>
                         <th className="font-normal pb-1 text-right">Totales</th>
-                        <th className="font-normal pb-1 text-right">Sábado</th>
+                        <th className="font-normal pb-1 text-right">Atención pac.</th>
+                        <th className="font-normal pb-1 text-right">Ausencia</th>
                         <th className="font-normal pb-1 text-right">Extra</th>
                         <th className="font-normal pb-1 text-right">Déficit</th>
                       </tr>
@@ -1242,6 +1688,11 @@ export function Asistencia() {
                           </td>
                           <td className="py-1 text-right text-indigo-600">{s.horasFestivo > 0 ? `+${s.horasFestivo.toFixed(1)}` : "—"}</td>
                           <td className="py-1 text-right font-medium">{s.horas.toFixed(1)}</td>
+                          <td className="py-1 text-right text-pink-600">
+                            {(extraAtencionPorPersonaYSemana[`${fila.perfilId}|${s.lunes}`] ?? 0) > 0
+                              ? (extraAtencionPorPersonaYSemana[`${fila.perfilId}|${s.lunes}`] ?? 0).toFixed(1)
+                              : "—"}
+                          </td>
                           <td className="py-1 text-right text-sky-600">
                             {s.horasDescuentoAusencia > 0 ? `−${s.horasDescuentoAusencia.toFixed(1)}` : "—"}
                           </td>

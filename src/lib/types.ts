@@ -65,8 +65,8 @@ export interface AsistenciaAusencia {
 }
 
 /** Festivo colombiano — aplica parejo a todo el mundo, no se marca persona
- *  por persona. Un festivo entre semana resta su jornada de la meta
- *  semanal, igual que un día de vacaciones. */
+ *  por persona. Por ley un festivo entre semana no se le puede descontar a
+ *  nadie de la meta — se le suma a sus horas como si lo hubiera trabajado. */
 export interface FestivoColombia {
   fecha: string;
   nombre: string;
@@ -82,6 +82,34 @@ export interface PeriodoLiquidacion {
   fecha_fin: string;
   created_by: string | null;
   created_at: string;
+}
+
+/** Solicitud de horas extra por atención de un paciente fuera de la
+ *  jornada normal (antes se avisaba por un grupo de WhatsApp aparte y no
+ *  quedaba nada registrado). Al finalizarla se carga la hora de salida real
+ *  de cada colaborador directamente en asistencia_registros. */
+export interface SolicitudHorasExtra {
+  id: string;
+  fecha: string;
+  doctora_id: string | null;
+  paciente_nombre: string;
+  motivo: string;
+  hora_ingreso_consultorio: string | null;
+  estado: "abierta" | "finalizada";
+  paciente_pago: boolean | null;
+  se_agendo_cita: boolean | null;
+  created_by: string | null;
+  created_at: string;
+  finalizada_en: string | null;
+}
+
+export interface ColaboradorHorasExtra {
+  id: string;
+  solicitud_id: string;
+  perfil_id: string;
+  hora_salida: string | null;
+  tareas_realizadas: string | null;
+  marca_registro_id: string | null;
 }
 
 /** Frase mostrada al marcar llegada (motivadora) o salida final
