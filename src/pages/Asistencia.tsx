@@ -791,13 +791,13 @@ export function Asistencia() {
               <td class="num">${s.horasTrabajadas.toFixed(1)}</td>
               <td class="num">${s.minutosCompensados > 0 ? (s.minutosCompensados / 60).toFixed(1) : "—"}</td>
               <td class="num">${s.horasFestivo > 0 ? "+" + s.horasFestivo.toFixed(1) : "—"}</td>
-              <td class="num tot">${s.horas.toFixed(1)}</td>
               <td class="num">${
                 (extraAtencionPorPersonaYSemana[`${fila.perfilId}|${s.lunes}`] ?? 0) > 0
                   ? (extraAtencionPorPersonaYSemana[`${fila.perfilId}|${s.lunes}`] ?? 0).toFixed(1)
                   : "—"
               }</td>
               <td class="num">${s.horasDescuentoAusencia > 0 ? "−" + s.horasDescuentoAusencia.toFixed(1) : "—"}</td>
+              <td class="num tot">${s.horas.toFixed(1)}</td>
               <td class="num">${s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
               <td class="num">${s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>
             </tr>`,
@@ -840,7 +840,7 @@ export function Asistencia() {
               <span>Horas extra: <strong>${fila.totalHorasExtra.toFixed(1)} h</strong></span>
             </div>
             <table>
-              <thead><tr><th>Semana</th><th>Trabaj.</th><th>Comp.</th><th>Festivo</th><th>Total</th><th>Atención</th><th>Ausencia</th><th>Extra</th><th>Déficit</th></tr></thead>
+              <thead><tr><th>Semana</th><th>Trabaj.</th><th>Comp.</th><th>Festivo</th><th>Atención</th><th>Ausencia</th><th>Total</th><th>Extra</th><th>Déficit</th></tr></thead>
               <tbody>${filasSemana}</tbody>
             </table>
             ${observacionesHtml}
@@ -1722,9 +1722,9 @@ export function Asistencia() {
                         <th className="font-normal pb-1 text-right">Trabajadas</th>
                         <th className="font-normal pb-1 text-right">Compensadas</th>
                         <th className="font-normal pb-1 text-right">Festivo</th>
-                        <th className="font-normal pb-1 text-right">Totales</th>
                         <th className="font-normal pb-1 text-right">Atención pac.</th>
                         <th className="font-normal pb-1 text-right">Ausencia</th>
+                        <th className="font-normal pb-1 text-right">Totales</th>
                         <th className="font-normal pb-1 text-right">Extra</th>
                         <th className="font-normal pb-1 text-right">Déficit</th>
                       </tr>
@@ -1743,7 +1743,6 @@ export function Asistencia() {
                             {s.minutosCompensados > 0 ? (s.minutosCompensados / 60).toFixed(1) : "—"}
                           </td>
                           <td className="py-1 text-right text-indigo-600">{s.horasFestivo > 0 ? `+${s.horasFestivo.toFixed(1)}` : "—"}</td>
-                          <td className="py-1 text-right font-medium">{s.horas.toFixed(1)}</td>
                           <td className="py-1 text-right text-pink-600">
                             {(extraAtencionPorPersonaYSemana[`${fila.perfilId}|${s.lunes}`] ?? 0) > 0
                               ? (extraAtencionPorPersonaYSemana[`${fila.perfilId}|${s.lunes}`] ?? 0).toFixed(1)
@@ -1752,6 +1751,7 @@ export function Asistencia() {
                           <td className="py-1 text-right text-sky-600">
                             {s.horasDescuentoAusencia > 0 ? `−${s.horasDescuentoAusencia.toFixed(1)}` : "—"}
                           </td>
+                          <td className="py-1 text-right font-medium">{s.horas.toFixed(1)}</td>
                           <td className="py-1 text-right text-emerald-700">{s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
                           <td className="py-1 text-right text-amber-600">{s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>
                         </tr>
