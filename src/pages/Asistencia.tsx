@@ -31,6 +31,16 @@ function horasTrabajadasDeMarcas(marcas: { tipo: TipoAsistencia; marcado_en: str
   return Math.max(0, horas);
 }
 
+/** Escapa texto libre (nombres, notas) antes de interpolarlo en el HTML del
+ *  PDF, para no romper el documento si alguien escribió comillas o símbolos. */
+function escPdf(texto: string): string {
+  return texto
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 const ETIQUETAS_AUSENCIA: Record<"vacaciones" | "incapacidad" | "descanso", string> = {
   vacaciones: "Vacaciones",
   incapacidad: "Incapacidad",
@@ -667,6 +677,114 @@ export function Asistencia() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesReporte, metaSemanal, modoReporte, periodoReporteId]);
 
+  // PDF de la liquidación del período/mes que se está viendo, con un espacio
+  // de firma por persona junto a sus horas compensadas/incapacidades — para
+  // que cada quien firme que está de acuerdo con lo que se le está pagando.
+  function descargarReportePdf() {
+    const rango = rangoReporte();
+    const etiquetaRango =
+      modoReporte === "periodo"
+        ? periodosLiquidacion.find((p) => p.id === periodoReporteId)?.etiqueta ?? "Período"
+        : new Date(Date.UTC(Number(mesReporte.slice(0, 4)), Number(mesReporte.slice(5, 7)) - 1, 1)).toLocaleDateString(
+            "es-CO",
+            { month: "long", year: "numeric", timeZone: "UTC" },
+          );
+
+    const bloques = reporte
+      .map((fila) => {
+        const filasSemana = fila.semanas
+          .map(
+            (s) => `<tr class="${s.cuentaParaEsteMes ? "" : "fuera"}">
+              <td>${s.lunes} — ${sumarDias(s.lunes, 6)}</td>
+              <td class="num">${s.horasTrabajadas.toFixed(1)}</td>
+              <td class="num">${s.minutosCompensados > 0 ? (s.minutosCompensados / 60).toFixed(1) : "—"}</td>
+              <td class="num">${s.horasFestivo > 0 ? "+" + s.horasFestivo.toFixed(1) : "—"}</td>
+              <td class="num tot">${s.horas.toFixed(1)}</td>
+              <td class="num">${s.horasDescuentoAusencia > 0 ? "−" + s.horasDescuentoAusencia.toFixed(1) : "—"}</td>
+              <td class="num">${s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
+              <td class="num">${s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>
+            </tr>`,
+          )
+          .join("");
+        const observaciones = [
+          ...(ausenciasPorPersona[fila.perfilId] ?? []).map((a) => ({ fecha: a.fecha, texto: ETIQUETAS_AUSENCIA[a.tipo] })),
+          ...(notasPorPersona[fila.perfilId] ?? []).map((n) => ({
+            fecha: n.fecha,
+            texto: n.nota + (n.minutosCompensados > 0 ? ` (+${n.minutosCompensados}min comp.)` : ""),
+          })),
+        ].sort((a, b) => a.fecha.localeCompare(b.fecha));
+        const observacionesHtml =
+          observaciones.length > 0
+            ? `<div class="obs">${observaciones
+                .map((o) => `<p><strong>${formatFechaLarga(o.fecha)}:</strong> ${escPdf(o.texto)}</p>`)
+                .join("")}</div>`
+            : "";
+        return `<div class="persona">
+          <div class="col-tabla">
+            <div class="nombre-linea">
+              <strong>${escPdf(fila.nombre)}</strong>
+              <span>Horas extra: <strong>${fila.totalHorasExtra.toFixed(1)} h</strong></span>
+            </div>
+            <table>
+              <thead><tr><th>Semana</th><th>Trabaj.</th><th>Comp.</th><th>Festivo</th><th>Total</th><th>Ausencia</th><th>Extra</th><th>Déficit</th></tr></thead>
+              <tbody>${filasSemana}</tbody>
+            </table>
+            ${observacionesHtml}
+          </div>
+          <div class="col-firma">
+            <p class="titulo-firma">Confirmo que estoy de acuerdo con esta liquidación de horas.</p>
+            <div class="linea-firma">Firma</div>
+            <div class="linea-firma">Fecha</div>
+          </div>
+        </div>`;
+      })
+      .join("");
+
+    const html = `<!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Liquidación de horas — ${escPdf(etiquetaRango)}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 24px; color: #2a2438; }
+            h1 { font-size: 18px; margin-bottom: 4px; }
+            .subtitulo { color: #777; font-size: 12px; margin-bottom: 20px; }
+            .persona { display: flex; gap: 24px; border: 1px solid #ddd; border-radius: 8px; padding: 14px; margin-bottom: 16px; page-break-inside: avoid; }
+            .col-tabla { flex: 2; }
+            .col-firma { flex: 1; border-left: 1px dashed #bbb; padding-left: 18px; display: flex; flex-direction: column; justify-content: flex-end; }
+            .nombre-linea { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
+            table { width: 100%; border-collapse: collapse; font-size: 11px; }
+            th, td { padding: 4px 6px; border-bottom: 1px solid #eee; text-align: left; }
+            th { color: #888; font-weight: 500; }
+            td.num { text-align: right; }
+            td.tot { font-weight: 600; }
+            tr.fuera { opacity: 0.5; }
+            .obs { margin-top: 8px; font-size: 10px; color: #666; }
+            .obs p { margin: 2px 0; }
+            .titulo-firma { font-size: 11px; color: #555; margin-bottom: 40px; }
+            .linea-firma { border-top: 1px solid #333; padding-top: 4px; font-size: 11px; color: #555; margin-top: 28px; }
+            .btn-imprimir { margin-bottom: 16px; }
+            @media print { .btn-imprimir { display: none; } }
+          </style>
+        </head>
+        <body>
+          <button class="btn-imprimir" onclick="window.print()">Imprimir / Guardar PDF</button>
+          <h1>Liquidación de horas — Dentilandia</h1>
+          <p class="subtitulo">${escPdf(etiquetaRango)}${rango ? ` (${rango.inicio} — ${sumarDias(rango.fin, -1)})` : ""} · Meta: ${metaSemanal} h/semana</p>
+          ${bloques}
+        </body>
+      </html>`;
+
+    const ventana = window.open("", "_blank");
+    if (!ventana) {
+      window.alert("El navegador bloqueó la ventana emergente. Habilítala para poder descargar el PDF.");
+      return;
+    }
+    ventana.document.write(html);
+    ventana.document.close();
+    ventana.focus();
+  }
+
   async function cargarFestivos() {
     const { data } = await supabase.from("festivos_colombia").select("*").order("fecha");
     setFestivos((data as FestivoColombia[]) ?? []);
@@ -1021,146 +1139,18 @@ export function Asistencia() {
         </div>
       )}
 
-      {perfil?.rol === "admin" && (
-        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h2 className="font-semibold text-tinta">Control de vacaciones e incapacidades</h2>
-            <input
-              type="month"
-              value={controlMes}
-              onChange={(e) => setControlMes(e.target.value)}
-              className="rounded-lg border border-gray-300 px-2 py-1 text-sm"
-            />
-          </div>
-          {(["vacaciones", "incapacidad", "descanso"] as const).map((tipo) => {
-            const filas = controlAusencias.filter((a) => a.tipo === tipo).sort((a, b) => a.fecha.localeCompare(b.fecha));
-            return (
-              <div key={tipo}>
-                <h3 className="text-sm font-semibold text-gray-500 mb-1">
-                  {ETIQUETAS_AUSENCIA[tipo]} ({filas.length})
-                </h3>
-                {filas.length === 0 ? (
-                  <p className="text-xs text-gray-400">Sin registros este mes.</p>
-                ) : (
-                  <div className="divide-y divide-gray-50">
-                    {filas.map((a) => (
-                      <div key={`${a.perfil_id}-${a.fecha}`} className="flex items-center justify-between py-1 text-sm">
-                        <span>{a.nombre}</span>
-                        <span className="text-gray-500">{formatFechaLarga(a.fecha)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {perfil?.rol === "admin" && (
-        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
-          <h2 className="font-semibold text-tinta">Festivos de Colombia</h2>
-          <p className="text-xs text-gray-400">
-            Por ley el tiempo del festivo no se le puede descontar a nadie de la meta — se le suma a sus horas como si
-            lo hubiera trabajado (igual que un compensado), automático para todo el mundo, sin marcarlo persona por
-            persona.
-          </p>
-          <div className="flex items-end gap-2 flex-wrap">
-            <input
-              type="date"
-              value={fechaFestivoNueva}
-              onChange={(e) => setFechaFestivoNueva(e.target.value)}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            />
-            <input
-              value={nombreFestivoNuevo}
-              onChange={(e) => setNombreFestivoNuevo(e.target.value)}
-              placeholder="Ej: Amor y amistad"
-              className="flex-1 min-w-[160px] rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            />
-            <button
-              onClick={agregarFestivo}
-              disabled={!fechaFestivoNueva || !nombreFestivoNuevo.trim() || guardandoFestivo}
-              className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
-            >
-              {guardandoFestivo ? "Guardando…" : "Agregar"}
-            </button>
-          </div>
-          {errorFestivo && <p className="text-sm text-red-600">{errorFestivo}</p>}
-          {festivos.length > 0 && (
-            <div className="divide-y divide-gray-50">
-              {festivos.map((f) => (
-                <div key={f.fecha} className="flex items-center justify-between py-1 text-sm">
-                  <span>
-                    {formatFechaLarga(f.fecha)} — {f.nombre}
-                  </span>
-                  <button onClick={() => eliminarFestivo(f.fecha)} className="text-xs text-red-500 hover:underline">
-                    Quitar
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {perfil?.rol === "admin" && (
-        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
-          <h2 className="font-semibold text-tinta">Períodos de liquidación</h2>
-          <p className="text-xs text-gray-400">
-            El ciclo real de pago no coincide con el mes calendario (ej. 31 de agosto al 27 de septiembre). Crea acá
-            esos rangos para poder ver el reporte de abajo agrupado por período en vez de por mes.
-          </p>
-          <div className="flex items-end gap-2 flex-wrap">
-            <input
-              value={etiquetaPeriodoNueva}
-              onChange={(e) => setEtiquetaPeriodoNueva(e.target.value)}
-              placeholder="Ej: 31 ago - 27 sept"
-              className="flex-1 min-w-[140px] rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            />
-            <input
-              type="date"
-              value={inicioPeriodoNuevo}
-              onChange={(e) => setInicioPeriodoNuevo(e.target.value)}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            />
-            <span className="text-xs text-gray-400">a</span>
-            <input
-              type="date"
-              value={finPeriodoNuevo}
-              onChange={(e) => setFinPeriodoNuevo(e.target.value)}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            />
-            <button
-              onClick={crearPeriodoLiquidacion}
-              disabled={!etiquetaPeriodoNueva.trim() || !inicioPeriodoNuevo || !finPeriodoNuevo || guardandoPeriodo}
-              className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
-            >
-              {guardandoPeriodo ? "Guardando…" : "Crear período"}
-            </button>
-          </div>
-          {errorPeriodoLiq && <p className="text-sm text-red-600">{errorPeriodoLiq}</p>}
-          {periodosLiquidacion.length > 0 && (
-            <div className="divide-y divide-gray-50">
-              {periodosLiquidacion.map((p) => (
-                <div key={p.id} className="flex items-center justify-between py-1 text-sm">
-                  <span>
-                    {p.etiqueta} <span className="text-gray-400">({p.fecha_inicio} — {p.fecha_fin})</span>
-                  </span>
-                  <button onClick={() => eliminarPeriodoLiquidacion(p.id)} className="text-xs text-red-500 hover:underline">
-                    Quitar
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="font-semibold text-tinta">Horas trabajadas por {modoReporte === "periodo" ? "período" : "mes"}</h2>
           <div className="flex items-center gap-2 flex-wrap">
+            {perfil?.rol === "admin" && reporte.length > 0 && (
+              <button
+                onClick={descargarReportePdf}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50"
+              >
+                Descargar PDF (con firma)
+              </button>
+            )}
             {periodosLiquidacion.length > 0 && (
               <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
                 <button
@@ -1296,6 +1286,142 @@ export function Asistencia() {
           </div>
         )}
       </div>
+
+      {perfil?.rol === "admin" && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          <h2 className="font-semibold text-tinta">Períodos de liquidación</h2>
+          <p className="text-xs text-gray-400">
+            El ciclo real de pago no coincide con el mes calendario (ej. 31 de agosto al 27 de septiembre). Crea acá
+            esos rangos para poder ver el reporte de arriba agrupado por período en vez de por mes.
+          </p>
+          <div className="flex items-end gap-2 flex-wrap">
+            <input
+              value={etiquetaPeriodoNueva}
+              onChange={(e) => setEtiquetaPeriodoNueva(e.target.value)}
+              placeholder="Ej: 31 ago - 27 sept"
+              className="flex-1 min-w-[140px] rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <input
+              type="date"
+              value={inicioPeriodoNuevo}
+              onChange={(e) => setInicioPeriodoNuevo(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <span className="text-xs text-gray-400">a</span>
+            <input
+              type="date"
+              value={finPeriodoNuevo}
+              onChange={(e) => setFinPeriodoNuevo(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <button
+              onClick={crearPeriodoLiquidacion}
+              disabled={!etiquetaPeriodoNueva.trim() || !inicioPeriodoNuevo || !finPeriodoNuevo || guardandoPeriodo}
+              className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+            >
+              {guardandoPeriodo ? "Guardando…" : "Crear período"}
+            </button>
+          </div>
+          {errorPeriodoLiq && <p className="text-sm text-red-600">{errorPeriodoLiq}</p>}
+          {periodosLiquidacion.length > 0 && (
+            <div className="divide-y divide-gray-50">
+              {periodosLiquidacion.map((p) => (
+                <div key={p.id} className="flex items-center justify-between py-1 text-sm">
+                  <span>
+                    {p.etiqueta} <span className="text-gray-400">({p.fecha_inicio} — {p.fecha_fin})</span>
+                  </span>
+                  <button onClick={() => eliminarPeriodoLiquidacion(p.id)} className="text-xs text-red-500 hover:underline">
+                    Quitar
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {perfil?.rol === "admin" && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h2 className="font-semibold text-tinta">Control de vacaciones e incapacidades</h2>
+            <input
+              type="month"
+              value={controlMes}
+              onChange={(e) => setControlMes(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2 py-1 text-sm"
+            />
+          </div>
+          {(["vacaciones", "incapacidad", "descanso"] as const).map((tipo) => {
+            const filas = controlAusencias.filter((a) => a.tipo === tipo).sort((a, b) => a.fecha.localeCompare(b.fecha));
+            return (
+              <div key={tipo}>
+                <h3 className="text-sm font-semibold text-gray-500 mb-1">
+                  {ETIQUETAS_AUSENCIA[tipo]} ({filas.length})
+                </h3>
+                {filas.length === 0 ? (
+                  <p className="text-xs text-gray-400">Sin registros este mes.</p>
+                ) : (
+                  <div className="divide-y divide-gray-50">
+                    {filas.map((a) => (
+                      <div key={`${a.perfil_id}-${a.fecha}`} className="flex items-center justify-between py-1 text-sm">
+                        <span>{a.nombre}</span>
+                        <span className="text-gray-500">{formatFechaLarga(a.fecha)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {perfil?.rol === "admin" && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          <h2 className="font-semibold text-tinta">Festivos de Colombia</h2>
+          <p className="text-xs text-gray-400">
+            Por ley el tiempo del festivo no se le puede descontar a nadie de la meta — se le suma a sus horas como si
+            lo hubiera trabajado (igual que un compensado), automático para todo el mundo, sin marcarlo persona por
+            persona.
+          </p>
+          <div className="flex items-end gap-2 flex-wrap">
+            <input
+              type="date"
+              value={fechaFestivoNueva}
+              onChange={(e) => setFechaFestivoNueva(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <input
+              value={nombreFestivoNuevo}
+              onChange={(e) => setNombreFestivoNuevo(e.target.value)}
+              placeholder="Ej: Amor y amistad"
+              className="flex-1 min-w-[160px] rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <button
+              onClick={agregarFestivo}
+              disabled={!fechaFestivoNueva || !nombreFestivoNuevo.trim() || guardandoFestivo}
+              className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+            >
+              {guardandoFestivo ? "Guardando…" : "Agregar"}
+            </button>
+          </div>
+          {errorFestivo && <p className="text-sm text-red-600">{errorFestivo}</p>}
+          {festivos.length > 0 && (
+            <div className="divide-y divide-gray-50">
+              {festivos.map((f) => (
+                <div key={f.fecha} className="flex items-center justify-between py-1 text-sm">
+                  <span>
+                    {formatFechaLarga(f.fecha)} — {f.nombre}
+                  </span>
+                  <button onClick={() => eliminarFestivo(f.fecha)} className="text-xs text-red-500 hover:underline">
+                    Quitar
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {frase && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-30">
