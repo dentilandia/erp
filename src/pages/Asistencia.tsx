@@ -88,6 +88,14 @@ const ETIQUETAS_AUSENCIA: Record<"vacaciones" | "incapacidad" | "descanso", stri
   descanso: "Descanso sabatino",
 };
 
+// Un color distinto por tipo de ausencia en las observaciones del reporte —
+// antes las tres compartían el mismo azul y no se distinguían a simple vista.
+const COLOR_AUSENCIA: Record<"vacaciones" | "incapacidad" | "descanso", string> = {
+  vacaciones: "text-sky-700",
+  incapacidad: "text-rose-600",
+  descanso: "text-orange-600",
+};
+
 const ICONOS: Record<TipoAsistencia, typeof LogIn> = {
   llegada: LogIn,
   salida_almuerzo: Coffee,
@@ -790,17 +798,27 @@ export function Asistencia() {
             </tr>`,
           )
           .join("");
+        const COLOR_AUSENCIA_HEX: Record<"vacaciones" | "incapacidad" | "descanso", string> = {
+          vacaciones: "#0369a1",
+          incapacidad: "#e11d48",
+          descanso: "#ea580c",
+        };
         const observaciones = [
-          ...(ausenciasPorPersona[fila.perfilId] ?? []).map((a) => ({ fecha: a.fecha, texto: ETIQUETAS_AUSENCIA[a.tipo] })),
+          ...(ausenciasPorPersona[fila.perfilId] ?? []).map((a) => ({
+            fecha: a.fecha,
+            texto: ETIQUETAS_AUSENCIA[a.tipo],
+            color: COLOR_AUSENCIA_HEX[a.tipo],
+          })),
           ...(notasPorPersona[fila.perfilId] ?? []).map((n) => ({
             fecha: n.fecha,
             texto: n.nota + (n.minutosCompensados > 0 ? ` (+${n.minutosCompensados}min comp.)` : ""),
+            color: "#666",
           })),
         ].sort((a, b) => a.fecha.localeCompare(b.fecha));
         const observacionesHtml =
           observaciones.length > 0
             ? `<div class="obs">${observaciones
-                .map((o) => `<p><strong>${formatFechaLarga(o.fecha)}:</strong> ${escPdf(o.texto)}</p>`)
+                .map((o) => `<p style="color:${o.color}"><strong>${formatFechaLarga(o.fecha)}:</strong> ${escPdf(o.texto)}</p>`)
                 .join("")}</div>`
             : "";
         return `<div class="persona">
@@ -1734,13 +1752,13 @@ export function Asistencia() {
                     ...(ausenciasPorPersona[fila.perfilId] ?? []).map((a) => ({
                       fecha: a.fecha,
                       texto: ETIQUETAS_AUSENCIA[a.tipo],
-                      esAusencia: true,
+                      tipo: a.tipo as "vacaciones" | "incapacidad" | "descanso" | null,
                       minutosCompensados: 0,
                     })),
                     ...(notasPorPersona[fila.perfilId] ?? []).map((n) => ({
                       fecha: n.fecha,
                       texto: n.nota,
-                      esAusencia: false,
+                      tipo: null,
                       minutosCompensados: n.minutosCompensados,
                     })),
                   ].sort((a, b) => a.fecha.localeCompare(b.fecha));
@@ -1748,7 +1766,7 @@ export function Asistencia() {
                   return (
                     <div className="mt-2 pt-2 border-t border-gray-100 space-y-0.5">
                       {observaciones.map((o, i) => (
-                        <p key={`${o.fecha}-${i}`} className={`text-xs ${o.esAusencia ? "text-sky-700" : "text-gray-500"}`}>
+                        <p key={`${o.fecha}-${i}`} className={`text-xs ${o.tipo ? COLOR_AUSENCIA[o.tipo] : "text-gray-500"}`}>
                           <span className="font-medium">{formatFechaLarga(o.fecha)}:</span> {o.texto}
                           {o.minutosCompensados > 0 && (
                             <span className="text-violet-600 font-medium"> (+{o.minutosCompensados}min comp.)</span>
