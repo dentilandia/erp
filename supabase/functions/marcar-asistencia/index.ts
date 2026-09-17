@@ -66,7 +66,7 @@ Deno.serve(async (req: Request) => {
   const admin = createClient(supabaseUrl, serviceRoleKey);
   const { data: perfil, error: perfilError } = await admin
     .from("perfiles")
-    .select("id, sede_id, rol, nombre")
+    .select("id, sede_id, rol, nombre, restriccion_ip")
     .eq("id", userData.user.id)
     .single();
   if (perfilError || !perfil) {
@@ -75,11 +75,14 @@ Deno.serve(async (req: Request) => {
 
   const ipCliente = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
 
-  // La restricción de IP aplica a cualquiera con sede asignada, sin importar
-  // el rol — así un admin con sede fija (ej. quien trabaja siempre en una
-  // sede) también queda restringido a esa red, mientras que un admin sin
-  // sede asignada (se mueve entre sedes) sigue sin restricción.
+  // sede_id de la marca que se va a insertar — por defecto la de perfil,
+  // pero si la restricción es "contra cualquier sede" (ver abajo) se
+  // reemplaza por la sede cuya red realmente coincidió con la IP.
+  let sedeIdMarca = perfil.sede_id;
+
   if (perfil.sede_id) {
+    // Restricción a UNA sede fija — el caso normal de operación, y también
+    // el de un admin con sede fija asignada.
     const { data: sede } = await admin.from("sedes").select("ip_permitida").eq("id", perfil.sede_id).single();
     const permitidas = (sede?.ip_permitida ?? "")
       .split(",")
@@ -91,6 +94,30 @@ Deno.serve(async (req: Request) => {
         { status: 403, headers: cors },
       );
     }
+  } else if (perfil.restriccion_ip) {
+    // Restricción "contra cualquier sede" — para alguien que puede trabajar
+    // cualquier día en cualquiera de las sedes (ej. Sirley): pasa si su IP
+    // coincide con la red de AL MENOS una, y esa es la sede que queda
+    // registrada en la marca.
+    const { data: sedes } = await admin.from("sedes").select("id, ip_permitida");
+    let sedeCoincidente: string | null = null;
+    for (const s of sedes ?? []) {
+      const permitidas = (s.ip_permitida ?? "")
+        .split(",")
+        .map((x: string) => x.trim())
+        .filter(Boolean);
+      if (permitidas.length > 0 && ipCliente && permitidas.some((p) => ipCoincide(ipCliente, p))) {
+        sedeCoincidente = s.id;
+        break;
+      }
+    }
+    if (!sedeCoincidente) {
+      return new Response(
+        JSON.stringify({ error: "Debes estar conectado a la red de una sede para marcar asistencia." }),
+        { status: 403, headers: cors },
+      );
+    }
+    sedeIdMarca = sedeCoincidente;
   }
 
   // Solo un admin puede simular el día/hora de una marca (para probar el
@@ -108,7 +135,7 @@ Deno.serve(async (req: Request) => {
 
   const { error: insertError } = await admin.from("asistencia_registros").insert({
     perfil_id: perfil.id,
-    sede_id: perfil.sede_id,
+    sede_id: sedeIdMarca,
     tipo: body.tipo,
     ip: ipCliente,
     ...(marcadoEn ? { marcado_en: marcadoEn } : {}),
