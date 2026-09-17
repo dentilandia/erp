@@ -75,10 +75,11 @@ Deno.serve(async (req: Request) => {
 
   const ipCliente = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
 
-  // Los administrativos nunca quedan restringidos por IP, sin importar si
-  // tienen sede_id asignado — la restricción es solo para el personal
-  // asistencial/de operación.
-  if (perfil.rol !== "admin" && perfil.sede_id) {
+  // La restricción de IP aplica a cualquiera con sede asignada, sin importar
+  // el rol — así un admin con sede fija (ej. quien trabaja siempre en una
+  // sede) también queda restringido a esa red, mientras que un admin sin
+  // sede asignada (se mueve entre sedes) sigue sin restricción.
+  if (perfil.sede_id) {
     const { data: sede } = await admin.from("sedes").select("ip_permitida").eq("id", perfil.sede_id).single();
     const permitidas = (sede?.ip_permitida ?? "")
       .split(",")
