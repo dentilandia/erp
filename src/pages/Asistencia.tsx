@@ -1187,6 +1187,22 @@ export function Asistencia() {
 
   const yaMarcado = useMemo(() => new Set(registros.map((r) => r.tipo)), [registros]);
 
+  // Recordatorio de almuerzo: si ya pasaron las 11:55 y no ha marcado salida
+  // de almuerzo, o ya pasó la 1:00pm y salió pero no ha marcado la entrada —
+  // se calcula al entrar/recargar la pantalla (no en vivo mientras la deja
+  // abierta), así que si entra después de la hora igual le aparece.
+  const recordatorioAlmuerzo = useMemo(() => {
+    if (yaMarcado.has("salida")) return null;
+    const horaActual = horaBogotaAhora();
+    if (!yaMarcado.has("salida_almuerzo") && horaActual >= "11:55") {
+      return "Recuerda marcar la salida de almuerzo.";
+    }
+    if (yaMarcado.has("salida_almuerzo") && !yaMarcado.has("entrada_almuerzo") && horaActual >= "13:00") {
+      return "Recuerda marcar la entrada de almuerzo.";
+    }
+    return null;
+  }, [yaMarcado]);
+
   // Orden de la jornada, pero flexible: la salida final siempre queda
   // habilitada apenas hay llegada (sin exigir pasar por el almuerzo), para
   // no bloquear a quien solo trabaja media jornada compensando horas.
@@ -1261,6 +1277,12 @@ export function Asistencia() {
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
         <h2 className="font-semibold text-tinta">Marcar asistencia</h2>
         <p className="text-xs text-gray-400">Solo funciona conectado a la red de la sede.</p>
+
+        {recordatorioAlmuerzo && (
+          <div className="rounded-lg bg-amber-100 border border-amber-300 px-3 py-2 text-sm font-medium text-amber-800">
+            🍽️ {recordatorioAlmuerzo}
+          </div>
+        )}
 
         {perfil?.rol === "admin" && (
           <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 space-y-1">
