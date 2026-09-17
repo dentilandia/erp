@@ -384,16 +384,23 @@ export function Asistencia() {
 
   // Alerta administrativa: cada intento de marcar rechazado por no estar en
   // la red de la sede queda acá — para que Tomás/Sirley vean quién intentó
-  // marcar sin estar físicamente presente.
+  // marcar sin estar físicamente presente. Se puede marcar como "leído" para
+  // que desaparezca de la alerta activa sin borrarse — el historial completo
+  // (leídos incluidos) queda aparte, más abajo.
   const [intentosBloqueados, setIntentosBloqueados] = useState<
     { id: string; nombre: string; tipo: TipoAsistencia; ip: string | null; creado_en: string }[]
   >([]);
+  const [historialIntentos, setHistorialIntentos] = useState<
+    { id: string; nombre: string; tipo: TipoAsistencia; ip: string | null; creado_en: string; leido: boolean }[]
+  >([]);
+  const [verHistorialIntentos, setVerHistorialIntentos] = useState(false);
 
   async function cargarIntentosBloqueados() {
     if (perfil?.rol !== "admin") return;
     const { data } = await supabase
       .from("asistencia_intentos_bloqueados")
       .select("id, tipo, ip, creado_en, perfiles(nombre)")
+      .eq("leido", false)
       .order("creado_en", { ascending: false })
       .limit(20);
     setIntentosBloqueados(
@@ -403,10 +410,38 @@ export function Asistencia() {
     );
   }
 
+  async function cargarHistorialIntentos() {
+    const { data } = await supabase
+      .from("asistencia_intentos_bloqueados")
+      .select("id, tipo, ip, creado_en, leido, perfiles(nombre)")
+      .order("creado_en", { ascending: false })
+      .limit(100);
+    setHistorialIntentos(
+      ((data as unknown as {
+        id: string; tipo: TipoAsistencia; ip: string | null; creado_en: string; leido: boolean;
+        perfiles: { nombre: string } | null;
+      }[]) ?? []).map((r) => ({
+        id: r.id, nombre: r.perfiles?.nombre ?? "—", tipo: r.tipo, ip: r.ip, creado_en: r.creado_en, leido: r.leido,
+      })),
+    );
+  }
+
+  async function marcarLeidoIntento(id: string) {
+    await supabase.from("asistencia_intentos_bloqueados").update({ leido: true }).eq("id", id);
+    setIntentosBloqueados((prev) => prev.filter((i) => i.id !== id));
+    if (verHistorialIntentos) cargarHistorialIntentos();
+  }
+
   useEffect(() => {
     cargarIntentosBloqueados();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [perfil?.rol]);
+
+  useEffect(() => {
+    if (!verHistorialIntentos) return;
+    cargarHistorialIntentos();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verHistorialIntentos]);
 
   const [mesReporte, setMesReporte] = useState(() => new Date().toISOString().slice(0, 7));
   const [metaSemanal, setMetaSemanal] = useState(42);
@@ -1272,16 +1307,52 @@ export function Asistencia() {
       {perfil?.rol === "admin" && intentosBloqueados.length > 0 && (
         <div className="bg-red-50 border-2 border-red-300 rounded-xl p-4 space-y-2">
           <h2 className="font-bold text-red-700">⚠ Intentos de marcado fuera de la sede</h2>
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             {intentosBloqueados.map((i) => (
-              <p key={i.id} className="text-sm text-red-700">
-                <span className="font-semibold">{i.nombre}</span> intentó marcar "
-                {TIPOS_ASISTENCIA.find((t) => t.value === i.tipo)?.label ?? i.tipo}" el{" "}
-                {new Date(i.creado_en).toLocaleString("es-CO")}
-                {i.ip && ` desde la IP ${i.ip}`} — no estaba en la red de una sede.
-              </p>
+              <label key={i.id} className="flex items-start gap-2 text-sm text-red-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={false}
+                  onChange={() => marcarLeidoIntento(i.id)}
+                />
+                <span>
+                  <span className="font-semibold">{i.nombre}</span> intentó marcar "
+                  {TIPOS_ASISTENCIA.find((t) => t.value === i.tipo)?.label ?? i.tipo}" el{" "}
+                  {new Date(i.creado_en).toLocaleString("es-CO")}
+                  {i.ip && ` desde la IP ${i.ip}`} — no estaba en la red de una sede.
+                </span>
+              </label>
             ))}
           </div>
+          <p className="text-xs text-red-500">Marca la casilla para quitarla de acá — queda igual en el historial.</p>
+        </div>
+      )}
+
+      {perfil?.rol === "admin" && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <button
+            onClick={() => setVerHistorialIntentos((v) => !v)}
+            className="text-sm font-medium text-[var(--acento)]"
+          >
+            {verHistorialIntentos ? "Ocultar historial de intentos fuera de la sede" : "Ver historial de intentos fuera de la sede"}
+          </button>
+          {verHistorialIntentos && (
+            <div className="mt-3 divide-y divide-gray-50">
+              {historialIntentos.length === 0 && <p className="text-sm text-gray-400">Sin registros.</p>}
+              {historialIntentos.map((i) => (
+                <div key={i.id} className="flex items-center justify-between py-1.5 text-sm gap-2">
+                  <span className={i.leido ? "text-gray-400" : "text-red-700 font-medium"}>
+                    <span className="font-semibold">{i.nombre}</span> — {TIPOS_ASISTENCIA.find((t) => t.value === i.tipo)?.label ?? i.tipo}
+                    {i.ip && ` · IP ${i.ip}`}
+                  </span>
+                  <span className="text-xs text-gray-400 whitespace-nowrap">
+                    {new Date(i.creado_en).toLocaleString("es-CO")}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
