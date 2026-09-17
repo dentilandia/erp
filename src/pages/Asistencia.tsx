@@ -443,7 +443,6 @@ export function Asistencia() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [verHistorialIntentos]);
 
-  const [mesReporte, setMesReporte] = useState(() => new Date().toISOString().slice(0, 7));
   const [metaSemanal, setMetaSemanal] = useState(42);
   const [reporte, setReporte] = useState<FilaPersona[]>([]);
   const [cargandoReporte, setCargandoReporte] = useState(true);
@@ -456,7 +455,6 @@ export function Asistencia() {
 
   // El reporte se puede ver por mes calendario o por período de liquidación
   // real (ej. 31 ago - 27 sept) — el ciclo de pago no coincide con el mes.
-  const [modoReporte, setModoReporte] = useState<"mes" | "periodo">("mes");
   const [periodosLiquidacion, setPeriodosLiquidacion] = useState<PeriodoLiquidacion[]>([]);
   const [periodoReporteId, setPeriodoReporteId] = useState("");
   const [etiquetaPeriodoNueva, setEtiquetaPeriodoNueva] = useState("");
@@ -727,15 +725,12 @@ export function Asistencia() {
       });
   }, []);
 
-  // Rango real que se está mostrando: mes calendario, o el período de
-  // liquidación elegido (ej. 31 ago - 27 sept, que no coincide con el mes).
+  // Rango real que se está mostrando: el período de liquidación elegido
+  // (ej. 31 ago - 27 sept, que no coincide con el mes calendario).
   function rangoReporte(): { inicio: string; fin: string } | null {
-    if (modoReporte === "periodo") {
-      const p = periodosLiquidacion.find((x) => x.id === periodoReporteId);
-      if (!p) return null;
-      return { inicio: p.fecha_inicio, fin: sumarDias(p.fecha_fin, 1) };
-    }
-    return { inicio: `${mesReporte}-01`, fin: sumarDias(`${mesReporte}-01`, 31).slice(0, 7) + "-01" };
+    const p = periodosLiquidacion.find((x) => x.id === periodoReporteId);
+    if (!p) return null;
+    return { inicio: p.fecha_inicio, fin: sumarDias(p.fecha_fin, 1) };
   }
 
   async function cargarReporte() {
@@ -841,20 +836,14 @@ export function Asistencia() {
   useEffect(() => {
     cargarReporte();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mesReporte, metaSemanal, modoReporte, periodoReporteId]);
+  }, [metaSemanal, periodoReporteId]);
 
-  // PDF de la liquidación del período/mes que se está viendo, con un espacio
-  // de firma por persona junto a sus horas compensadas/incapacidades — para
+  // PDF de la liquidación del período que se está viendo, con un espacio de
+  // firma por persona junto a sus horas compensadas/incapacidades — para
   // que cada quien firme que está de acuerdo con lo que se le está pagando.
   function descargarReportePdf() {
     const rango = rangoReporte();
-    const etiquetaRango =
-      modoReporte === "periodo"
-        ? periodosLiquidacion.find((p) => p.id === periodoReporteId)?.etiqueta ?? "Período"
-        : new Date(Date.UTC(Number(mesReporte.slice(0, 4)), Number(mesReporte.slice(5, 7)) - 1, 1)).toLocaleDateString(
-            "es-CO",
-            { month: "long", year: "numeric", timeZone: "UTC" },
-          );
+    const etiquetaRango = periodosLiquidacion.find((p) => p.id === periodoReporteId)?.etiqueta ?? "Período";
 
     const bloques = reporte
       .map((fila) => {
@@ -1810,7 +1799,7 @@ export function Asistencia() {
 
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <h2 className="font-semibold text-tinta">Horas trabajadas por {modoReporte === "periodo" ? "período" : "mes"}</h2>
+          <h2 className="font-semibold text-tinta">Horas trabajadas por período</h2>
           <div className="flex items-center gap-2 flex-wrap">
             {perfil?.rol === "admin" && reporte.length > 0 && (
               <button
@@ -1820,55 +1809,27 @@ export function Asistencia() {
                 Descargar PDF (con firma)
               </button>
             )}
-            {periodosLiquidacion.length > 0 && (
-              <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
-                <button
-                  onClick={() => setModoReporte("mes")}
-                  className={`px-3 py-1.5 font-medium ${modoReporte === "mes" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
-                >
-                  Mes
-                </button>
-                <button
-                  onClick={() => setModoReporte("periodo")}
-                  className={`px-3 py-1.5 font-medium ${modoReporte === "periodo" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
-                >
-                  Período
-                </button>
-              </div>
-            )}
-            {modoReporte === "periodo" ? (
-              <select
-                value={periodoReporteId}
-                onChange={(e) => setPeriodoReporteId(e.target.value)}
-                className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
-              >
-                {periodosLiquidacion.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.etiqueta}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                type="month"
-                value={mesReporte}
-                onChange={(e) => setMesReporte(e.target.value)}
-                className="rounded-lg border border-gray-300 px-2 py-1 text-sm"
-              />
-            )}
+            <select
+              value={periodoReporteId}
+              onChange={(e) => setPeriodoReporteId(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+            >
+              {periodosLiquidacion.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.etiqueta}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
         <p className="text-xs text-gray-400">
-          Meta: {metaSemanal} h/semana (jornada legal). Las horas extra de cada semana se atribuyen al{" "}
-          {modoReporte === "periodo" ? "período" : "mes"} en que empieza esa semana (lunes) — así se sabe cuánto se
-          paga después.
+          Meta: {metaSemanal} h/semana (jornada legal). Las horas extra de cada semana se atribuyen al período en que
+          empieza esa semana (lunes) — así se sabe cuánto se paga después.
         </p>
         {cargandoReporte ? (
           <p className="text-sm text-gray-400">Cargando…</p>
         ) : reporte.length === 0 ? (
-          <p className="text-sm text-gray-400">
-            Sin marcas completas (llegada + salida) {modoReporte === "periodo" ? "en este período" : "este mes"}.
-          </p>
+          <p className="text-sm text-gray-400">Sin marcas completas (llegada + salida) en este período.</p>
         ) : (
           <div className="space-y-4">
             {reporte.map((fila) => (
@@ -1876,7 +1837,7 @@ export function Asistencia() {
                 <div className="flex items-center justify-between mb-2">
                   <p className="font-medium text-sm">{fila.nombre}</p>
                   <p className="text-sm">
-                    <span className="text-gray-500">Horas extra del {modoReporte === "periodo" ? "período" : "mes"}: </span>
+                    <span className="text-gray-500">Horas extra del período: </span>
                     <span className={`font-semibold ${fila.totalHorasExtra > 0 ? "text-emerald-700" : "text-gray-400"}`}>
                       {fila.totalHorasExtra.toFixed(1)} h
                     </span>
@@ -1903,7 +1864,7 @@ export function Asistencia() {
                           <td className="py-1">
                             {s.lunes} — {sumarDias(s.lunes, 6)}
                             {!s.cuentaParaEsteMes && (
-                              <span className="text-gray-400"> — se paga el {modoReporte === "periodo" ? "período" : "mes"} anterior</span>
+                              <span className="text-gray-400"> — se paga el período anterior</span>
                             )}
                           </td>
                           <td className="py-1 text-right">{s.horasTrabajadas.toFixed(1)}</td>

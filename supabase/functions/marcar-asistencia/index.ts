@@ -152,8 +152,12 @@ Deno.serve(async (req: Request) => {
   // sin importar si se saltó días por vacaciones/incapacidad o si es nueva.
   // Se cuentan las marcas de este tipo que ya tiene (la que se acaba de
   // insertar arriba ya cuenta), así que la primera vez le toca la frase #1.
+  // Arranca el lunes 21 de septiembre de 2026 — antes de esa fecha no se
+  // muestra ninguna frase, aunque ya estén cargadas.
+  const FECHA_INICIO_FRASES = "2026-09-21";
+  const hoyBogota = new Date().toLocaleDateString("en-CA", { timeZone: "America/Bogota" });
   let frase: string | null = null;
-  if (body.tipo === "llegada" || body.tipo === "salida") {
+  if ((body.tipo === "llegada" || body.tipo === "salida") && hoyBogota >= FECHA_INICIO_FRASES) {
     const { data: frases } = await admin
       .from("frases_motivacionales")
       .select("texto")
