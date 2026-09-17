@@ -22,14 +22,19 @@ function jornadaOrdinariaHoras(fechaYMD: string): number {
 }
 
 /** Horas realmente trabajadas ese día según sus marcas (mismo cálculo que
- *  usa el reporte mensual: llegada→salida, descontando almuerzo si hay). */
-function horasTrabajadasDeMarcas(marcas: { tipo: TipoAsistencia; marcado_en: string }[]): number {
+ *  usa el reporte mensual: llegada→salida, descontando almuerzo si hay).
+ *  Si es entre semana y no marcó las dos horas de almuerzo, se asume 1h fija
+ *  en vez de contarla como trabajada (el sábado no tiene almuerzo, no
+ *  aplica). */
+function horasTrabajadasDeMarcas(marcas: { tipo: TipoAsistencia; marcado_en: string }[], fecha: string): number {
   const porTipo: Partial<Record<TipoAsistencia, string>> = {};
   for (const m of marcas) if (!porTipo[m.tipo]) porTipo[m.tipo] = m.marcado_en;
   if (!porTipo.llegada || !porTipo.salida) return 0;
   let horas = (new Date(porTipo.salida).getTime() - new Date(porTipo.llegada).getTime()) / 3_600_000;
   if (porTipo.salida_almuerzo && porTipo.entrada_almuerzo) {
     horas -= (new Date(porTipo.entrada_almuerzo).getTime() - new Date(porTipo.salida_almuerzo).getTime()) / 3_600_000;
+  } else if (diaDeSemana(fecha) !== 6) {
+    horas -= 1;
   }
   return Math.max(0, horas);
 }
@@ -69,7 +74,7 @@ async function recalcularCompensadoDia(perfilId: string, fecha: string): Promise
     Math.max(
       0,
       jornadaOrdinariaHoras(fecha) -
-        horasTrabajadasDeMarcas((marcas as { tipo: TipoAsistencia; marcado_en: string }[]) ?? []),
+        horasTrabajadasDeMarcas((marcas as { tipo: TipoAsistencia; marcado_en: string }[]) ?? [], fecha),
     ) * 60,
   );
   if (recalculado !== minutosGuardados) {
@@ -250,6 +255,10 @@ function armarReporteHoras(
         horasReales = (new Date(marcas.salida).getTime() - new Date(marcas.llegada).getTime()) / 3_600_000;
         if (marcas.salida_almuerzo && marcas.entrada_almuerzo) {
           horasReales -= (new Date(marcas.entrada_almuerzo).getTime() - new Date(marcas.salida_almuerzo).getTime()) / 3_600_000;
+        } else {
+          // Este bucle ya excluyó los festivos de fin de semana arriba, así
+          // que si llegamos acá siempre es un día entre semana.
+          horasReales -= 1;
         }
       }
       const credito = Math.max(0, jornadaOrdinariaHoras(fecha) - horasReales);
@@ -267,6 +276,10 @@ function armarReporteHoras(
     let horas = (new Date(marcas.salida).getTime() - new Date(marcas.llegada).getTime()) / 3_600_000;
     if (marcas.salida_almuerzo && marcas.entrada_almuerzo) {
       horas -= (new Date(marcas.entrada_almuerzo).getTime() - new Date(marcas.salida_almuerzo).getTime()) / 3_600_000;
+    } else if (diaDeSemana(dia) !== 6) {
+      // No marcó las dos horas de almuerzo entre semana — se asume 1h fija
+      // en vez de contarla como trabajada (el sábado no aplica).
+      horas -= 1;
     }
     const minutosDia = compensadosPorDia.get(clave) ?? 0;
     horas += minutosDia / 60;
@@ -582,7 +595,7 @@ export function Asistencia() {
     // el reporte, para no descontarlo dos veces (ya estaba a su favor de un
     // período anterior).
     if (esCompensado) {
-      const horasTrabajadas = horasTrabajadasDeMarcas(marcasPersona);
+      const horasTrabajadas = horasTrabajadasDeMarcas(marcasPersona, fechaAdmin);
       if (horasTrabajadas === 0) {
         setErrorAdmin('Para marcar "compensado" primero hay que cargar la llegada y la salida de ese día.');
         return;
@@ -591,7 +604,7 @@ export function Asistencia() {
     setGuardandoAdmin(true);
     setErrorAdmin(null);
     const minutosCompensados = esCompensado
-      ? Math.round(Math.max(0, jornadaOrdinariaHoras(fechaAdmin) - horasTrabajadasDeMarcas(marcasPersona)) * 60)
+      ? Math.round(Math.max(0, jornadaOrdinariaHoras(fechaAdmin) - horasTrabajadasDeMarcas(marcasPersona, fechaAdmin)) * 60)
       : 0;
     const { error } = await supabase.from("asistencia_notas_dia").upsert(
       {
