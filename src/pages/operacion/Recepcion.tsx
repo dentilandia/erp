@@ -1151,6 +1151,29 @@ function ModalCobro({
           if (error) throw error;
         }
         // Reemplaza los pagos existentes de este cargo por el estado actual del formulario.
+        // Si alguno de los que se van a reemplazar era con saldo a favor, hay
+        // que devolverle ese valor al saldo antes de borrarlo — si no, queda
+        // consumido en la tabla aunque el pago ya no exista.
+        const { data: pagosAnteriores } = await supabase
+          .from("cargo_pagos")
+          .select("saldo_id, valor")
+          .eq("cargo_id", cargoId)
+          .eq("medio_pago", "saldo_favor")
+          .not("saldo_id", "is", null);
+        for (const pa of pagosAnteriores ?? []) {
+          const { data: saldoActual } = await supabase
+            .from("saldos_favor")
+            .select("valor_disponible")
+            .eq("id", pa.saldo_id)
+            .single();
+          if (saldoActual) {
+            const { error } = await supabase
+              .from("saldos_favor")
+              .update({ valor_disponible: Number(saldoActual.valor_disponible) + Number(pa.valor) })
+              .eq("id", pa.saldo_id);
+            if (error) throw error;
+          }
+        }
         await supabase.from("cargo_pagos").delete().eq("cargo_id", cargoId);
         for (const p of c.pagos) {
           if (!p.valor) continue;
@@ -1169,6 +1192,13 @@ function ModalCobro({
                 .from("cargo_pagos")
                 .insert({ cargo_id: cargoId, medio_pago: "saldo_favor", valor: tomar, saldo_id: s.id });
               if (error) throw error;
+              // Descuenta lo tomado del saldo — sin esto el pago se registra
+              // pero el saldo a favor nunca baja.
+              const { error: errorSaldo } = await supabase
+                .from("saldos_favor")
+                .update({ valor_disponible: Number(s.valor_disponible) - tomar })
+                .eq("id", s.id);
+              if (errorSaldo) throw errorSaldo;
               restante -= tomar;
             }
             continue;
