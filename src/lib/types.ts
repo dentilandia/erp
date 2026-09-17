@@ -427,6 +427,20 @@ export interface Interconsulta {
   fin_interconsulta: boolean;
 }
 
+/** Remisión a otra especialidad — mismo patrón que Interconsulta: se crea
+ *  desde Consultorio y Recepción la administra hasta que se cierra. */
+export interface Remision {
+  id: string;
+  visita_id: string | null;
+  sede_id: string;
+  paciente_id: string;
+  doctora_id: string;
+  especialidad: string;
+  fecha: string;
+  respuesta: string | null;
+  cerrada: boolean;
+}
+
 export interface CierreDiario {
   id: string;
   sede_id: string;

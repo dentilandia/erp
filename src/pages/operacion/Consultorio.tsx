@@ -600,6 +600,16 @@ function ModalAtencion({
         fecha: visita.fecha,
       });
     }
+    if (remitido && remisionEspecialidad.trim()) {
+      await supabase.from("remisiones").insert({
+        visita_id: visitaId,
+        sede_id: sedeId,
+        paciente_id: visita.paciente_id,
+        doctora_id: visita.doctora_id,
+        especialidad: remisionEspecialidad.trim(),
+        fecha: visita.fecha,
+      });
+    }
 
     const { data: actualizada, error: errorEstado } = await supabase
       .from("visitas")
@@ -909,6 +919,7 @@ function ModalEditarValor({
   const [insumoIds, setInsumoIds] = useState<Record<string, string>>({});
   const [remitido, setRemitido] = useState(false);
   const [remisionEspecialidad, setRemisionEspecialidad] = useState("");
+  const [remisionId, setRemisionId] = useState<string | null>(null);
   const [interconsulta, setInterconsulta] = useState(false);
   const [interconsultaEspecialidad, setInterconsultaEspecialidad] = useState("");
   const [interconsultaId, setInterconsultaId] = useState<string | null>(null);
@@ -1014,6 +1025,14 @@ function ModalEditarValor({
         setInterconsulta(true);
         setInterconsultaId(inter.id);
         setInterconsultaEspecialidad(inter.especialidad);
+      }
+      const { data: remision } = await supabase
+        .from("remisiones")
+        .select("id, especialidad")
+        .eq("visita_id", visitaId)
+        .maybeSingle();
+      if (remision) {
+        setRemisionId(remision.id);
       }
       const { data: preciosData } = await supabase.from("precios_config").select("clave, valor");
       const preciosMap: Record<string, number> = {};
@@ -1233,6 +1252,27 @@ function ModalEditarValor({
       }
     } else if (interconsultaId && interconsultaEspecialidad.trim()) {
       await supabase.from("interconsultas").update({ especialidad: interconsultaEspecialidad.trim() }).eq("id", interconsultaId);
+    }
+
+    // Remisión — mismo criterio que interconsulta: no se borra una vez
+    // creada (Recepción puede ya tener seguimiento hecho), solo se crea si
+    // no existía o se corrige la especialidad.
+    if (remitido && remisionEspecialidad.trim() && !remisionId && visitaDatos) {
+      const { error: errorRemision } = await supabase.from("remisiones").insert({
+        visita_id: visitaId,
+        sede_id: visitaDatos.sede_id,
+        paciente_id: visitaDatos.paciente_id,
+        doctora_id: visitaDatos.doctora_id,
+        especialidad: remisionEspecialidad.trim(),
+        fecha: visitaDatos.fecha,
+      });
+      if (errorRemision) {
+        setGuardando(false);
+        setError(errorRemision.message);
+        return;
+      }
+    } else if (remisionId && remisionEspecialidad.trim()) {
+      await supabase.from("remisiones").update({ especialidad: remisionEspecialidad.trim() }).eq("id", remisionId);
     }
 
     setGuardando(false);

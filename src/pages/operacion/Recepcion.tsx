@@ -490,6 +490,7 @@ export function Recepcion() {
       </section>
 
       <PanelInterconsultas sedeId={sedeActiva.id} />
+      <PanelRemisiones sedeId={sedeActiva.id} />
 
       <section>
         <h3 className="text-sm font-semibold text-gray-500 mb-2">En espera ({enEspera.length})</h3>
@@ -854,8 +855,12 @@ function PanelInterconsultas({ sedeId }: { sedeId: string }) {
   }
 
   return (
-    <section className="bg-white rounded-xl border border-dashed border-gray-300 p-4">
-      <button onClick={() => setAbierto((v) => !v)} className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]">
+    <section className="bg-white rounded-xl border-2 p-4" style={{ borderColor: "var(--acento)" }}>
+      <button
+        onClick={() => setAbierto((v) => !v)}
+        className="flex items-center gap-2 text-sm font-semibold text-white px-3 py-1.5 rounded-lg"
+        style={{ background: "var(--acento)" }}
+      >
         {abierto ? "Ocultar interconsultas" : "Ver interconsultas"}
       </button>
       {abierto && (
@@ -908,6 +913,131 @@ function PanelInterconsultas({ sedeId }: { sedeId: string }) {
               </div>
             ))}
             {filas.length === 0 && <p className="text-sm text-gray-400">Sin interconsultas{soloPendientes ? " pendientes" : ""}.</p>}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+interface RemisionFila {
+  id: string;
+  fecha: string;
+  paciente: string;
+  doctora: string;
+  especialidad: string;
+  respuesta: string;
+  cerrada: boolean;
+}
+
+/** Reporte histórico de remisiones a otra especialidad — mismo patrón que
+ *  PanelInterconsultas: se crea desde Consultorio, Recepción la administra
+ *  hasta que se cierra. */
+function PanelRemisiones({ sedeId }: { sedeId: string }) {
+  const [abierto, setAbierto] = useState(false);
+  const [filas, setFilas] = useState<RemisionFila[]>([]);
+  const [soloPendientes, setSoloPendientes] = useState(true);
+  const [guardandoId, setGuardandoId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!abierto) return;
+    cargar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abierto, sedeId, soloPendientes]);
+
+  async function cargar() {
+    let q = supabase
+      .from("remisiones")
+      .select("id, fecha, especialidad, respuesta, cerrada, pacientes(nombre), doctoras(nombre)")
+      .eq("sede_id", sedeId)
+      .order("fecha", { ascending: false });
+    if (soloPendientes) q = q.eq("cerrada", false);
+    const { data } = await q;
+    setFilas(
+      ((data as unknown as {
+        id: string; fecha: string; especialidad: string; respuesta: string | null; cerrada: boolean;
+        pacientes: { nombre: string } | null; doctoras: { nombre: string } | null;
+      }[]) ?? []).map((r) => ({
+        id: r.id,
+        fecha: r.fecha,
+        paciente: r.pacientes?.nombre ?? "—",
+        doctora: r.doctoras?.nombre ?? "—",
+        especialidad: r.especialidad,
+        respuesta: r.respuesta ?? "",
+        cerrada: r.cerrada,
+      })),
+    );
+  }
+
+  function actualizarFila(id: string, cambios: Partial<RemisionFila>) {
+    setFilas((prev) => prev.map((f) => (f.id === id ? { ...f, ...cambios } : f)));
+  }
+
+  async function guardarFila(id: string) {
+    const f = filas.find((x) => x.id === id);
+    if (!f) return;
+    setGuardandoId(id);
+    await supabase
+      .from("remisiones")
+      .update({ respuesta: f.respuesta.trim() || null, cerrada: f.cerrada, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    setGuardandoId(null);
+    if (soloPendientes && f.cerrada) {
+      setFilas((prev) => prev.filter((x) => x.id !== id));
+    }
+  }
+
+  return (
+    <section className="bg-white rounded-xl border-2 p-4" style={{ borderColor: "var(--acento)" }}>
+      <button
+        onClick={() => setAbierto((v) => !v)}
+        className="flex items-center gap-2 text-sm font-semibold text-white px-3 py-1.5 rounded-lg"
+        style={{ background: "var(--acento)" }}
+      >
+        {abierto ? "Ocultar remisiones" : "Ver remisiones"}
+      </button>
+      {abierto && (
+        <div className="mt-3 space-y-3">
+          <label className="flex items-center gap-2 text-xs text-gray-500">
+            <input type="checkbox" checked={soloPendientes} onChange={(e) => setSoloPendientes(e.target.checked)} />
+            Solo pendientes (sin cerrar)
+          </label>
+          <div className="space-y-2">
+            {filas.map((f) => (
+              <div key={f.id} className="rounded-lg border border-gray-200 p-3 space-y-2">
+                <div className="flex items-center justify-between text-sm flex-wrap gap-1">
+                  <span className="font-medium">{f.paciente}</span>
+                  <span className="text-xs text-gray-400">
+                    {f.fecha} · {f.doctora} · remitido a {f.especialidad}
+                  </span>
+                </div>
+                <textarea
+                  value={f.respuesta}
+                  onChange={(e) => actualizarFila(f.id, { respuesta: e.target.value })}
+                  placeholder="Nota de la remisión…"
+                  rows={2}
+                  className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+                <div className="flex items-center gap-4 flex-wrap">
+                  <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                    <input
+                      type="checkbox"
+                      checked={f.cerrada}
+                      onChange={(e) => actualizarFila(f.id, { cerrada: e.target.checked })}
+                    />
+                    Remisión resuelta
+                  </label>
+                  <button
+                    onClick={() => guardarFila(f.id)}
+                    disabled={guardandoId === f.id}
+                    className="ml-auto rounded-md bg-[var(--acento)] text-white px-3 py-1 text-xs font-medium disabled:opacity-40"
+                  >
+                    {guardandoId === f.id ? "Guardando…" : "Guardar"}
+                  </button>
+                </div>
+              </div>
+            ))}
+            {filas.length === 0 && <p className="text-sm text-gray-400">Sin remisiones{soloPendientes ? " pendientes" : ""}.</p>}
           </div>
         </div>
       )}
