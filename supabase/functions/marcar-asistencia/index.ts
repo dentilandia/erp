@@ -29,8 +29,8 @@ function ipCoincide(ipCliente: string, permitida: string): boolean {
 // el cliente) antes de aceptar el registro.
 //
 // Al marcar "llegada" o "salida" (fin de jornada) devuelve además una frase
-// motivadora/de agradecimiento del día — rotan por índice de día del año,
-// así que no hay que asignarle fecha a cada una a mano.
+// motivadora/de agradecimiento — avanzan en orden según cuántas veces esa
+// persona ya marcó ese tipo (ver más abajo), no por la fecha del calendario.
 Deno.serve(async (req: Request) => {
   const cors = {
     "Access-Control-Allow-Origin": "*",
@@ -147,6 +147,11 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: insertError.message }), { status: 500, headers: cors });
   }
 
+  // Las frases avanzan en orden PERSONAL, no por día del calendario — así
+  // cada quien vive el mismo hilo conductor desde la primera vez que marca,
+  // sin importar si se saltó días por vacaciones/incapacidad o si es nueva.
+  // Se cuentan las marcas de este tipo que ya tiene (la que se acaba de
+  // insertar arriba ya cuenta), así que la primera vez le toca la frase #1.
   let frase: string | null = null;
   if (body.tipo === "llegada" || body.tipo === "salida") {
     const { data: frases } = await admin
@@ -156,8 +161,13 @@ Deno.serve(async (req: Request) => {
       .eq("activa", true)
       .order("orden");
     if (frases && frases.length > 0) {
-      const diaDelAnio = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
-      frase = frases[diaDelAnio % frases.length].texto;
+      const { count } = await admin
+        .from("asistencia_registros")
+        .select("id", { count: "exact", head: true })
+        .eq("perfil_id", perfil.id)
+        .eq("tipo", body.tipo);
+      const indice = Math.max(0, (count ?? 1) - 1) % frases.length;
+      frase = frases[indice].texto;
     }
   }
 
