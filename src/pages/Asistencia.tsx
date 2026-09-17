@@ -1182,7 +1182,24 @@ export function Asistencia() {
     });
     setMarcando(null);
     if (error || data?.error) {
-      setMensaje({ tipo: "error", texto: data?.error ?? error?.message ?? "No se pudo registrar la marca." });
+      // supabase-js no pone el body del error (ej. "Debes estar conectado a
+      // la red de la sede...") en `error.message` cuando el edge function
+      // responde con un código distinto de 2xx — solo dice "Edge Function
+      // returned a non-2xx status code". El mensaje real hay que sacarlo del
+      // Response crudo en error.context.
+      let texto = data?.error ?? "No se pudo registrar la marca.";
+      const contexto = (error as { context?: Response } | null)?.context;
+      if (!data?.error && contexto) {
+        try {
+          const cuerpo = await contexto.json();
+          texto = cuerpo?.error ?? error?.message ?? texto;
+        } catch {
+          texto = error?.message ?? texto;
+        }
+      } else if (!data?.error && error?.message) {
+        texto = error.message;
+      }
+      setMensaje({ tipo: "error", texto });
       return;
     }
     const etiqueta = TIPOS_ASISTENCIA.find((t) => t.value === tipo)?.label ?? tipo;
