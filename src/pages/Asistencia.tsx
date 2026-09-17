@@ -369,6 +369,32 @@ export function Asistencia() {
   const [registros, setRegistros] = useState<AsistenciaRegistro[]>([]);
   const [frase, setFrase] = useState<{ tipo: "llegada" | "salida"; texto: string } | null>(null);
 
+  // Alerta administrativa: cada intento de marcar rechazado por no estar en
+  // la red de la sede queda acá — para que Tomás/Sirley vean quién intentó
+  // marcar sin estar físicamente presente.
+  const [intentosBloqueados, setIntentosBloqueados] = useState<
+    { id: string; nombre: string; tipo: TipoAsistencia; ip: string | null; creado_en: string }[]
+  >([]);
+
+  async function cargarIntentosBloqueados() {
+    if (perfil?.rol !== "admin") return;
+    const { data } = await supabase
+      .from("asistencia_intentos_bloqueados")
+      .select("id, tipo, ip, creado_en, perfiles(nombre)")
+      .order("creado_en", { ascending: false })
+      .limit(20);
+    setIntentosBloqueados(
+      ((data as unknown as {
+        id: string; tipo: TipoAsistencia; ip: string | null; creado_en: string; perfiles: { nombre: string } | null;
+      }[]) ?? []).map((r) => ({ id: r.id, nombre: r.perfiles?.nombre ?? "—", tipo: r.tipo, ip: r.ip, creado_en: r.creado_en })),
+    );
+  }
+
+  useEffect(() => {
+    cargarIntentosBloqueados();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perfil?.rol]);
+
   const [mesReporte, setMesReporte] = useState(() => new Date().toISOString().slice(0, 7));
   const [metaSemanal, setMetaSemanal] = useState(42);
   const [reporte, setReporte] = useState<FilaPersona[]>([]);
@@ -1200,6 +1226,7 @@ export function Asistencia() {
         texto = error.message;
       }
       setMensaje({ tipo: "error", texto });
+      cargarIntentosBloqueados();
       return;
     }
     const etiqueta = TIPOS_ASISTENCIA.find((t) => t.value === tipo)?.label ?? tipo;
@@ -1213,6 +1240,22 @@ export function Asistencia() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
+      {perfil?.rol === "admin" && intentosBloqueados.length > 0 && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-xl p-4 space-y-2">
+          <h2 className="font-bold text-red-700">⚠ Intentos de marcado fuera de la sede</h2>
+          <div className="space-y-1">
+            {intentosBloqueados.map((i) => (
+              <p key={i.id} className="text-sm text-red-700">
+                <span className="font-semibold">{i.nombre}</span> intentó marcar "
+                {TIPOS_ASISTENCIA.find((t) => t.value === i.tipo)?.label ?? i.tipo}" el{" "}
+                {new Date(i.creado_en).toLocaleString("es-CO")}
+                {i.ip && ` desde la IP ${i.ip}`} — no estaba en la red de una sede.
+              </p>
+            ))}
+          </div>
+        </div>
+      )}
+
       {perfil?.rol === "admin" && (
       <div className="max-w-md mx-auto space-y-4">
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
@@ -1264,7 +1307,9 @@ export function Asistencia() {
         </div>
 
         {mensaje && (
-          <p className={`text-sm ${mensaje.tipo === "ok" ? "text-emerald-700" : "text-red-600"}`}>{mensaje.texto}</p>
+          <p className={mensaje.tipo === "ok" ? "text-sm text-emerald-700" : "text-sm font-bold text-red-600"}>
+            {mensaje.texto}
+          </p>
         )}
       </div>
 

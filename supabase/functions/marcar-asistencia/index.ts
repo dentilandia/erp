@@ -80,6 +80,15 @@ Deno.serve(async (req: Request) => {
   // reemplaza por la sede cuya red realmente coincidió con la IP.
   let sedeIdMarca = perfil.sede_id;
 
+  // Mensaje que ve quien intenta marcar desde fuera de la sede — además
+  // queda un registro en asistencia_intentos_bloqueados para que admin lo
+  // pueda revisar (quién intentó marcar sin estar físicamente presente).
+  const MENSAJE_FUERA_DE_SEDE = "¡Pillada! Debes estar en el consultorio para marcar asistencia.";
+  async function rechazarPorIp() {
+    await admin.from("asistencia_intentos_bloqueados").insert({ perfil_id: perfil.id, tipo: body.tipo, ip: ipCliente });
+    return new Response(JSON.stringify({ error: MENSAJE_FUERA_DE_SEDE }), { status: 403, headers: cors });
+  }
+
   if (perfil.sede_id) {
     // Restricción a UNA sede fija — el caso normal de operación, y también
     // el de un admin con sede fija asignada.
@@ -89,10 +98,7 @@ Deno.serve(async (req: Request) => {
       .map((s: string) => s.trim())
       .filter(Boolean);
     if (permitidas.length > 0 && (!ipCliente || !permitidas.some((p) => ipCoincide(ipCliente, p)))) {
-      return new Response(
-        JSON.stringify({ error: "Debes estar conectado a la red de la sede para marcar asistencia." }),
-        { status: 403, headers: cors },
-      );
+      return await rechazarPorIp();
     }
   } else if (perfil.restriccion_ip) {
     // Restricción "contra cualquier sede" — para alguien que puede trabajar
@@ -112,10 +118,7 @@ Deno.serve(async (req: Request) => {
       }
     }
     if (!sedeCoincidente) {
-      return new Response(
-        JSON.stringify({ error: "Debes estar conectado a la red de una sede para marcar asistencia." }),
-        { status: 403, headers: cors },
-      );
+      return await rechazarPorIp();
     }
     sedeIdMarca = sedeCoincidente;
   }
