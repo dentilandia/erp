@@ -21,6 +21,7 @@ import { Reportes } from "./pages/Reportes";
 import { AdministracionInventarios } from "./pages/AdministracionInventarios";
 import { Asistencia } from "./pages/Asistencia";
 import { Parametros } from "./pages/Parametros";
+import { LaboratorioExterno } from "./pages/LaboratorioExterno";
 
 /** Bloquea de verdad las rutas de administración/parámetros para el equipo de
  *  operación — antes solo estaban ocultas del menú, no impedidas por ruta. */
@@ -248,7 +249,11 @@ function Gate({ children }: { children: React.ReactNode }) {
   if (recuperandoClave) return <SetPasswordPage />;
   if (!session) return <LoginPage />;
   if (error || !perfil) return <SinPerfil error={error} />;
-  if (perfil.rol !== "admin" && (!modoOperacion || !sedeElegidaId)) return <SeleccionarModoOperacion />;
+  // El usuario de un laboratorio externo (ej. Ruby) no elige sede/modo — no
+  // es del equipo interno, tiene su propia pantalla aparte y nunca llega a
+  // las rutas normales del ERP (ni por URL directa: acá se intercepta antes).
+  if (perfil.rol === "laboratorio") return <LaboratorioExterno />;
+  if (perfil.rol === "operacion" && (!modoOperacion || !sedeElegidaId)) return <SeleccionarModoOperacion />;
   return <>{children}</>;
 }
 

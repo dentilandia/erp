@@ -20,6 +20,9 @@ interface LabRow {
   consecutivo: string | null;
   valor_factura: number | null;
   fecha_emision_factura: string | null;
+  fecha_entrega_laboratorio: string | null;
+  fecha_cita_paciente: string | null;
+  fecha_recepcion_laboratorio: string | null;
   fecha_recibido: string | null;
   fecha_instalado: string | null;
   mes_liquidacion: string | null;
@@ -33,10 +36,17 @@ interface LabRow {
 }
 
 const ESTADOS: { value: EstadoLab; label: string }[] = [
-  { value: "enviado", label: "Por recibir" },
+  { value: "enviado", label: "Pedido, por entregar" },
+  { value: "entregado", label: "En el laboratorio" },
   { value: "recibido", label: "Por instalar" },
   { value: "instalado", label: "Instalados" },
 ];
+
+/** Hoy solo el laboratorio de Ruby tiene usuario externo y necesita la fecha
+ *  de la cita del paciente al entregarle el aparato (ver perfiles.laboratorio_id). */
+function esLaboratorioRuby(laboratorios: Laboratorio[], laboratorioId: string): boolean {
+  return laboratorios.find((l) => l.id === laboratorioId)?.nombre.trim().toLowerCase() === "ruby";
+}
 
 export function LaboratorioOperativo() {
   const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
@@ -54,8 +64,10 @@ export function LaboratorioOperativo() {
   const [editValorFactura, setEditValorFactura] = useState("");
   const [editFechaEmision, setEditFechaEmision] = useState("");
   const [editMesLiquidacion, setEditMesLiquidacion] = useState("");
+  const [editFechaCita, setEditFechaCita] = useState("");
   const [guardandoEdit, setGuardandoEdit] = useState(false);
   const [marcandoRecibido, setMarcandoRecibido] = useState(false);
+  const [marcandoEntregado, setMarcandoEntregado] = useState(false);
 
   const [mostrarForm, setMostrarForm] = useState(false);
   const [nuevoPaciente, setNuevoPaciente] = useState<Paciente | null>(null);
@@ -86,7 +98,7 @@ export function LaboratorioOperativo() {
     let q = supabase
       .from("lab_ordenes")
       .select(
-        "id, estado, fecha_envio, factura_numero, consecutivo, valor_factura, fecha_emision_factura, fecha_recibido, fecha_instalado, mes_liquidacion, doctora_id, laboratorio_id, paciente_id, tipo_servicio, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), laboratorios(nombre)",
+        "id, estado, fecha_envio, factura_numero, consecutivo, valor_factura, fecha_emision_factura, fecha_entrega_laboratorio, fecha_cita_paciente, fecha_recepcion_laboratorio, fecha_recibido, fecha_instalado, mes_liquidacion, doctora_id, laboratorio_id, paciente_id, tipo_servicio, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), laboratorios(nombre)",
       )
       .eq("sede_id", sedeActiva.id)
       .order("fecha_envio", { ascending: false });
@@ -130,6 +142,7 @@ export function LaboratorioOperativo() {
   function empezarEdicion(o: LabRow) {
     setEditandoId(o.id);
     setMarcandoRecibido(false);
+    setMarcandoEntregado(false);
     setEditDoctoraId(o.doctora_id);
     setEditLaboratorioId(o.laboratorio_id);
     setEditTipoServicio(o.tipo_servicio);
@@ -137,6 +150,21 @@ export function LaboratorioOperativo() {
     setEditValorFactura(o.valor_factura === null ? "" : String(o.valor_factura));
     setEditFechaEmision(o.fecha_emision_factura ?? "");
     setEditMesLiquidacion(o.mes_liquidacion ?? "");
+    setEditFechaCita(o.fecha_cita_paciente ?? "");
+  }
+
+  // Paso intermedio entre "pedido" e "instalado": cuando alguien de la
+  // clínica lo lleva físicamente al laboratorio. Para el laboratorio de Ruby
+  // (que tiene usuario externo) se exige la fecha de la cita del paciente,
+  // para que ella sepa la fecha límite real de entrega.
+  function empezarEntregar(o: LabRow) {
+    setEditandoId(o.id);
+    setMarcandoRecibido(false);
+    setMarcandoEntregado(true);
+    setEditDoctoraId(o.doctora_id);
+    setEditLaboratorioId(o.laboratorio_id);
+    setEditTipoServicio(o.tipo_servicio);
+    setEditFechaCita(o.fecha_cita_paciente ?? "");
   }
 
   // Reemplaza el flujo anterior de 3 window.prompt() seguidos — si salías a
@@ -145,6 +173,7 @@ export function LaboratorioOperativo() {
   function empezarRecibir(o: LabRow) {
     setEditandoId(o.id);
     setMarcandoRecibido(true);
+    setMarcandoEntregado(false);
     setEditDoctoraId(o.doctora_id);
     setEditLaboratorioId(o.laboratorio_id);
     setEditTipoServicio(o.tipo_servicio);
@@ -190,10 +219,18 @@ export function LaboratorioOperativo() {
       cambios.estado = "recibido";
       cambios.fecha_recibido = today();
     }
+    if (marcandoEntregado) {
+      cambios.estado = "entregado";
+      cambios.fecha_entrega_laboratorio = today();
+      if (esLaboratorioRuby(laboratorios, editLaboratorioId)) {
+        cambios.fecha_cita_paciente = editFechaCita || null;
+      }
+    }
     await supabase.from("lab_ordenes").update(cambios).eq("id", id);
     setGuardandoEdit(false);
     setEditandoId(null);
     setMarcandoRecibido(false);
+    setMarcandoEntregado(false);
     cargarOrdenes();
   }
 
@@ -329,7 +366,7 @@ export function LaboratorioOperativo() {
 
       {filtroPaciente.trim() && (
         <p className="text-xs text-gray-400 -mb-2">
-          Buscando "{filtroPaciente.trim()}" en las tres listas de abajo (por recibir, por instalar, instalados).
+          Buscando "{filtroPaciente.trim()}" en las cuatro listas de abajo (por entregar, en el laboratorio, por instalar, instalados).
         </p>
       )}
       {ESTADOS.map((e) => {
@@ -424,18 +461,35 @@ export function LaboratorioOperativo() {
                           />
                         </div>
                       )}
+                      {marcandoEntregado && esLaboratorioRuby(laboratorios, editLaboratorioId) && (
+                        <div>
+                          <label className="block text-xs font-medium text-amber-700 mb-1">
+                            Fecha de la cita del paciente (obligatoria para el laboratorio de Ruby)
+                          </label>
+                          <input
+                            type="date"
+                            value={editFechaCita}
+                            onChange={(e) => setEditFechaCita(e.target.value)}
+                            className="w-full rounded-md border border-amber-300 px-2 py-1.5 text-sm"
+                          />
+                        </div>
+                      )}
                       <div className="flex gap-2">
                         <button
                           onClick={() => guardarEdicion(o.id, o.estado !== "enviado" || marcandoRecibido)}
-                          disabled={guardandoEdit}
+                          disabled={
+                            guardandoEdit ||
+                            (marcandoEntregado && esLaboratorioRuby(laboratorios, editLaboratorioId) && !editFechaCita)
+                          }
                           className="flex items-center gap-1 rounded-md bg-[var(--acento)] text-white px-3 text-sm font-medium disabled:opacity-40"
                         >
-                          <Check size={14} /> {marcandoRecibido ? "Marcar recibido" : "Guardar"}
+                          <Check size={14} /> {marcandoRecibido ? "Marcar recibido" : marcandoEntregado ? "Marcar entregado" : "Guardar"}
                         </button>
                         <button
                           onClick={() => {
                             setEditandoId(null);
                             setMarcandoRecibido(false);
+                            setMarcandoEntregado(false);
                           }}
                           className="px-2 text-gray-400"
                         >
@@ -454,6 +508,12 @@ export function LaboratorioOperativo() {
                     <div key={o.id} className="flex items-center justify-between px-4 py-2 text-sm">
                       <span>
                         {o.pacientes?.nombre} <span className="text-gray-400">· {o.doctoras?.nombre} · {o.laboratorios?.nombre}</span>
+                        {e.value === "entregado" && o.fecha_cita_paciente && (
+                          <span className="ml-2 text-xs font-semibold text-amber-700">Cita: {o.fecha_cita_paciente}</span>
+                        )}
+                        {e.value === "entregado" && o.fecha_recepcion_laboratorio && (
+                          <span className="ml-2 text-xs text-emerald-600">✔ Recibido en laboratorio</span>
+                        )}
                       </span>
                       <span className="flex items-center gap-3">
                         {(o.mes_liquidacion || o.fecha_instalado) && (
@@ -466,6 +526,11 @@ export function LaboratorioOperativo() {
                           <Pencil size={14} />
                         </button>
                         {e.value === "enviado" && (
+                          <button onClick={() => empezarEntregar(o)} className="text-[var(--acento)] font-medium text-xs">
+                            Entregar al laboratorio
+                          </button>
+                        )}
+                        {e.value === "entregado" && (
                           <button onClick={() => empezarRecibir(o)} className="text-[var(--acento)] font-medium text-xs">
                             Marcar recibido
                           </button>

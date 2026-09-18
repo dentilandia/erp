@@ -1,10 +1,11 @@
-export type Rol = "operacion" | "admin";
+export type Rol = "operacion" | "admin" | "laboratorio";
 
 export interface Perfil {
   id: string;
   nombre: string;
   rol: Rol;
   sede_id: string | null;
+  laboratorio_id: string | null;
   puede_caja_menor: boolean;
   puede_inventario_clinico: boolean;
   puede_inventario_general: boolean;
@@ -394,7 +395,7 @@ export interface Laboratorio {
   activo: boolean;
 }
 
-export type EstadoLab = "enviado" | "recibido" | "instalado";
+export type EstadoLab = "enviado" | "entregado" | "recibido" | "instalado";
 
 export interface LabOrden {
   id: string;
@@ -410,6 +411,9 @@ export interface LabOrden {
   factura_numero: string | null;
   consecutivo: string | null;
   valor_factura: number | null;
+  fecha_entrega_laboratorio: string | null;
+  fecha_cita_paciente: string | null;
+  fecha_recepcion_laboratorio: string | null;
   fecha_recibido: string | null;
   fecha_instalado: string | null;
   mes_liquidacion: string | null;
