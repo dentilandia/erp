@@ -151,6 +151,7 @@ export interface Visita {
   motivo_valor_cero: string | null;
   remision_especialidad: string | null;
   observacion: string | null;
+  alerta_saldo_favor: boolean;
   atendido_por: string | null;
   es_venta_producto: boolean;
   comprobante_datafono_url: string | null;

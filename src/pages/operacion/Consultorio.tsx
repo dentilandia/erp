@@ -429,6 +429,7 @@ function ModalAtencion({
   const [tratamiento, setTratamiento] = useState("");
   const [valorTratamiento, setValorTratamiento] = useState("");
   const [observacion, setObservacion] = useState("");
+  const [alertaSaldoFavor, setAlertaSaldoFavor] = useState(false);
   const [proximaCita, setProximaCita] = useState("");
   const [rxTomada, setRxTomada] = useState(false);
   const [botonTraccion, setBotonTraccion] = useState(false);
@@ -618,6 +619,7 @@ function ModalAtencion({
         tratamiento,
         proxima_cita: proximaCita || null,
         observacion: observacion.trim() || null,
+        alerta_saldo_favor: alertaSaldoFavor,
         remision_especialidad: remitido ? remisionEspecialidad.trim() || null : null,
         ...(comprobanteDatafonoUrl ? { comprobante_datafono_url: comprobanteDatafonoUrl } : {}),
         updated_at: new Date().toISOString(),
@@ -695,7 +697,7 @@ function ModalAtencion({
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
           />
         </div>
-        <div className="rounded-lg bg-sky-50 border border-sky-200 p-3">
+        <div className="rounded-lg bg-sky-50 border border-sky-200 p-3 space-y-2">
           <label className="block text-sm font-medium mb-1 text-sky-800">Observación (opcional)</label>
           <input
             value={observacion}
@@ -703,6 +705,13 @@ function ModalAtencion({
             placeholder="Ej: el paciente debe dejar saldo a favor de $50.000"
             className="w-full rounded-lg border border-sky-200 px-3 py-2 text-sm"
           />
+          <label className="flex items-center gap-2 text-sm text-sky-800">
+            <input type="checkbox" checked={alertaSaldoFavor} onChange={(e) => setAlertaSaldoFavor(e.target.checked)} />
+            El paciente debe dejar saldo a favor
+          </label>
+          <p className="text-xs text-sky-600">
+            Si la marcas, en Recepción va a aparecer un aviso grande en rojo al cobrar, para que no se les pase.
+          </p>
         </div>
 
         <label className="flex items-center gap-2 text-sm">
@@ -887,6 +896,7 @@ function ModalEditarValor({
   const [tratamiento, setTratamiento] = useState("");
   const [proximaCita, setProximaCita] = useState("");
   const [observacion, setObservacion] = useState("");
+  const [alertaSaldoFavor, setAlertaSaldoFavor] = useState(false);
   const [cargoId, setCargoId] = useState<string | null>(null);
   const [valor, setValor] = useState("");
   const [cargando, setCargando] = useState(true);
@@ -946,7 +956,7 @@ function ModalEditarValor({
       const { data: v } = await supabase
         .from("visitas")
         .select(
-          "tratamiento, proxima_cita, observacion, sede_id, doctora_id, paciente_id, fecha, remision_especialidad, comprobante_datafono_url, pacientes(nombre)",
+          "tratamiento, proxima_cita, observacion, alerta_saldo_favor, sede_id, doctora_id, paciente_id, fecha, remision_especialidad, comprobante_datafono_url, pacientes(nombre)",
         )
         .eq("id", visitaId)
         .single();
@@ -954,6 +964,7 @@ function ModalEditarValor({
         tratamiento: string | null;
         proxima_cita: string | null;
         observacion: string | null;
+        alerta_saldo_favor: boolean;
         sede_id: string;
         doctora_id: string;
         paciente_id: string;
@@ -966,6 +977,7 @@ function ModalEditarValor({
       setTratamiento(visita?.tratamiento ?? "");
       setProximaCita(visita?.proxima_cita ?? "");
       setObservacion(visita?.observacion ?? "");
+      setAlertaSaldoFavor(visita?.alerta_saldo_favor ?? false);
       if (visita?.remision_especialidad) {
         setRemitido(true);
         setRemisionEspecialidad(visita.remision_especialidad);
@@ -1106,6 +1118,7 @@ function ModalEditarValor({
         tratamiento,
         proxima_cita: proximaCita.trim() || null,
         observacion: observacion.trim() || null,
+        alerta_saldo_favor: alertaSaldoFavor,
         remision_especialidad: remitido ? remisionEspecialidad.trim() || null : null,
         comprobante_datafono_url: comprobanteDatafonoUrl,
         updated_at: new Date().toISOString(),
@@ -1318,7 +1331,7 @@ function ModalEditarValor({
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
               />
             </div>
-            <div className="rounded-lg bg-sky-50 border border-sky-200 p-3">
+            <div className="rounded-lg bg-sky-50 border border-sky-200 p-3 space-y-2">
               <label className="block text-sm font-medium mb-1 text-sky-800">Observación (opcional)</label>
               <input
                 value={observacion}
@@ -1326,6 +1339,13 @@ function ModalEditarValor({
                 placeholder="Ej: el paciente debe dejar saldo a favor de $50.000"
                 className="w-full rounded-lg border border-sky-200 px-3 py-2 text-sm"
               />
+              <label className="flex items-center gap-2 text-sm text-sky-800">
+                <input type="checkbox" checked={alertaSaldoFavor} onChange={(e) => setAlertaSaldoFavor(e.target.checked)} />
+                El paciente debe dejar saldo a favor
+              </label>
+              <p className="text-xs text-sky-600">
+                Si la marcas, en Recepción va a aparecer un aviso grande en rojo al cobrar, para que no se les pase.
+              </p>
             </div>
 
             <label className="flex items-center gap-2 text-sm">

@@ -1063,6 +1063,7 @@ function ModalCobro({
   const [visitaFecha, setVisitaFecha] = useState(today());
   const [proximaCita, setProximaCita] = useState("");
   const [observacion, setObservacion] = useState("");
+  const [alertaSaldoFavor, setAlertaSaldoFavor] = useState(false);
   const [insumos, setInsumos] = useState<Record<string, boolean>>({});
   const [insumosOriginales, setInsumosOriginales] = useState<string[]>([]);
   const [cargos, setCargos] = useState<CargoEdit[]>([]);
@@ -1084,7 +1085,9 @@ function ModalCobro({
     (async () => {
       const { data: visita } = await supabase
         .from("visitas")
-        .select("id, estado, fecha, paciente_id, motivo_valor_cero, tratamiento, proxima_cita, observacion, pacientes(nombre)")
+        .select(
+          "id, estado, fecha, paciente_id, motivo_valor_cero, tratamiento, proxima_cita, observacion, alerta_saldo_favor, pacientes(nombre)",
+        )
         .eq("id", visitaId)
         .single();
       if (!visita) return;
@@ -1097,6 +1100,7 @@ function ModalCobro({
         tratamiento: string | null;
         proxima_cita: string | null;
         observacion: string | null;
+        alerta_saldo_favor: boolean;
         pacientes: { nombre: string };
       };
       setPacienteId(v.paciente_id);
@@ -1105,6 +1109,7 @@ function ModalCobro({
       setVisitaFecha(v.fecha);
       setProximaCita(v.proxima_cita ?? "");
       setObservacion(v.observacion ?? "");
+      setAlertaSaldoFavor(v.alerta_saldo_favor ?? false);
       setMotivoCero(v.motivo_valor_cero ?? "");
 
       const { data: cargosData } = await supabase
@@ -1452,6 +1457,12 @@ function ModalCobro({
                 />
               </div>
             </div>
+
+            {alertaSaldoFavor && (
+              <p className="rounded-lg border-2 border-red-400 bg-red-50 px-3 py-2.5 text-base font-bold text-red-700 mb-3">
+                ⚠ El paciente debe dejar saldo a favor
+              </p>
+            )}
 
             {observacion && (
               <p className="rounded-lg bg-sky-50 border border-sky-200 px-3 py-2 text-sm text-sky-800 mb-3">
