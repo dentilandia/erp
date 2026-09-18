@@ -1345,7 +1345,6 @@ export function Asistencia() {
         </div>
       )}
 
-      {perfil?.rol === "admin" && (
       <div className="max-w-md mx-auto space-y-4">
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
         <h2 className="font-semibold text-tinta">Marcar asistencia</h2>
@@ -1426,7 +1425,6 @@ export function Asistencia() {
         )}
       </div>
       </div>
-      )}
 
       {perfil?.rol === "admin" && (
         <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
