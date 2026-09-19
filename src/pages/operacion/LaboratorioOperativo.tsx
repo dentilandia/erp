@@ -36,8 +36,8 @@ interface LabRow {
 }
 
 const ESTADOS: { value: EstadoLab; label: string }[] = [
-  { value: "enviado", label: "Pedido, por entregar" },
-  { value: "entregado", label: "En el laboratorio" },
+  { value: "enviado", label: "Pedido, por entregar al mensajero" },
+  { value: "entregado", label: "Con el mensajero / en el laboratorio" },
   { value: "recibido", label: "Por instalar" },
   { value: "instalado", label: "Instalados" },
 ];
@@ -483,7 +483,7 @@ export function LaboratorioOperativo() {
                           }
                           className="flex items-center gap-1 rounded-md bg-[var(--acento)] text-white px-3 text-sm font-medium disabled:opacity-40"
                         >
-                          <Check size={14} /> {marcandoRecibido ? "Marcar recibido" : marcandoEntregado ? "Marcar entregado" : "Guardar"}
+                          <Check size={14} /> {marcandoRecibido ? "Marcar recibido" : marcandoEntregado ? "Ya se lo entregué al mensajero" : "Guardar"}
                         </button>
                         <button
                           onClick={() => {
@@ -527,7 +527,7 @@ export function LaboratorioOperativo() {
                         </button>
                         {e.value === "enviado" && (
                           <button onClick={() => empezarEntregar(o)} className="text-[var(--acento)] font-medium text-xs">
-                            Entregar al laboratorio
+                            Ya se lo entregué al mensajero
                           </button>
                         )}
                         {e.value === "entregado" && (
