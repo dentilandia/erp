@@ -69,7 +69,8 @@ async function recalcularCompensadoDia(perfilId: string, fecha: string): Promise
     .select("tipo, marcado_en")
     .eq("perfil_id", perfilId)
     .gte("marcado_en", desde)
-    .lt("marcado_en", hasta);
+    .lt("marcado_en", hasta)
+    .order("marcado_en");
   const recalculado = Math.round(
     Math.max(
       0,
@@ -757,8 +758,14 @@ export function Asistencia() {
     const { data } = await supabase
       .from("asistencia_registros")
       .select("perfil_id, tipo, marcado_en, perfiles(nombre)")
-      .gte("marcado_en", desde)
-      .lt("marcado_en", hasta);
+      // -05:00 explícito: sin esto, Postgres interpreta la fecha sola como
+      // medianoche UTC (no medianoche Bogotá), corriendo el corte 5 horas —
+      // el colchón de 8 días de arriba lo disimula, pero mejor no depender
+      // de eso. order() hace determinista cuál marca "gana" si algún día
+      // llega a quedar más de una del mismo tipo (ver armarReporteHoras).
+      .gte("marcado_en", `${desde}T00:00:00-05:00`)
+      .lt("marcado_en", `${hasta}T00:00:00-05:00`)
+      .order("marcado_en");
     const filas = ((data as unknown as { perfil_id: string; tipo: TipoAsistencia; marcado_en: string; perfiles: { nombre: string } | null }[]) ?? []).map(
       (r) => ({ perfil_id: r.perfil_id, tipo: r.tipo, marcado_en: r.marcado_en, nombre: r.perfiles?.nombre ?? "—" }),
     );
