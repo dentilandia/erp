@@ -1321,13 +1321,21 @@ function ModalCobro({
         for (const pa of pagosAnteriores ?? []) {
           const { data: saldoActual } = await supabase
             .from("saldos_favor")
-            .select("valor_disponible")
+            .select("valor, valor_disponible")
             .eq("id", pa.saldo_id)
             .single();
           if (saldoActual) {
+            // Nunca puede quedar disponible > valor (hay un check constraint
+            // en la base que lo rechaza) — si por algún dato viejo
+            // inconsistente el pago que se devuelve fuera mayor a lo que en
+            // realidad se le había descontado a este saldo, se limita al
+            // tope real en vez de reventar el guardado completo con un
+            // error genérico que no explica nada.
+            const disponibleTope = Number(saldoActual.valor);
+            const disponibleNuevo = Math.min(Number(saldoActual.valor_disponible) + Number(pa.valor), disponibleTope);
             const { error } = await supabase
               .from("saldos_favor")
-              .update({ valor_disponible: Number(saldoActual.valor_disponible) + Number(pa.valor) })
+              .update({ valor_disponible: disponibleNuevo })
               .eq("id", pa.saldo_id);
             if (error) throw error;
           }
@@ -1393,7 +1401,13 @@ function ModalCobro({
         .eq("id", visitaId);
       onConfirmado();
     } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : "Error al guardar el cobro.");
+      // Los errores de supabase-js (ej. PostgrestError) son objetos planos
+      // con .message, no instancias de Error — con "e instanceof Error" ese
+      // mensaje real (la razón de verdad por la que falló, ej. una regla de
+      // seguridad o una restricción de la base de datos) quedaba tapado por
+      // el texto genérico de acá abajo, sin dar ninguna pista de qué pasó.
+      const mensaje = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : null;
+      setErrorMsg(mensaje || "Error al guardar el cobro.");
     } finally {
       setGuardando(false);
     }
