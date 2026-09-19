@@ -476,6 +476,14 @@ export function Asistencia() {
   // verdad. Por defecto es hoy (comportamiento normal).
   const [fechaMarca, setFechaMarca] = useState(() => fechaBogota(new Date().toISOString()));
   const [horaMarca, setHoraMarca] = useState(() => horaBogotaAhora());
+  // Apagado por defecto a propósito: fechaMarca/horaMarca se calculan una
+  // sola vez al cargar la página y NO se actualizan solas — si se mandaran
+  // siempre, cualquier admin que dejara la pestaña abierta un rato y después
+  // marcara de verdad (llegada/salida reales) quedaría con la hora vieja del
+  // momento en que cargó la página, no la hora real del clic. Con esto
+  // apagado, marcar() no manda fecha/hora y el server usa la hora real
+  // siempre — solo se manda si el admin prende esto a propósito para probar.
+  const [simularFechaHora, setSimularFechaHora] = useState(false);
 
   // Registro administrativo: admin carga/corrige la asistencia de cualquier
   // persona (para cargar retroactivo un período completo) y deja notas por
@@ -1257,7 +1265,7 @@ export function Asistencia() {
     setMarcando(tipo);
     setMensaje(null);
     const { data, error } = await supabase.functions.invoke("marcar-asistencia", {
-      body: { tipo, fecha: fechaMarca, hora: horaMarca },
+      body: simularFechaHora ? { tipo, fecha: fechaMarca, hora: horaMarca } : { tipo },
     });
     setMarcando(null);
     if (error || data?.error) {
@@ -1357,25 +1365,42 @@ export function Asistencia() {
         )}
 
         {perfil?.rol === "admin" && (
-          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 space-y-1">
-            <label className="block text-xs font-medium text-amber-800">Simular día y hora (solo pruebas)</label>
-            <div className="flex gap-2">
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 space-y-1.5">
+            <label className="flex items-center gap-2 text-xs font-medium text-amber-800">
               <input
-                type="date"
-                value={fechaMarca}
-                onChange={(e) => setFechaMarca(e.target.value)}
-                className="rounded-md border border-amber-300 px-2 py-1 text-sm"
+                type="checkbox"
+                checked={simularFechaHora}
+                onChange={(e) => {
+                  setSimularFechaHora(e.target.checked);
+                  // Tanto al prender como al apagar, arranca/vuelve al
+                  // momento real — no se queda con lo que haya quedado de la
+                  // última vez que se usó el panel.
+                  setFechaMarca(fechaBogota(new Date().toISOString()));
+                  setHoraMarca(horaBogotaAhora());
+                }}
               />
-              <input
-                type="time"
-                value={horaMarca}
-                onChange={(e) => setHoraMarca(e.target.value)}
-                className="rounded-md border border-amber-300 px-2 py-1 text-sm"
-              />
-            </div>
+              Simular día y hora (solo pruebas)
+            </label>
+            {simularFechaHora && (
+              <div className="flex gap-2">
+                <input
+                  type="date"
+                  value={fechaMarca}
+                  onChange={(e) => setFechaMarca(e.target.value)}
+                  className="rounded-md border border-amber-300 px-2 py-1 text-sm"
+                />
+                <input
+                  type="time"
+                  value={horaMarca}
+                  onChange={(e) => setHoraMarca(e.target.value)}
+                  className="rounded-md border border-amber-300 px-2 py-1 text-sm"
+                />
+              </div>
+            )}
             <p className="text-xs text-amber-700">
-              Solo admin puede cambiarlo — a todos los demás siempre se les registra la hora real, aunque este módulo
-              se abra a todo el personal.
+              {simularFechaHora
+                ? "Prendido: las marcas que hagas ahora van a quedar con este día/hora, no con el real."
+                : "Apagado (normal): tus marcas quedan con el día y la hora reales del servidor, sin importar hace cuánto tengas esta página abierta."}
             </p>
           </div>
         )}

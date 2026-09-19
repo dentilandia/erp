@@ -1145,7 +1145,18 @@ function ModalCobro({
         .select("valor_disponible")
         .eq("paciente_id", v.paciente_id)
         .gt("valor_disponible", 0);
-      setSaldoDisponible((saldos ?? []).reduce((a, s) => a + Number(s.valor_disponible), 0));
+      // Lo que ya está pagado con saldo a favor EN ESTA MISMA visita ya está
+      // descontado de valor_disponible (se descontó cuando se cobró la
+      // primera vez) — hay que volver a sumarlo acá, si no, al corregir el
+      // cobro el saldo "disponible" se ve más bajo de lo que realmente es
+      // (o en $0 si ya se usó todo), y no deja mantener ese pago como saldo a
+      // favor ni guardar la corrección. Al guardar, confirmar() lo devuelve
+      // y lo vuelve a descontar, así que el neto siempre cuadra.
+      const yaUsadoEnEstaVisita = rows.reduce(
+        (a, c) => a + c.cargo_pagos.filter((p) => p.medio_pago === "saldo_favor").reduce((x, p) => x + Number(p.valor), 0),
+        0,
+      );
+      setSaldoDisponible((saldos ?? []).reduce((a, s) => a + Number(s.valor_disponible), 0) + yaUsadoEnEstaVisita);
 
       const { data: preciosData } = await supabase.from("precios_config").select("clave, valor");
       const preciosMap: Record<string, number> = {};
@@ -1518,7 +1529,7 @@ function ModalCobro({
                           onChange={(e) => actualizarPago(idx, pIdx, "medio", e.target.value)}
                           className="flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm"
                         >
-                          {MEDIOS_PAGO.filter((m) => m.value !== "saldo_favor" || saldoDisponible > 0).map((m) => (
+                          {MEDIOS_PAGO.filter((m) => m.value !== "saldo_favor" || saldoDisponible > 0 || p.medio === "saldo_favor").map((m) => (
                             <option key={m.value} value={m.value}>
                               {m.label}
                             </option>
