@@ -1069,6 +1069,12 @@ function ModalCobro({
   const [cargos, setCargos] = useState<CargoEdit[]>([]);
   const [cargosOriginalesIds, setCargosOriginalesIds] = useState<string[]>([]);
   const [saldoDisponible, setSaldoDisponible] = useState(0);
+  // Lo que esta misma visita ya tenía asignado a saldo a favor ANTES de
+  // abrir esta pantalla — se guarda aparte de saldoDisponible (que debe
+  // mostrar el saldo REAL que le queda al paciente, no inflado) pero se
+  // suma solo para no perder la opción "Saldo a favor" de ese pago ni
+  // bloquear el guardado cuando se deja igual (ver confirmar()).
+  const [saldoYaAsignado, setSaldoYaAsignado] = useState(0);
   const [excedentes, setExcedentes] = useState<ExcedenteLinea[]>([]);
   const [excedenteMedio, setExcedenteMedio] = useState<MedioPago>("efectivo");
   const [excedenteMotivo, setExcedenteMotivo] = useState(MOTIVOS_SALDO_FAVOR[0]);
@@ -1145,18 +1151,19 @@ function ModalCobro({
         .select("valor_disponible")
         .eq("paciente_id", v.paciente_id)
         .gt("valor_disponible", 0);
+      setSaldoDisponible((saldos ?? []).reduce((a, s) => a + Number(s.valor_disponible), 0));
       // Lo que ya está pagado con saldo a favor EN ESTA MISMA visita ya está
       // descontado de valor_disponible (se descontó cuando se cobró la
-      // primera vez) — hay que volver a sumarlo acá, si no, al corregir el
-      // cobro el saldo "disponible" se ve más bajo de lo que realmente es
-      // (o en $0 si ya se usó todo), y no deja mantener ese pago como saldo a
-      // favor ni guardar la corrección. Al guardar, confirmar() lo devuelve
-      // y lo vuelve a descontar, así que el neto siempre cuadra.
-      const yaUsadoEnEstaVisita = rows.reduce(
-        (a, c) => a + c.cargo_pagos.filter((p) => p.medio_pago === "saldo_favor").reduce((x, p) => x + Number(p.valor), 0),
-        0,
+      // primera vez) — NO se le suma a saldoDisponible (que debe mostrar lo
+      // que el paciente de verdad tiene disponible para gastar, no lo que ya
+      // gastó acá) sino que se guarda aparte, solo para no perder la opción
+      // "Saldo a favor" de ese pago ni bloquear el guardado si se deja igual.
+      setSaldoYaAsignado(
+        rows.reduce(
+          (a, c) => a + c.cargo_pagos.filter((p) => p.medio_pago === "saldo_favor").reduce((x, p) => x + Number(p.valor), 0),
+          0,
+        ),
       );
-      setSaldoDisponible((saldos ?? []).reduce((a, s) => a + Number(s.valor_disponible), 0) + yaUsadoEnEstaVisita);
 
       const { data: preciosData } = await supabase.from("precios_config").select("clave, valor");
       const preciosMap: Record<string, number> = {};
@@ -1254,8 +1261,13 @@ function ModalCobro({
         return;
       }
     }
-    if (saldoUsadoEnPagos > saldoDisponible) {
-      setErrorMsg(`El paciente solo tiene ${fmtCOP(saldoDisponible)} de saldo a favor disponible.`);
+    // Lo que se puede usar en este cobro es lo disponible de verdad más lo
+    // que esta misma visita ya tenía asignado (que se devuelve y se vuelve a
+    // asignar al guardar, ver más abajo) — si no se suma saldoYaAsignado acá,
+    // dejar el mismo pago sin tocar se vería como que excede el saldo.
+    const saldoUsable = saldoDisponible + saldoYaAsignado;
+    if (saldoUsadoEnPagos > saldoUsable) {
+      setErrorMsg(`El paciente solo tiene ${fmtCOP(saldoUsable)} de saldo a favor disponible para este cobro.`);
       return;
     }
     setGuardando(true);
@@ -1529,7 +1541,9 @@ function ModalCobro({
                           onChange={(e) => actualizarPago(idx, pIdx, "medio", e.target.value)}
                           className="flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm"
                         >
-                          {MEDIOS_PAGO.filter((m) => m.value !== "saldo_favor" || saldoDisponible > 0 || p.medio === "saldo_favor").map((m) => (
+                          {MEDIOS_PAGO.filter(
+                            (m) => m.value !== "saldo_favor" || saldoDisponible + saldoYaAsignado > 0 || p.medio === "saldo_favor",
+                          ).map((m) => (
                             <option key={m.value} value={m.value}>
                               {m.label}
                             </option>
