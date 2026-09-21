@@ -444,6 +444,38 @@ export function Asistencia() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [verHistorialIntentos]);
 
+  // Dashboard del día para admin: quién ha marcado y a qué hora — de un
+  // vistazo, sin tener que abrir persona por persona en "Registrar
+  // asistencia". Por defecto hoy, pero se puede mirar cualquier otro día.
+  const [fechaDashboard, setFechaDashboard] = useState(() => fechaBogota(new Date().toISOString()));
+  const [marcasDashboard, setMarcasDashboard] = useState<Record<string, Partial<Record<TipoAsistencia, string>>>>({});
+  const [cargandoDashboard, setCargandoDashboard] = useState(true);
+
+  async function cargarDashboardHoy() {
+    setCargandoDashboard(true);
+    const desde = `${fechaDashboard}T00:00:00-05:00`;
+    const hasta = `${sumarDias(fechaDashboard, 1)}T00:00:00-05:00`;
+    const { data } = await supabase
+      .from("asistencia_registros")
+      .select("perfil_id, tipo, marcado_en")
+      .gte("marcado_en", desde)
+      .lt("marcado_en", hasta)
+      .order("marcado_en");
+    const mapa: Record<string, Partial<Record<TipoAsistencia, string>>> = {};
+    for (const r of (data as { perfil_id: string; tipo: TipoAsistencia; marcado_en: string }[]) ?? []) {
+      const entrada = (mapa[r.perfil_id] ??= {});
+      if (!entrada[r.tipo]) entrada[r.tipo] = r.marcado_en;
+    }
+    setMarcasDashboard(mapa);
+    setCargandoDashboard(false);
+  }
+
+  useEffect(() => {
+    if (perfil?.rol !== "admin") return;
+    cargarDashboardHoy();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perfil?.rol, fechaDashboard]);
+
   const [metaSemanal, setMetaSemanal] = useState(42);
   const [reporte, setReporte] = useState<FilaPersona[]>([]);
   const [cargandoReporte, setCargandoReporte] = useState(true);
@@ -491,7 +523,9 @@ export function Asistencia() {
   // día explicando horas fuera de lo normal — inserta directo a la tabla
   // (RLS lo permite solo a admin), sin pasar por el edge function de
   // marcado en vivo, que no aplica acá.
-  const [personas, setPersonas] = useState<{ id: string; nombre: string; sede_id: string | null }[]>([]);
+  const [personas, setPersonas] = useState<
+    { id: string; nombre: string; sede_id: string | null; sedeNombre: string | null }[]
+  >([]);
   const [personaAdminId, setPersonaAdminId] = useState("");
   const [fechaAdmin, setFechaAdmin] = useState(() => fechaBogota(new Date().toISOString()));
   const [marcasPersona, setMarcasPersona] = useState<AsistenciaRegistro[]>([]);
@@ -549,10 +583,16 @@ export function Asistencia() {
     if (perfil?.rol !== "admin") return;
     supabase
       .from("perfiles")
-      .select("id, nombre, sede_id")
+      // El laboratorio externo (ej. Ruby) no marca asistencia por sede — se
+      // excluye acá para que no aparezca en las correcciones manuales, en
+      // las horas extra por atención ni en el dashboard del día.
+      .select("id, nombre, sede_id, sedes(nombre)")
+      .neq("rol", "laboratorio")
       .order("nombre")
       .then(({ data }) => {
-        const filas = data ?? [];
+        const filas = ((data as unknown as { id: string; nombre: string; sede_id: string | null; sedes: { nombre: string } | null }[]) ?? []).map(
+          (p) => ({ id: p.id, nombre: p.nombre, sede_id: p.sede_id, sedeNombre: p.sedes?.nombre ?? null }),
+        );
         setPersonas(filas);
         if (filas.length > 0) setPersonaAdminId((prev) => prev || filas[0].id);
       });
@@ -617,6 +657,7 @@ export function Asistencia() {
     }
     await cargarMarcasPersona();
     cargarReporte();
+    cargarDashboardHoy();
   }
 
   async function eliminarMarcaPersona(id: string) {
@@ -628,6 +669,7 @@ export function Asistencia() {
     }
     await cargarMarcasPersona();
     cargarReporte();
+    cargarDashboardHoy();
   }
 
   async function guardarNotaPersona() {
@@ -1304,6 +1346,7 @@ export function Asistencia() {
     }
     cargarRegistros();
     cargarReporte();
+    if (perfil?.rol === "admin") cargarDashboardHoy();
   }
 
   return (
@@ -1355,6 +1398,70 @@ export function Asistencia() {
                   </span>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {perfil?.rol === "admin" && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h2 className="font-semibold text-tinta">
+              {fechaDashboard === fechaBogota(new Date().toISOString()) ? "Hoy — quién ha marcado" : `Quién marcó el ${fechaDashboard}`}
+            </h2>
+            <input
+              type="date"
+              value={fechaDashboard}
+              onChange={(e) => setFechaDashboard(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+            />
+          </div>
+          {cargandoDashboard ? (
+            <p className="text-sm text-gray-400">Cargando…</p>
+          ) : personas.length === 0 ? (
+            <p className="text-sm text-gray-400">Sin personas registradas.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-gray-400 text-left">
+                    <th className="font-normal pb-1.5 pr-3">Nombre</th>
+                    <th className="font-normal pb-1.5 pr-3">Sede</th>
+                    <th className="font-normal pb-1.5 pr-3 text-right">Llegada</th>
+                    <th className="font-normal pb-1.5 pr-3 text-right">S. almuerzo</th>
+                    <th className="font-normal pb-1.5 pr-3 text-right">E. almuerzo</th>
+                    <th className="font-normal pb-1.5 text-right">Salida</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {personas.map((p) => {
+                    const marcas = marcasDashboard[p.id] ?? {};
+                    const esHoy = fechaDashboard === fechaBogota(new Date().toISOString());
+                    const horaLimiteLlegada = diaDeSemana(fechaDashboard) === 6 ? "08:15" : "08:45";
+                    const faltaLlegada =
+                      !marcas.llegada && esHoy && diaDeSemana(fechaDashboard) !== 0 && horaBogotaAhora() >= horaLimiteLlegada;
+                    return (
+                      <tr key={p.id}>
+                        <td className="py-1.5 pr-3 font-medium">{p.nombre}</td>
+                        <td className="py-1.5 pr-3 text-gray-500">{p.sedeNombre ?? "—"}</td>
+                        {TIPOS_ASISTENCIA.map((t) => {
+                          const marca = marcas[t.value];
+                          return (
+                            <td
+                              key={t.value}
+                              className={`py-1.5 pr-3 text-right ${
+                                marca ? "text-tinta" : t.value === "llegada" && faltaLlegada ? "text-red-600 font-semibold" : "text-gray-300"
+                              }`}
+                            >
+                              {marca ? new Date(marca).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }) : "—"}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
