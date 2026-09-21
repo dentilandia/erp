@@ -529,20 +529,6 @@ export function Asistencia() {
   const [guardandoFestivo, setGuardandoFestivo] = useState(false);
   const [errorFestivo, setErrorFestivo] = useState<string | null>(null);
 
-  // Solo para admin: día que se está simulando al marcar, para poder probar
-  // el conteo de horas de varios días seguidos sin esperar a que pasen de
-  // verdad. Por defecto es hoy (comportamiento normal).
-  const [fechaMarca, setFechaMarca] = useState(() => fechaBogota(new Date().toISOString()));
-  const [horaMarca, setHoraMarca] = useState(() => horaBogotaAhora());
-  // Apagado por defecto a propósito: fechaMarca/horaMarca se calculan una
-  // sola vez al cargar la página y NO se actualizan solas — si se mandaran
-  // siempre, cualquier admin que dejara la pestaña abierta un rato y después
-  // marcara de verdad (llegada/salida reales) quedaría con la hora vieja del
-  // momento en que cargó la página, no la hora real del clic. Con esto
-  // apagado, marcar() no manda fecha/hora y el server usa la hora real
-  // siempre — solo se manda si el admin prende esto a propósito para probar.
-  const [simularFechaHora, setSimularFechaHora] = useState(false);
-
   // Registro administrativo: admin carga/corrige la asistencia de cualquier
   // persona (para cargar retroactivo un período completo) y deja notas por
   // día explicando horas fuera de lo normal — inserta directo a la tabla
@@ -770,8 +756,9 @@ export function Asistencia() {
 
   async function cargarRegistros() {
     if (!perfil) return;
-    const desde = `${fechaMarca}T00:00:00-05:00`;
-    const hasta = `${sumarDias(fechaMarca, 1)}T00:00:00-05:00`;
+    const hoy = fechaBogota(new Date().toISOString());
+    const desde = `${hoy}T00:00:00-05:00`;
+    const hasta = `${sumarDias(hoy, 1)}T00:00:00-05:00`;
     const { data } = await supabase
       .from("asistencia_registros")
       .select("*")
@@ -785,7 +772,7 @@ export function Asistencia() {
   useEffect(() => {
     cargarRegistros();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [perfil?.id, fechaMarca]);
+  }, [perfil?.id]);
 
   useEffect(() => {
     supabase
@@ -1329,7 +1316,7 @@ export function Asistencia() {
     setMarcando(tipo);
     setMensaje(null);
     const { data, error } = await supabase.functions.invoke("marcar-asistencia", {
-      body: simularFechaHora ? { tipo, fecha: fechaMarca, hora: horaMarca } : { tipo },
+      body: { tipo },
     });
     setMarcando(null);
     if (error || data?.error) {
@@ -1493,46 +1480,6 @@ export function Asistencia() {
           </div>
         )}
 
-        {perfil?.rol === "admin" && (
-          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 space-y-1.5">
-            <label className="flex items-center gap-2 text-xs font-medium text-amber-800">
-              <input
-                type="checkbox"
-                checked={simularFechaHora}
-                onChange={(e) => {
-                  setSimularFechaHora(e.target.checked);
-                  // Tanto al prender como al apagar, arranca/vuelve al
-                  // momento real — no se queda con lo que haya quedado de la
-                  // última vez que se usó el panel.
-                  setFechaMarca(fechaBogota(new Date().toISOString()));
-                  setHoraMarca(horaBogotaAhora());
-                }}
-              />
-              Simular día y hora (solo pruebas)
-            </label>
-            {simularFechaHora && (
-              <div className="flex gap-2">
-                <input
-                  type="date"
-                  value={fechaMarca}
-                  onChange={(e) => setFechaMarca(e.target.value)}
-                  className="rounded-md border border-amber-300 px-2 py-1 text-sm"
-                />
-                <input
-                  type="time"
-                  value={horaMarca}
-                  onChange={(e) => setHoraMarca(e.target.value)}
-                  className="rounded-md border border-amber-300 px-2 py-1 text-sm"
-                />
-              </div>
-            )}
-            <p className="text-xs text-amber-700">
-              {simularFechaHora
-                ? "Prendido: las marcas que hagas ahora van a quedar con este día/hora, no con el real."
-                : "Apagado (normal): tus marcas quedan con el día y la hora reales del servidor, sin importar hace cuánto tengas esta página abierta."}
-            </p>
-          </div>
-        )}
 
         <div className="flex flex-col gap-2">
           {TIPOS_ASISTENCIA.map((t, i) => {
@@ -1566,7 +1513,7 @@ export function Asistencia() {
 
       <div className="bg-white rounded-xl border border-gray-200 p-4">
         <h3 className="text-sm font-semibold text-gray-500 mb-2">
-          Tus marcas {fechaMarca === fechaBogota(new Date().toISOString()) ? "de hoy" : `del ${fechaMarca}`}
+          Tus marcas de hoy
         </h3>
         {registros.length === 0 ? (
           <p className="text-sm text-gray-400">Todavía no has marcado nada ese día.</p>
