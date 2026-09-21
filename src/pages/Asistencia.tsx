@@ -109,6 +109,17 @@ const ICONOS: Record<TipoAsistencia, typeof LogIn> = {
   salida: LogOut,
 };
 
+// Un color distinto por botón, en el mismo orden en que pasan durante el
+// día (llegada → salida almuerzo → regreso almuerzo → salida) — antes los
+// cuatro compartían el mismo color y era fácil tocar el que no era (pasó
+// justo con la salida final en vez del regreso de almuerzo).
+const COLOR_TIPO: Record<TipoAsistencia, string> = {
+  llegada: "#009F98",
+  salida_almuerzo: "#F5A524",
+  entrada_almuerzo: "#3B82F6",
+  salida: "#DC2626",
+};
+
 /** Convierte un timestamp a la fecha (YYYY-MM-DD) del día calendario en
  *  Bogotá — los marcado_en se guardan en UTC, así que agrupar por día sin
  *  esto correría el corte de jornada varias horas. */
@@ -1533,22 +1544,25 @@ export function Asistencia() {
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-2">
-          {TIPOS_ASISTENCIA.map((t) => {
+        <div className="flex flex-col gap-2">
+          {TIPOS_ASISTENCIA.map((t, i) => {
             const Icono = ICONOS[t.value];
             const marcadoHoy = yaMarcado.has(t.value);
             const puede = habilitado(t.value);
             return (
-              <button
-                key={t.value}
-                onClick={() => marcar(t.value)}
-                disabled={marcando !== null || !puede}
-                className={`flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-medium disabled:opacity-40 ${
-                  marcadoHoy ? "bg-gray-100 text-gray-400" : "bg-[var(--acento)] text-white"
-                }`}
-              >
-                <Icono size={16} /> {marcando === t.value ? "Marcando…" : marcadoHoy ? `${t.label} ✓` : t.label}
-              </button>
+              <div key={t.value} className="flex flex-col items-center gap-1">
+                {i > 0 && <span className="text-gray-300 text-sm leading-none">↓</span>}
+                <button
+                  onClick={() => marcar(t.value)}
+                  disabled={marcando !== null || !puede}
+                  style={marcadoHoy ? undefined : { background: COLOR_TIPO[t.value] }}
+                  className={`w-full flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-medium disabled:opacity-40 ${
+                    marcadoHoy ? "bg-gray-100 text-gray-400" : "text-white"
+                  }`}
+                >
+                  <Icono size={16} /> {marcando === t.value ? "Marcando…" : marcadoHoy ? `${t.label} ✓` : t.label}
+                </button>
+              </div>
             );
           })}
         </div>
