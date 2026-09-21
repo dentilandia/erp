@@ -148,13 +148,18 @@ Deno.serve(async (req: Request) => {
   }
 
   // Las frases avanzan en orden PERSONAL, no por día del calendario — así
-  // cada quien vive el mismo hilo conductor desde la primera vez que marca,
-  // sin importar si se saltó días por vacaciones/incapacidad o si es nueva.
-  // Se cuentan las marcas de este tipo que ya tiene (la que se acaba de
-  // insertar arriba ya cuenta), así que la primera vez le toca la frase #1.
-  // Arranca el lunes 21 de septiembre de 2026 — antes de esa fecha no se
-  // muestra ninguna frase, aunque ya estén cargadas.
+  // cada quien vive el mismo hilo conductor desde su primera marca EN LA ERA
+  // DE LAS FRASES, sin importar si se saltó días por vacaciones/incapacidad
+  // o si es nueva. Arranca el lunes 21 de septiembre de 2026 — antes de esa
+  // fecha no se muestra ninguna frase, aunque ya estén cargadas.
+  //
+  // El conteo que decide el índice SOLO mira marcas desde esa fecha en
+  // adelante — la mayoría del equipo ya tenía marcas viejas cargadas por
+  // admin de períodos anteriores (retroactivo, para nómina), y si esas
+  // contaran, la primera marca real de hoy le tocaría a cada quien en la
+  // mitad de la historia en vez de en la frase #1.
   const FECHA_INICIO_FRASES = "2026-09-21";
+  const INICIO_FRASES_ISO = `${FECHA_INICIO_FRASES}T00:00:00-05:00`;
   const hoyBogota = new Date().toLocaleDateString("en-CA", { timeZone: "America/Bogota" });
   let frase: string | null = null;
   if ((body.tipo === "llegada" || body.tipo === "salida") && hoyBogota >= FECHA_INICIO_FRASES) {
@@ -169,7 +174,8 @@ Deno.serve(async (req: Request) => {
         .from("asistencia_registros")
         .select("id", { count: "exact", head: true })
         .eq("perfil_id", perfil.id)
-        .eq("tipo", body.tipo);
+        .eq("tipo", body.tipo)
+        .gte("marcado_en", INICIO_FRASES_ISO);
       const indice = Math.max(0, (count ?? 1) - 1) % frases.length;
       frase = frases[indice].texto;
     }
