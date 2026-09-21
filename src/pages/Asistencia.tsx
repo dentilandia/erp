@@ -588,7 +588,11 @@ export function Asistencia() {
   const [extraAtencionPorPersonaYDia, setExtraAtencionPorPersonaYDia] = useState<Record<string, number>>({});
 
   useEffect(() => {
-    if (perfil?.rol !== "admin") return;
+    // Operación también necesita esta lista para elegir colaboradores en
+    // "Horas extra por atención de paciente" — el resto de usos de `personas`
+    // (correcciones manuales, dashboard del día) siguen ocultos para ellos
+    // porque esas secciones de abajo se quedan admin-only.
+    if (perfil?.rol !== "admin" && perfil?.rol !== "operacion") return;
     supabase
       .from("perfiles")
       // El laboratorio externo (ej. Ruby) no marca asistencia por sede — se
@@ -602,7 +606,9 @@ export function Asistencia() {
           (p) => ({ id: p.id, nombre: p.nombre, sede_id: p.sede_id, sedeNombre: p.sedes?.nombre ?? null }),
         );
         setPersonas(filas);
-        if (filas.length > 0) setPersonaAdminId((prev) => prev || filas[0].id);
+        // Solo admin usa "Registro administrativo" (más abajo) — a operación
+        // no le hace falta preseleccionar a nadie ahí.
+        if (perfil?.rol === "admin" && filas.length > 0) setPersonaAdminId((prev) => prev || filas[0].id);
       });
   }, [perfil?.rol]);
 
@@ -1135,7 +1141,7 @@ export function Asistencia() {
   }
 
   async function cargarSolicitudesHE() {
-    if (perfil?.rol !== "admin") return;
+    if (perfil?.rol !== "admin" && perfil?.rol !== "operacion") return;
     const { data } = await supabase
       .from("asistencia_horas_extra")
       .select("*, asistencia_horas_extra_colaboradores(*, perfiles(nombre))")
@@ -1154,7 +1160,7 @@ export function Asistencia() {
   }
 
   useEffect(() => {
-    if (perfil?.rol !== "admin") return;
+    if (perfil?.rol !== "admin" && perfil?.rol !== "operacion") return;
     cargarDoctoras();
     cargarSolicitudesHE();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1671,7 +1677,7 @@ export function Asistencia() {
         </div>
       )}
 
-      {perfil?.rol === "admin" && (
+      {(perfil?.rol === "admin" || perfil?.rol === "operacion") && (
         <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
           <div>
             <h2 className="font-semibold text-tinta">Horas extra por atención de paciente</h2>
