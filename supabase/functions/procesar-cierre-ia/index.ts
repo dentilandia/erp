@@ -64,7 +64,7 @@ Deno.serve(async (req) => {
     const { data: cierre, error: errCierre } = await admin
       .from("cierres_caja")
       .select(
-        "id, fecha, sede, efvo_fact, tarjeta_fact, transf_fact, addi, total, url_recibos_caja, url_movimientos_banco, url_tirilla_datafono, url_reporte_datafono",
+        "id, fecha, sede, efvo_fact, tarjeta_fact, transf_fact, addi, total, url_recibos_caja, url_movimientos_banco, url_movimientos_banco_2, url_tirilla_datafono, url_reporte_datafono",
       )
       .eq("id", cierre_id)
       .single();
@@ -73,6 +73,7 @@ Deno.serve(async (req) => {
     const documentos: { label: string; path: string | null }[] = [
       { label: "Reporte de recibos de caja (Oral Drive)", path: cierre.url_recibos_caja },
       { label: "Movimientos de cuentas bancarias", path: cierre.url_movimientos_banco },
+      { label: "Movimientos de cuentas bancarias (cuenta 2 / Bold)", path: cierre.url_movimientos_banco_2 },
       { label: "Tirilla de datáfono", path: cierre.url_tirilla_datafono },
       { label: "Reporte de datáfono", path: cierre.url_reporte_datafono },
     ].filter((d) => d.path);
@@ -129,16 +130,18 @@ Deno.serve(async (req) => {
 facturado por el sistema (ERP) de un día, y los documentos de soporte de ese mismo día (recibos de caja,
 movimientos bancarios, cierre de datáfono). Lee esos documentos y extrae:
 - efectivo_real: total de efectivo según el reporte de recibos de caja, si aparece.
-- datafono_real: total según la tirilla/reporte de datáfono (tarjeta).
-- banco_consignado: total consignado/depositado según los movimientos bancarios que corresponda a este cierre, si lo identificas.
+- tarjeta_real: total según la tirilla/reporte de datáfono (tarjeta).
+- transferencia_real: total consignado/transferido según los movimientos bancarios que corresponda a este cierre, si lo identificas.
 - diferencia_efectivo: efectivo_real menos el efectivo facturado por el ERP (null si no pudiste leer efectivo_real).
-- diferencia_datafono: datafono_real menos la tarjeta facturada por el ERP (null si no pudiste leer datafono_real).
+- diferencia_tarjeta: tarjeta_real menos la tarjeta facturada por el ERP (null si no pudiste leer tarjeta_real).
+- diferencia_transferencia: transferencia_real menos la transferencia facturada por el ERP (null si no pudiste leer transferencia_real).
 - cuadra_sugerido: true si las diferencias son cercanas a 0, false si hay una diferencia relevante o no pudiste leer algo importante.
 - resumen: 2-4 líneas en español explicando lo que encontraste, y cualquier cosa que no pudiste leer con certeza o que te pareció rara.
 
 Responde ÚNICAMENTE con un JSON válido, sin texto adicional antes ni después, ni bloques de markdown, con
-exactamente estas claves: {"efectivo_real": number|null, "datafono_real": number|null, "banco_consignado": number|null,
-"diferencia_efectivo": number|null, "diferencia_datafono": number|null, "cuadra_sugerido": boolean, "resumen": string}`;
+exactamente estas claves: {"efectivo_real": number|null, "tarjeta_real": number|null, "transferencia_real": number|null,
+"diferencia_efectivo": number|null, "diferencia_tarjeta": number|null, "diferencia_transferencia": number|null,
+"cuadra_sugerido": boolean, "resumen": string}`;
 
     const resp = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",

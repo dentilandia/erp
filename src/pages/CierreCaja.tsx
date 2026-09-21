@@ -3,7 +3,7 @@ import { useOutletContext } from "react-router-dom";
 import { ChevronDown, ChevronRight, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { fmtCOP, today } from "../lib/format";
-import type { Sede, CierreCaja as CierreCajaRow } from "../lib/types";
+import type { Sede, CierreCaja as CierreCajaRow, CierreCajaSemana } from "../lib/types";
 
 const DIAS_SEMANA = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 const DIAS_SEMANA_LARGO = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
@@ -110,10 +110,14 @@ export function CierreCaja() {
   const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
   const claveSede = claveSedeDe(sedeActiva);
   const [cierres, setCierres] = useState<CierreCajaRow[]>([]);
+  // Lista completa de sedes — a diferencia de sedeActiva (la sede elegida
+  // arriba con las pastillas), hace falta acá para poder abrir el detalle de
+  // un día de CUALQUIER sede desde la pestaña Semana (que junta ambas).
+  const [sedes, setSedes] = useState<Sede[]>([]);
   const [revisiones, setRevisiones] = useState<Record<string, boolean>>({});
   const [pendientesEstado, setPendientesEstado] = useState<Record<string, { resuelto: boolean; solucion: string }>>({});
   const [soloConPendientes, setSoloConPendientes] = useState(false);
-  const [tab, setTab] = useState<"dias" | "pendientes" | "reporte" | "hacer">("dias");
+  const [tab, setTab] = useState<"dias" | "pendientes" | "reporte" | "semana">("dias");
   const [detalle, setDetalle] = useState<CierreCajaRow | null>(null);
   const [mesesAbiertos, setMesesAbiertos] = useState<Set<string>>(new Set());
   const [consignadosReales, setConsignadosReales] = useState<Record<string, { consignado: boolean; entregado_admin: boolean }>>({});
@@ -167,6 +171,14 @@ export function CierreCaja() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [claveSede]);
+
+  useEffect(() => {
+    supabase
+      .from("sedes")
+      .select("id, nombre, color_acento")
+      .order("nombre")
+      .then(({ data }) => setSedes((data as Sede[]) ?? []));
+  }, []);
 
   async function toggleRevisado(fecha: string) {
     const clave = `${fecha}|${claveSede}`;
@@ -259,10 +271,10 @@ export function CierreCaja() {
           Reporte
         </button>
         <button
-          onClick={() => setTab("hacer")}
-          className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === "hacer" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
+          onClick={() => setTab("semana")}
+          className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === "semana" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
         >
-          Hacer cierre
+          Semana
         </button>
       </div>
 
@@ -430,552 +442,253 @@ export function CierreCaja() {
         </div>
       )}
 
-      {tab === "hacer" && (
-        <FormularioCierre cierres={cierres} claveSede={claveSede} sedeActiva={sedeActiva} onGuardado={cargar} />
-      )}
+      {tab === "semana" && <FormularioSemana onGuardado={cargar} onAbrirDetalle={setDetalle} />}
 
-      {detalle && <DetalleModal cierre={detalle} onClose={() => setDetalle(null)} claveSede={claveSede} sedeActiva={sedeActiva} onGuardado={cargar} />}
+      {detalle && <DetalleModal cierre={detalle} onClose={() => setDetalle(null)} sedes={sedes} onGuardado={cargar} />}
     </div>
   );
 }
 
-interface FormCierre {
-  efvo_fact: string;
-  tarjeta_fact: string;
-  transf_fact: string;
-  addi: string;
-  gasto: string;
-  transf_directa: string;
-  cuadra: boolean;
-  transf_por_verificar: boolean;
-  transf_sin_banco: boolean;
-  urgente_transf: boolean;
-  consignacion_cuenta2: boolean;
-  fuente_dataf: string;
-  fuente_transf: string;
-  nota_dataf_extra: string;
-  nota_transf_extra: string;
-  nota_banco_extra: string;
-  nota_limitacion: string;
-  nota_cuenta2: string;
-  nota_consignacion_pendiente: string;
+const DOCUMENTOS_SEMANA: { campo: keyof CierreCajaSemana; label: string }[] = [
+  { campo: "url_datafono_americas", label: "Tirilla datáfono Redeban — Las Américas" },
+  { campo: "url_datafono_fabricato", label: "Cierre ventas datáfono — Fabricato" },
+  { campo: "url_bancolombia", label: "Movimientos Bancolombia — ambas sedes" },
+  { campo: "url_bold_fabricato", label: "Movimientos Bold — Fabricato" },
+  { campo: "url_recibos_caja", label: "Excel recibos de caja del sistema — ambas sedes" },
+];
+
+function lunesDeSemana(fechaYMD: string): string {
+  const [y, m, d] = fechaYMD.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dow = dt.getUTCDay();
+  dt.setUTCDate(dt.getUTCDate() + (dow === 0 ? -6 : 1 - dow));
+  return dt.toISOString().slice(0, 10);
 }
 
-const FORM_VACIO: FormCierre = {
-  efvo_fact: "0",
-  tarjeta_fact: "0",
-  transf_fact: "0",
-  addi: "0",
-  gasto: "",
-  transf_directa: "0",
-  cuadra: false,
-  transf_por_verificar: false,
-  transf_sin_banco: false,
-  urgente_transf: false,
-  consignacion_cuenta2: false,
-  fuente_dataf: "",
-  fuente_transf: "",
-  nota_dataf_extra: "",
-  nota_transf_extra: "",
-  nota_banco_extra: "",
-  nota_limitacion: "",
-  nota_cuenta2: "",
-  nota_consignacion_pendiente: "",
-};
+function sumarDiasCal(fechaYMD: string, dias: number): string {
+  const [y, m, d] = fechaYMD.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + dias);
+  return dt.toISOString().slice(0, 10);
+}
 
-function FormularioCierre({
-  cierres,
-  claveSede,
-  sedeActiva,
+/** El cierre real no se hace día por día: cada semana se sube un solo lote de
+ *  5 documentos (cada uno cubre varios días, y salvo Bancolombia, una sola
+ *  sede) y se compara contra los 7 días × 2 sedes de esa semana — sin que
+ *  nadie tenga que digitar ningún valor, todo sale del ERP (vía Cierre diario
+ *  de Operación, ya integrado) y de lo que la IA lee en los documentos. */
+function FormularioSemana({
   onGuardado,
+  onAbrirDetalle,
 }: {
-  cierres: CierreCajaRow[];
-  claveSede: string;
-  sedeActiva: Sede;
   onGuardado: () => void;
+  onAbrirDetalle: (c: CierreCajaRow) => void;
 }) {
-  const [fecha, setFecha] = useState(today());
+  const [semanaInicio, setSemanaInicio] = useState(() => lunesDeSemana(sumarDiasCal(today(), -7)));
+  const [semana, setSemana] = useState<CierreCajaSemana | null>(null);
   const [cargando, setCargando] = useState(true);
-  const [guardando, setGuardando] = useState(false);
-  const [mensaje, setMensaje] = useState<string | null>(null);
-  const [form, setForm] = useState<FormCierre>(FORM_VACIO);
-  const [addiDetalleAuto, setAddiDetalleAuto] = useState<{ paciente: string; valor: number; medio: string }[]>([]);
-  const [subiendoDoc, setSubiendoDoc] = useState<string | null>(null);
-  const [procesandoIA, setProcesandoIA] = useState(false);
-  const [errorIA, setErrorIA] = useState<string | null>(null);
+  const [subiendo, setSubiendo] = useState<string | null>(null);
+  const [procesando, setProcesando] = useState(false);
+  const [resumenDias, setResumenDias] = useState<CierreCajaRow[]>([]);
 
-  const existente = cierres.find((c) => c.fecha === fecha) ?? null;
-
-  async function procesarConIA() {
-    if (!existente) return;
-    setProcesandoIA(true);
-    setErrorIA(null);
-    try {
-      const { data, error } = await supabase.functions.invoke("procesar-cierre-ia", { body: { cierre_id: existente.id } });
-      if (error) throw error;
-      if (!data?.ok) throw new Error(data?.error ?? "Error desconocido procesando el cierre.");
-      onGuardado();
-    } catch (e) {
-      setErrorIA(e instanceof Error ? e.message : "No se pudo procesar el cierre con IA.");
-    } finally {
-      setProcesandoIA(false);
-    }
-  }
-
-  async function facturadoDesdeErp() {
-    // El detalle Addi/Sistecrédito (para mostrar paciente por paciente) sigue
-    // saliendo directo de cargo_pagos/saldos_favor — cierres_diarios solo
-    // guarda el total agregado por medio, no el detalle por paciente.
-    const { data: pagosData } = await supabase
-      .from("cargo_pagos")
-      .select("medio_pago, valor, cargos!inner(sede_id, fecha, visitas(pacientes(nombre)))")
-      .eq("cargos.sede_id", sedeActiva.id)
-      .eq("cargos.fecha", fecha)
-      .neq("medio_pago", "saldo_favor");
-    const filas =
-      (pagosData as unknown as {
-        medio_pago: string;
-        valor: number;
-        cargos: { visitas: { pacientes: { nombre: string } | null } | null };
-      }[]) ?? [];
-
-    const { data: saldosData } = await supabase
-      .from("saldos_favor")
-      .select("valor, medio_origen, pacientes(nombre)")
-      .eq("sede_origen_id", sedeActiva.id)
-      .eq("fecha", fecha)
-      .neq("medio_origen", "ajuste_manual");
-    const saldosFilas = (saldosData as unknown as { valor: number; medio_origen: string; pacientes: { nombre: string } | null }[]) ?? [];
-
-    const addiDetalle = [
-      ...filas
-        .filter((p) => p.medio_pago === "addi" || p.medio_pago === "sistecredito")
-        .map((p) => ({
-          paciente: p.cargos.visitas?.pacientes?.nombre ?? "—",
-          valor: Number(p.valor),
-          medio: p.medio_pago === "addi" ? "Addi" : "Sistecrédito",
-        })),
-      ...saldosFilas
-        .filter((s) => s.medio_origen === "addi" || s.medio_origen === "sistecredito")
-        .map((s) => ({
-          paciente: s.pacientes?.nombre ?? "—",
-          valor: Number(s.valor),
-          medio: s.medio_origen === "addi" ? "Addi" : "Sistecrédito",
-        })),
-    ];
-
-    // Fuente oficial de los totales: lo que ya calculó y guardó Cierre diario
-    // de Operación para este día (totales_por_medio, ya con el gasto restado
-    // del efectivo — ver más abajo). Si Recepción todavía no ha abierto ese
-    // día (fecha vieja, antes de esto, o un día que nadie ha tocado), se cae
-    // al cálculo directo de abajo como respaldo.
-    const { data: cierreDiario } = await supabase
-      .from("cierres_diarios")
-      .select("totales_por_medio, gasto")
-      .eq("sede_id", sedeActiva.id)
-      .eq("fecha", fecha)
-      .maybeSingle();
-    const totales = (cierreDiario?.totales_por_medio as Record<string, number> | undefined) ?? {};
-    if (Object.keys(totales).length > 0) {
-      return {
-        efectivo: (totales["efectivo"] ?? 0) - Number(cierreDiario?.gasto ?? 0),
-        tarjeta: (totales["tarjeta_debito"] ?? 0) + (totales["tarjeta_credito"] ?? 0),
-        transferencia: totales["transferencia_debito"] ?? 0,
-        addi: (totales["addi"] ?? 0) + (totales["sistecredito"] ?? 0),
-        addiDetalle,
-      };
-    }
-
-    const porMedio: Record<string, number> = {};
-    for (const p of filas) porMedio[p.medio_pago] = (porMedio[p.medio_pago] ?? 0) + Number(p.valor);
-    for (const s of saldosFilas) porMedio[s.medio_origen] = (porMedio[s.medio_origen] ?? 0) + Number(s.valor);
-    return {
-      efectivo: (porMedio["efectivo"] ?? 0) - Number(cierreDiario?.gasto ?? 0),
-      tarjeta: (porMedio["tarjeta_debito"] ?? 0) + (porMedio["tarjeta_credito"] ?? 0),
-      transferencia: porMedio["transferencia_debito"] ?? 0,
-      addi: (porMedio["addi"] ?? 0) + (porMedio["sistecredito"] ?? 0),
-      addiDetalle,
-    };
+  async function cargarSemana() {
+    setCargando(true);
+    const { data } = await supabase.from("cierres_caja_semanas").select("*").eq("semana_inicio", semanaInicio).maybeSingle();
+    setSemana((data as CierreCajaSemana) ?? null);
+    const hasta = sumarDiasCal(semanaInicio, 6);
+    const { data: diasData } = await supabase
+      .from("cierres_caja")
+      .select("*")
+      .gte("fecha", semanaInicio)
+      .lte("fecha", hasta)
+      .order("fecha");
+    setResumenDias((diasData as CierreCajaRow[]) ?? []);
+    setCargando(false);
   }
 
   useEffect(() => {
-    (async () => {
-      setCargando(true);
-      setMensaje(null);
-      const erp = await facturadoDesdeErp();
-      setAddiDetalleAuto(erp.addiDetalle);
-      const ex = cierres.find((c) => c.fecha === fecha) ?? null;
-      if (ex) {
-        setForm({
-          efvo_fact: String(ex.efvo_fact),
-          tarjeta_fact: String(ex.tarjeta_fact),
-          transf_fact: String(ex.transf_fact),
-          addi: String(ex.addi),
-          gasto: ex.gasto === null || ex.gasto === undefined ? "" : String(ex.gasto),
-          transf_directa: String(ex.transf_directa),
-          cuadra: ex.cuadra,
-          transf_por_verificar: ex.transf_por_verificar,
-          transf_sin_banco: ex.transf_sin_banco,
-          urgente_transf: ex.urgente_transf,
-          consignacion_cuenta2: ex.consignacion_cuenta2,
-          fuente_dataf: ex.fuente_dataf ?? "",
-          fuente_transf: ex.fuente_transf ?? "",
-          nota_dataf_extra: ex.nota_dataf_extra ?? "",
-          nota_transf_extra: ex.nota_transf_extra ?? "",
-          nota_banco_extra: ex.nota_banco_extra ?? "",
-          nota_limitacion: ex.nota_limitacion ?? "",
-          nota_cuenta2: ex.nota_cuenta2 ?? "",
-          nota_consignacion_pendiente: ex.nota_consignacion_pendiente ?? "",
-        });
-      } else {
-        setForm({
-          ...FORM_VACIO,
-          efvo_fact: String(erp.efectivo),
-          tarjeta_fact: String(erp.tarjeta),
-          transf_fact: String(erp.transferencia),
-          addi: String(erp.addi),
-        });
-      }
-      setCargando(false);
-    })();
+    cargarSemana();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fecha, sedeActiva.id]);
+  }, [semanaInicio]);
 
-  async function recalcularDesdeErp() {
-    const erp = await facturadoDesdeErp();
-    setAddiDetalleAuto(erp.addiDetalle);
-    setForm((f) => ({
-      ...f,
-      efvo_fact: String(erp.efectivo),
-      tarjeta_fact: String(erp.tarjeta),
-      transf_fact: String(erp.transferencia),
-      addi: String(erp.addi),
-    }));
+  async function asegurarSemana(): Promise<CierreCajaSemana | null> {
+    if (semana) return semana;
+    const { data, error } = await supabase
+      .from("cierres_caja_semanas")
+      .upsert({ semana_inicio: semanaInicio }, { onConflict: "semana_inicio" })
+      .select("*")
+      .single();
+    if (error || !data) {
+      window.alert(`No se pudo crear la semana: ${error?.message}`);
+      return null;
+    }
+    setSemana(data as CierreCajaSemana);
+    return data as CierreCajaSemana;
   }
 
-  function campo<K extends keyof FormCierre>(k: K, v: FormCierre[K]) {
-    setForm((f) => ({ ...f, [k]: v }));
+  async function subirDocumento(campo: keyof CierreCajaSemana, file: File) {
+    setSubiendo(campo);
+    const s = await asegurarSemana();
+    if (!s) {
+      setSubiendo(null);
+      return;
+    }
+    const path = `cierre-caja/semanas/${semanaInicio}/${campo}-${file.name}`;
+    const { error: errorSubida } = await supabase.storage.from("comprobantes").upload(path, file, { upsert: true });
+    if (errorSubida) {
+      window.alert(`No se pudo subir el documento: ${errorSubida.message}`);
+      setSubiendo(null);
+      return;
+    }
+    const { error: errorGuardado } = await supabase.from("cierres_caja_semanas").update({ [campo]: path }).eq("id", s.id);
+    if (errorGuardado) window.alert(`El archivo se subió pero no se pudo guardar el registro: ${errorGuardado.message}`);
+    setSubiendo(null);
+    cargarSemana();
   }
 
-  const efvo_fact = Number(form.efvo_fact) || 0;
-  const tarjeta_fact = Number(form.tarjeta_fact) || 0;
-  const transf_fact = Number(form.transf_fact) || 0;
-  const addi = Number(form.addi) || 0;
-  const total = efvo_fact + tarjeta_fact + transf_fact + addi;
-
-  async function subirDoc(campo: keyof CierreCajaRow, file: File) {
-    if (!existente) return;
-    setSubiendoDoc(campo);
-    const { error } = await subirDocumentoCierre(existente.id, claveSede, fecha, campo, file);
-    if (error) window.alert(`No se pudo subir el documento: ${error.message}`);
-    else onGuardado();
-    setSubiendoDoc(null);
+  async function verDocumento(path: string) {
+    const { data } = await supabase.storage.from("comprobantes").createSignedUrl(path, 60);
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
   }
 
-  async function guardar() {
-    setGuardando(true);
-    setMensaje(null);
-    const { error } = await supabase.from("cierres_caja").upsert(
-      {
-        fecha,
-        sede: claveSede,
-        efvo_fact,
-        tarjeta_fact,
-        transf_fact,
-        addi,
-        total,
-        cuadra: form.cuadra,
-        transf_directa: Number(form.transf_directa) || 0,
-        transf_por_verificar: form.transf_por_verificar,
-        transf_sin_banco: form.transf_sin_banco,
-        urgente_transf: form.urgente_transf,
-        gasto: form.gasto === "" ? null : Number(form.gasto),
-        fuente_dataf: form.fuente_dataf || null,
-        fuente_transf: form.fuente_transf || null,
-        nota_dataf_extra: form.nota_dataf_extra || null,
-        nota_transf_extra: form.nota_transf_extra || null,
-        nota_banco_extra: form.nota_banco_extra || null,
-        nota_limitacion: form.nota_limitacion || null,
-        nota_cuenta2: form.nota_cuenta2 || null,
-        consignacion_cuenta2: form.consignacion_cuenta2,
-        nota_consignacion_pendiente: form.nota_consignacion_pendiente || null,
-        // El cuadre ya no se digita a mano (arqueo/datáfono/banco) — se valida
-        // adjuntando los documentos de abajo. Estos campos legacy se preservan
-        // tal cual si el día ya existía (histórico anterior a este cambio).
-        arqueo: existente?.arqueo ?? null,
-        dataf_spro: existente?.dataf_spro ?? null,
-        dataf_qr: existente?.dataf_qr ?? null,
-        dif_efvo: existente?.dif_efvo ?? 0,
-        dif_dataf_bruta: existente?.dif_dataf_bruta ?? null,
-        dif_dataf_neta: existente?.dif_dataf_neta ?? null,
-        dataf_explicado: existente?.dataf_explicado ?? false,
-        dataf_explicacion: existente?.dataf_explicacion ?? null,
-        dataf_sin_docs: existente ? existente.dataf_sin_docs : true,
-        monto_cruzado: existente?.monto_cruzado ?? 0,
-        errores: existente?.errores ?? [],
-        transfs: existente?.transfs ?? [],
-        dups_elec: existente?.dups_elec ?? [],
-        addi_detalle: addiDetalleAuto,
-      },
-      { onConflict: "fecha,sede" },
-    );
-    setGuardando(false);
-    if (error) {
-      setMensaje(`Error al guardar: ${error.message}`);
-    } else {
-      setMensaje("Cierre guardado ✓");
+  async function procesarSemana() {
+    if (!semana) return;
+    setProcesando(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("procesar-cierre-semana-ia", { body: { semana_id: semana.id } });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Error desconocido procesando la semana.");
+    } catch (e) {
+      window.alert(
+        e && typeof e === "object" && "message" in e
+          ? String((e as { message: unknown }).message)
+          : "No se pudo procesar la semana con IA.",
+      );
+    } finally {
+      setProcesando(false);
+      await cargarSemana();
       onGuardado();
     }
   }
 
+  const hayAlgunDocumento = semana ? DOCUMENTOS_SEMANA.some((d) => semana[d.campo]) : false;
+  const diasPorSede = useMemo(() => {
+    const map: Record<string, CierreCajaRow | undefined> = {};
+    for (const c of resumenDias) map[`${c.fecha}|${c.sede}`] = c;
+    return map;
+  }, [resumenDias]);
+  const fechasSemana = Array.from({ length: 7 }, (_, i) => sumarDiasCal(semanaInicio, i));
+
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4 max-w-2xl">
+    <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4 max-w-3xl">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h3 className="font-semibold text-tinta">Hacer el cierre — {sedeActiva.nombre}</h3>
-          <p className="text-xs text-gray-400">{existente ? "Editando un cierre ya guardado para este día." : "Cierre nuevo para este día."}</p>
+          <h3 className="font-semibold text-tinta">Cierre de la semana</h3>
+          <p className="text-xs text-gray-400">
+            Sube acá los documentos de toda la semana (una sola vez, no por día) — el sistema compara contra lo que
+            ya cerró cada día en Cierre diario de Operación y te dice cuáles días no cuadran.
+          </p>
         </div>
-        <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+        <label className="text-xs text-gray-500">
+          Semana del (lunes)
+          <input
+            type="date"
+            value={semanaInicio}
+            onChange={(e) => setSemanaInicio(lunesDeSemana(e.target.value))}
+            className="mt-0.5 block rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          />
+        </label>
       </div>
 
       {cargando ? (
         <p className="text-sm text-gray-400">Cargando…</p>
       ) : (
         <>
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <p className="text-xs font-semibold text-gray-500">Facturado (traído del ERP — puedes corregirlo)</p>
-              <button onClick={recalcularDesdeErp} className="text-xs font-medium text-[var(--acento)] underline">
-                ↺ Recalcular desde ERP
-              </button>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {(
-                [
-                  ["efvo_fact", "Efectivo"],
-                  ["tarjeta_fact", "Tarjeta"],
-                  ["transf_fact", "Transferencia"],
-                  ["addi", "Addi/Sistecrédito"],
-                ] as const
-              ).map(([k, label]) => (
-                <label key={k} className="text-xs text-gray-500">
-                  {label}
-                  <input
-                    type="number"
-                    value={form[k]}
-                    onChange={(e) => campo(k, e.target.value)}
-                    className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                  />
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <p className="text-xs font-semibold text-gray-500 mb-1.5">Documentos del cierre (esto es lo que valida el cuadre)</p>
-            {!existente ? (
-              <p className="text-xs text-gray-400 rounded-lg border border-dashed border-gray-300 p-3">
-                Guarda el cierre primero (botón de abajo) para poder adjuntar aquí los documentos de este día.
-              </p>
-            ) : (
-              <div className="space-y-1.5">
-                {DOCUMENTOS.map((d) => {
-                  const url = existente[d.campo] as string | null;
-                  return (
-                    <div key={d.campo} className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm">
-                      <span className="text-gray-600">{d.label}</span>
-                      <div className="flex items-center gap-2 shrink-0">
-                        {url && (
-                          <button onClick={() => verDocumentoCierre(url)} className="text-xs font-medium text-[var(--acento)] underline">
-                            Ver
-                          </button>
-                        )}
-                        <label className="text-xs font-medium text-gray-500 underline cursor-pointer">
-                          {subiendoDoc === d.campo ? "Subiendo…" : url ? "Reemplazar" : "Adjuntar"}
-                          <input
-                            type="file"
-                            className="hidden"
-                            disabled={subiendoDoc === d.campo}
-                            onChange={(e) => {
-                              const file = e.target.files?.[0];
-                              if (file) subirDoc(d.campo, file);
-                              e.target.value = "";
-                            }}
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {existente && (existente.url_recibos_caja || existente.url_movimientos_banco || existente.url_tirilla_datafono || existente.url_reporte_datafono) && (
-            <div className="rounded-lg border border-dashed border-gray-300 p-3 space-y-2">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <p className="text-xs font-medium text-gray-500">
-                  Claude puede leer los documentos de arriba y sugerir los totales reales
-                </p>
-                <button
-                  onClick={procesarConIA}
-                  disabled={procesandoIA}
-                  className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-[var(--acento)] text-white disabled:opacity-40"
-                >
-                  {procesandoIA ? "Procesando…" : "✨ Procesar con IA"}
-                </button>
-              </div>
-              {errorIA && <p className="text-xs text-red-600">{errorIA}</p>}
-              {existente.analisis_ia && (
-                <div className="rounded-lg bg-gray-50 p-3 text-sm space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-500">Efectivo real (IA)</span>
-                    <span>{existente.analisis_ia.efectivo_real === null ? "—" : fmtCOP(existente.analisis_ia.efectivo_real)}</span>
+          <div className="space-y-1.5">
+            {DOCUMENTOS_SEMANA.map((d) => {
+              const url = semana?.[d.campo] as string | null | undefined;
+              return (
+                <div key={d.campo} className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm">
+                  <span className="text-gray-600">{d.label}</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {url && (
+                      <button onClick={() => verDocumento(url)} className="text-xs font-medium text-[var(--acento)] underline">
+                        Ver
+                      </button>
+                    )}
+                    <label className="text-xs font-medium text-gray-500 underline cursor-pointer">
+                      {subiendo === d.campo ? "Subiendo…" : url ? "Reemplazar" : "Adjuntar"}
+                      <input
+                        type="file"
+                        className="hidden"
+                        disabled={subiendo === d.campo}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) subirDocumento(d.campo, file);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-500">Datáfono real (IA)</span>
-                    <span>{existente.analisis_ia.datafono_real === null ? "—" : fmtCOP(existente.analisis_ia.datafono_real)}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-500">Banco consignado (IA)</span>
-                    <span>{existente.analisis_ia.banco_consignado === null ? "—" : fmtCOP(existente.analisis_ia.banco_consignado)}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-500">Diferencia efectivo</span>
-                    <span className={existente.analisis_ia.diferencia_efectivo ? "text-red-600 font-medium" : ""}>
-                      {existente.analisis_ia.diferencia_efectivo === null ? "—" : fmtCOP(existente.analisis_ia.diferencia_efectivo)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-500">Diferencia datáfono</span>
-                    <span className={existente.analisis_ia.diferencia_datafono ? "text-red-600 font-medium" : ""}>
-                      {existente.analisis_ia.diferencia_datafono === null ? "—" : fmtCOP(existente.analisis_ia.diferencia_datafono)}
-                    </span>
-                  </div>
-                  <p className="text-xs text-gray-500 pt-1 border-t border-gray-200">{existente.analisis_ia.resumen}</p>
-                  <p className="text-xs text-gray-400">
-                    Sugerencia de la IA — revísala y marca tú mismo el check "Cuadra" más abajo, no se marca sola.
-                  </p>
                 </div>
-              )}
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-2">
-            <label className="text-xs text-gray-500">
-              Gasto del día
-              <input
-                type="number"
-                value={form.gasto}
-                onChange={(e) => campo("gasto", e.target.value)}
-                className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-              />
-            </label>
-            <label className="text-xs text-gray-500">
-              Transferencia directa a cuenta
-              <input
-                type="number"
-                value={form.transf_directa}
-                onChange={(e) => campo("transf_directa", e.target.value)}
-                className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-              />
-            </label>
+              );
+            })}
           </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <label className="text-xs text-gray-500">
-              Fuente datáfono
-              <input
-                value={form.fuente_dataf}
-                onChange={(e) => campo("fuente_dataf", e.target.value)}
-                placeholder="SPRO Bold / Redeban"
-                className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-              />
-            </label>
-            <label className="text-xs text-gray-500">
-              Fuente transferencia
-              <input
-                value={form.fuente_transf}
-                onChange={(e) => campo("fuente_transf", e.target.value)}
-                placeholder="QR Bold / Bancolombia"
-                className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-              />
-            </label>
-          </div>
-
-          <div>
-            <p className="text-xs font-semibold text-gray-500 mb-1.5">Banderas</p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-              {(
-                [
-                  ["transf_por_verificar", "Transferencia por verificar"],
-                  ["transf_sin_banco", "Transferencia sin banco"],
-                  ["urgente_transf", "Urgente transferencia"],
-                  ["consignacion_cuenta2", "Consignación a cuenta 2"],
-                ] as const
-              ).map(([k, label]) => (
-                <label key={k} className="flex items-center gap-1.5 text-xs">
-                  <input type="checkbox" checked={form[k]} onChange={(e) => campo(k, e.target.checked)} />
-                  {label}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <p className="text-xs font-semibold text-gray-500 mb-1.5">Notas</p>
-            <div className="space-y-1.5">
-              {(
-                [
-                  ["nota_dataf_extra", "Nota datáfono extra"],
-                  ["nota_transf_extra", "Nota transferencia extra"],
-                  ["nota_banco_extra", "Nota banco / consignación"],
-                  ["nota_limitacion", "Limitación"],
-                  ["nota_cuenta2", "Nota cuenta 2"],
-                  ["nota_consignacion_pendiente", "Consignación pendiente"],
-                ] as const
-              ).map(([k, label]) => (
-                <input
-                  key={k}
-                  value={form[k]}
-                  onChange={(e) => campo(k, e.target.value)}
-                  placeholder={label}
-                  className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                />
-              ))}
-            </div>
-          </div>
-
-          <p className="text-xs text-gray-400">
-            Los cruces entre sede, posibles duplicados y transferencias específicas por verificar todavía no tienen un
-            editor propio — mientras tanto regístralos en las notas de arriba. El Addi/Sistecrédito del día
-            ({addiDetalleAuto.length} registro{addiDetalleAuto.length === 1 ? "" : "s"}) se recalcula automáticamente
-            desde el ERP al guardar.
-          </p>
-
-          <div className="rounded-lg bg-gray-50 px-3 py-2.5 text-sm space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-gray-500">Total facturado (Operación)</span>
-              <span className="font-semibold">{fmtCOP(total)}</span>
-            </div>
-            <label className="flex items-center gap-2 pt-2 border-t border-gray-100">
-              <input type="checkbox" checked={form.cuadra} onChange={(e) => campo("cuadra", e.target.checked)} />
-              <span className={`font-semibold ${form.cuadra ? "text-[#3E9B6F]" : "text-red-600"}`}>
-                {form.cuadra ? "✔ Cuadra" : "Revisar"}
-              </span>
-              <span className="text-xs text-gray-400">— marca esto tú mismo después de comparar el total contra los documentos adjuntos</span>
-            </label>
-          </div>
-
-          {mensaje && <p className={`text-sm ${mensaje.startsWith("Error") ? "text-red-600" : "text-[var(--acento)]"}`}>{mensaje}</p>}
 
           <button
-            onClick={guardar}
-            disabled={guardando}
-            className="w-full rounded-lg bg-[var(--acento)] text-white py-2.5 text-sm font-medium disabled:opacity-40"
+            onClick={procesarSemana}
+            disabled={!hayAlgunDocumento || procesando}
+            className="flex items-center gap-1.5 text-sm font-medium px-4 py-2.5 rounded-lg bg-[var(--acento)] text-white disabled:opacity-40"
           >
-            {guardando ? "Guardando…" : existente ? "Actualizar cierre" : "Guardar cierre"}
+            {procesando ? "Procesando…" : "✨ Procesar semana con IA"}
           </button>
+          {semana?.error_ia && <p className="text-sm text-red-600">{semana.error_ia}</p>}
+          {semana?.resumen_ia && (
+            <p className="text-sm rounded-lg bg-gray-50 p-3">
+              <span className="font-semibold text-gray-600">Resumen de la IA: </span>
+              {semana.resumen_ia}
+            </p>
+          )}
+
+          <div>
+            <p className="text-xs font-semibold text-gray-500 mb-1.5">Días de esta semana</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-gray-500 text-xs">
+                    <th className="py-1 pr-2">Fecha</th>
+                    <th className="py-1 pr-2">Las Américas</th>
+                    <th className="py-1">Fabricato</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fechasSemana.map((fecha) => (
+                    <tr key={fecha} className="border-t border-gray-100">
+                      <td className="py-1.5 pr-2 text-gray-500">{fecha}</td>
+                      {(["Las Americas", "Fabricato"] as const).map((sede) => {
+                        const c = diasPorSede[`${fecha}|${sede}`];
+                        return (
+                          <td key={sede} className="py-1.5 pr-2">
+                            {c ? (
+                              <button
+                                onClick={() => onAbrirDetalle(c)}
+                                className="text-xs font-semibold px-2 py-0.5 rounded-full text-white"
+                                style={{ background: c.cuadra ? "#3E9B6F" : "#C0392B" }}
+                              >
+                                {c.cuadra ? "✔ Cuadra" : "Revisar"}
+                              </button>
+                            ) : (
+                              <span className="text-xs text-gray-300">Sin datos</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </>
       )}
     </div>
@@ -1023,9 +736,26 @@ function PendienteRow({
 const DOCUMENTOS: { campo: keyof CierreCajaRow; label: string }[] = [
   { campo: "url_recibos_caja", label: "Reporte de recibos de caja (Oral Drive)" },
   { campo: "url_movimientos_banco", label: "Movimientos de cuentas bancarias" },
+  { campo: "url_movimientos_banco_2", label: "Movimientos de cuentas bancarias (cuenta 2 / Bold)" },
   { campo: "url_tirilla_datafono", label: "Tirilla de datáfono" },
   { campo: "url_reporte_datafono", label: "Reporte de datáfono" },
 ];
+
+interface FormNotasCierre {
+  transf_directa: string;
+  transf_por_verificar: boolean;
+  transf_sin_banco: boolean;
+  urgente_transf: boolean;
+  consignacion_cuenta2: boolean;
+  fuente_dataf: string;
+  fuente_transf: string;
+  nota_dataf_extra: string;
+  nota_transf_extra: string;
+  nota_banco_extra: string;
+  nota_limitacion: string;
+  nota_cuenta2: string;
+  nota_consignacion_pendiente: string;
+}
 
 /** Sube un soporte del día y lo asocia al cierre. Si es un documento de
  *  datáfono, apaga automáticamente la bandera legacy "dataf_sin_docs" —
@@ -1055,34 +785,60 @@ interface CierreOperacion {
 function DetalleModal({
   cierre,
   onClose,
-  claveSede,
-  sedeActiva,
+  sedes,
   onGuardado,
 }: {
   cierre: CierreCajaRow;
   onClose: () => void;
-  claveSede: string;
-  sedeActiva: Sede;
+  sedes: Sede[];
   onGuardado: () => void;
 }) {
+  // El día puede ser de cualquiera de las 2 sedes (se abre también desde el
+  // resumen semanal, que junta ambas) — se resuelve contra la sede real del
+  // día, no contra la que esté elegida arriba con las pastillas.
+  const claveSede = cierre.sede;
+  const sedeDelCierre = sedes.find((s) => claveSedeDe(s) === cierre.sede) ?? null;
+
   const [operacion, setOperacion] = useState<CierreOperacion | null>(null);
   const [cargandoOperacion, setCargandoOperacion] = useState(true);
   const [subiendo, setSubiendo] = useState<string | null>(null);
+  const [cuadra, setCuadra] = useState(cierre.cuadra);
+  const [procesandoIA, setProcesandoIA] = useState(false);
+  const [errorIA, setErrorIA] = useState<string | null>(null);
+  const [notas, setNotas] = useState<FormNotasCierre>({
+    transf_directa: String(cierre.transf_directa ?? 0),
+    transf_por_verificar: cierre.transf_por_verificar,
+    transf_sin_banco: cierre.transf_sin_banco,
+    urgente_transf: cierre.urgente_transf,
+    consignacion_cuenta2: cierre.consignacion_cuenta2,
+    fuente_dataf: cierre.fuente_dataf ?? "",
+    fuente_transf: cierre.fuente_transf ?? "",
+    nota_dataf_extra: cierre.nota_dataf_extra ?? "",
+    nota_transf_extra: cierre.nota_transf_extra ?? "",
+    nota_banco_extra: cierre.nota_banco_extra ?? "",
+    nota_limitacion: cierre.nota_limitacion ?? "",
+    nota_cuenta2: cierre.nota_cuenta2 ?? "",
+    nota_consignacion_pendiente: cierre.nota_consignacion_pendiente ?? "",
+  });
 
   useEffect(() => {
+    if (!sedeDelCierre) {
+      setCargandoOperacion(false);
+      return;
+    }
     (async () => {
       setCargandoOperacion(true);
       const { data: cierreDiario } = await supabase
         .from("cierres_diarios")
         .select("consignado, comprobante_url, entregado_admin")
-        .eq("sede_id", sedeActiva.id)
+        .eq("sede_id", sedeDelCierre.id)
         .eq("fecha", cierre.fecha)
         .maybeSingle();
 
       const { data: pagosData } = await supabase
         .from("cargo_pagos")
         .select("medio_pago, valor, cargos!inner(sede_id, fecha)")
-        .eq("cargos.sede_id", sedeActiva.id)
+        .eq("cargos.sede_id", sedeDelCierre.id)
         .eq("cargos.fecha", cierre.fecha)
         .neq("medio_pago", "saldo_favor");
       const porMedio: Record<string, number> = {};
@@ -1095,7 +851,7 @@ function DetalleModal({
       const { data: saldosData } = await supabase
         .from("saldos_favor")
         .select("valor, medio_origen")
-        .eq("sede_origen_id", sedeActiva.id)
+        .eq("sede_origen_id", sedeDelCierre.id)
         .eq("fecha", cierre.fecha)
         .neq("medio_origen", "ajuste_manual");
       for (const s of (saldosData as unknown as { valor: number; medio_origen: string }[]) ?? []) {
@@ -1110,7 +866,7 @@ function DetalleModal({
       });
       setCargandoOperacion(false);
     })();
-  }, [cierre.fecha, sedeActiva.id]);
+  }, [cierre.fecha, sedeDelCierre]);
 
   async function subirDocumento(campo: keyof CierreCajaRow, file: File) {
     setSubiendo(campo);
@@ -1125,15 +881,93 @@ function DetalleModal({
 
   const verDocumento = verDocumentoCierre;
 
+  async function guardarCuadra(v: boolean) {
+    setCuadra(v);
+    await supabase.from("cierres_caja").update({ cuadra: v }).eq("id", cierre.id);
+    onGuardado();
+  }
+
+  function campoNota<K extends keyof FormNotasCierre>(k: K, v: FormNotasCierre[K]) {
+    setNotas((n) => ({ ...n, [k]: v }));
+  }
+
+  async function guardarNotas(override?: Partial<FormNotasCierre>) {
+    const n = { ...notas, ...override };
+    await supabase
+      .from("cierres_caja")
+      .update({
+        transf_directa: Number(n.transf_directa) || 0,
+        transf_por_verificar: n.transf_por_verificar,
+        transf_sin_banco: n.transf_sin_banco,
+        urgente_transf: n.urgente_transf,
+        consignacion_cuenta2: n.consignacion_cuenta2,
+        fuente_dataf: n.fuente_dataf || null,
+        fuente_transf: n.fuente_transf || null,
+        nota_dataf_extra: n.nota_dataf_extra || null,
+        nota_transf_extra: n.nota_transf_extra || null,
+        nota_banco_extra: n.nota_banco_extra || null,
+        nota_limitacion: n.nota_limitacion || null,
+        nota_cuenta2: n.nota_cuenta2 || null,
+        nota_consignacion_pendiente: n.nota_consignacion_pendiente || null,
+      })
+      .eq("id", cierre.id);
+    onGuardado();
+  }
+
+  function toggleNota(
+    k: "transf_por_verificar" | "transf_sin_banco" | "urgente_transf" | "consignacion_cuenta2",
+    v: boolean,
+  ) {
+    campoNota(k, v);
+    guardarNotas({ [k]: v });
+  }
+
+  async function procesarConIA() {
+    setProcesandoIA(true);
+    setErrorIA(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("procesar-cierre-ia", { body: { cierre_id: cierre.id } });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Error desconocido procesando el cierre.");
+      onGuardado();
+    } catch (e) {
+      setErrorIA(
+        e && typeof e === "object" && "message" in e
+          ? String((e as { message: unknown }).message)
+          : "No se pudo procesar el cierre con IA.",
+      );
+    } finally {
+      setProcesandoIA(false);
+    }
+  }
+
   const totalOperacionEfectivo = operacion?.porMedio["efectivo"] ?? 0;
   const totalOperacionTarjeta = (operacion?.porMedio["tarjeta_debito"] ?? 0) + (operacion?.porMedio["tarjeta_credito"] ?? 0);
   const totalOperacionTransf = operacion?.porMedio["transferencia_debito"] ?? 0;
   const totalOperacionAddi = (operacion?.porMedio["addi"] ?? 0) + (operacion?.porMedio["sistecredito"] ?? 0);
 
   const filas = [
-    { label: "Efectivo", facturado: cierre.efvo_fact, real: cierre.arqueo, diff: cierre.dif_efvo, operacion: totalOperacionEfectivo },
-    { label: "Tarjeta", facturado: cierre.tarjeta_fact, real: cierre.dataf_spro, diff: cierre.dif_dataf_bruta, operacion: totalOperacionTarjeta },
-    { label: "Transferencia", facturado: cierre.transf_fact, real: cierre.dataf_qr, diff: null, operacion: totalOperacionTransf },
+    {
+      label: "Efectivo",
+      facturado: cierre.efvo_fact,
+      real: cierre.analisis_ia?.efectivo_real ?? null,
+      diff: cierre.analisis_ia?.diferencia_efectivo ?? null,
+      operacion: totalOperacionEfectivo,
+    },
+    {
+      label: "Tarjeta",
+      facturado: cierre.tarjeta_fact,
+      real: cierre.analisis_ia?.tarjeta_real ?? null,
+      diff: cierre.analisis_ia?.diferencia_tarjeta ?? null,
+      operacion: totalOperacionTarjeta,
+    },
+    {
+      label: "Transferencia",
+      facturado: cierre.transf_fact,
+      real: cierre.analisis_ia?.transferencia_real ?? null,
+      diff: cierre.analisis_ia?.diferencia_transferencia ?? null,
+      operacion: totalOperacionTransf,
+    },
     { label: "Addi / Sistecrédito", facturado: cierre.addi, real: null, diff: null, operacion: totalOperacionAddi },
   ];
   return (
@@ -1152,8 +986,8 @@ function DetalleModal({
               <tr className="text-left text-gray-500">
                 <th className="py-1">Medio</th>
                 <th className="py-1 text-right">Facturado</th>
-                <th className="py-1 text-right">Real</th>
-                <th className="py-1 text-right">Diferencia</th>
+                <th className="py-1 text-right">Real (IA)</th>
+                <th className="py-1 text-right">Diferencia (IA)</th>
                 <th className="py-1 text-right">Cierre diario (Operación)</th>
               </tr>
             </thead>
@@ -1173,8 +1007,36 @@ function DetalleModal({
         <p className="text-xs text-gray-400 -mt-2">
           "Cierre diario (Operación)" es lo que hoy calcula en vivo la pantalla de Cierre diario de Operación Diaria
           para este día, a partir de los cobros reales del ERP — compáralo contra "Facturado" para detectar
-          diferencias de digitación.
+          diferencias de digitación. "Real (IA)" es lo que Claude leyó en los documentos adjuntos de la semana.
         </p>
+
+        {cierre.analisis_ia && (
+          <div className="rounded-lg bg-gray-50 p-3 text-sm space-y-1.5">
+            <p className="text-gray-600">{cierre.analisis_ia.resumen}</p>
+            <p className="text-xs text-gray-400">
+              Sugerencia de la IA:{" "}
+              <span className={cierre.analisis_ia.cuadra_sugerido ? "text-[#3E9B6F] font-medium" : "text-red-600 font-medium"}>
+                {cierre.analisis_ia.cuadra_sugerido ? "cuadra" : "revisar"}
+              </span>{" "}
+              — revísala y marca tú mismo el check "Cuadra" abajo, no se marca sola.
+            </p>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <label className="flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-sm">
+            <input type="checkbox" checked={cuadra} onChange={(e) => guardarCuadra(e.target.checked)} />
+            <span className={`font-semibold ${cuadra ? "text-[#3E9B6F]" : "text-red-600"}`}>{cuadra ? "✔ Cuadra" : "Revisar"}</span>
+          </label>
+          <button
+            onClick={procesarConIA}
+            disabled={procesandoIA}
+            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-[var(--acento)] text-white disabled:opacity-40"
+          >
+            {procesandoIA ? "Procesando…" : "✨ Reprocesar este día con IA"}
+          </button>
+        </div>
+        {errorIA && <p className="text-xs text-red-600">{errorIA}</p>}
 
         {!cargandoOperacion && (
           <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm flex items-center justify-between flex-wrap gap-2">
@@ -1195,21 +1057,85 @@ function DetalleModal({
           </div>
         )}
 
-        {[
-          ["Explicación datáfono", cierre.dataf_explicacion],
-          ["Nota datáfono", cierre.nota_dataf_extra],
-          ["Nota transferencia", cierre.nota_transf_extra],
-          ["Nota banco / consignación", cierre.nota_banco_extra],
-          ["Limitación", cierre.nota_limitacion],
-          ["Nota cuenta 2", cierre.nota_cuenta2],
-          ["Consignación pendiente", cierre.nota_consignacion_pendiente],
-        ]
-          .filter(([, v]) => v)
-          .map(([label, v]) => (
-            <p key={label} className="text-sm">
-              <span className="text-gray-500">{label}:</span> {v}
-            </p>
-          ))}
+        {cierre.dataf_explicacion && (
+          <p className="text-sm">
+            <span className="text-gray-500">Explicación datáfono:</span> {cierre.dataf_explicacion}
+          </p>
+        )}
+
+        <details className="rounded-lg border border-gray-200 p-3">
+          <summary className="text-xs font-semibold text-gray-500 cursor-pointer">Banderas y notas</summary>
+          <div className="mt-2 space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <label className="text-xs text-gray-500">
+                Transferencia directa a cuenta
+                <input
+                  type="number"
+                  value={notas.transf_directa}
+                  onChange={(e) => campoNota("transf_directa", e.target.value)}
+                  onBlur={() => guardarNotas()}
+                  className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+              <label className="text-xs text-gray-500">
+                Fuente datáfono
+                <input
+                  value={notas.fuente_dataf}
+                  onChange={(e) => campoNota("fuente_dataf", e.target.value)}
+                  onBlur={() => guardarNotas()}
+                  placeholder="SPRO Bold / Redeban"
+                  className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+              <label className="text-xs text-gray-500">
+                Fuente transferencia
+                <input
+                  value={notas.fuente_transf}
+                  onChange={(e) => campoNota("fuente_transf", e.target.value)}
+                  onBlur={() => guardarNotas()}
+                  placeholder="QR Bold / Bancolombia"
+                  className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              {(
+                [
+                  ["transf_por_verificar", "Transferencia por verificar"],
+                  ["transf_sin_banco", "Transferencia sin banco"],
+                  ["urgente_transf", "Urgente transferencia"],
+                  ["consignacion_cuenta2", "Consignación a cuenta 2"],
+                ] as const
+              ).map(([k, label]) => (
+                <label key={k} className="flex items-center gap-1.5 text-xs">
+                  <input type="checkbox" checked={notas[k]} onChange={(e) => toggleNota(k, e.target.checked)} />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <div className="space-y-1.5">
+              {(
+                [
+                  ["nota_dataf_extra", "Nota datáfono extra"],
+                  ["nota_transf_extra", "Nota transferencia extra"],
+                  ["nota_banco_extra", "Nota banco / consignación"],
+                  ["nota_limitacion", "Limitación"],
+                  ["nota_cuenta2", "Nota cuenta 2"],
+                  ["nota_consignacion_pendiente", "Consignación pendiente"],
+                ] as const
+              ).map(([k, label]) => (
+                <input
+                  key={k}
+                  value={notas[k]}
+                  onChange={(e) => campoNota(k, e.target.value)}
+                  onBlur={() => guardarNotas()}
+                  placeholder={label}
+                  className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-xs"
+                />
+              ))}
+            </div>
+          </div>
+        </details>
 
         {cierre.errores.length > 0 && (
           <div>

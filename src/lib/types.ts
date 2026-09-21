@@ -535,6 +535,9 @@ export interface CierreCaja {
   addi_detalle: AddiDetalle[];
   url_recibos_caja: string | null;
   url_movimientos_banco: string | null;
+  // Fabricato mueve/consigna también por Bold, aparte de Bancolombia (que
+  // cubre ambas sedes) — segunda fuente de banco, solo aplica a Fabricato.
+  url_movimientos_banco_2: string | null;
   url_tirilla_datafono: string | null;
   url_reporte_datafono: string | null;
   analisis_ia: AnalisisIA | null;
@@ -542,11 +545,31 @@ export interface CierreCaja {
 
 export interface AnalisisIA {
   efectivo_real: number | null;
-  datafono_real: number | null;
-  banco_consignado: number | null;
+  tarjeta_real: number | null;
+  transferencia_real: number | null;
   diferencia_efectivo: number | null;
-  diferencia_datafono: number | null;
+  diferencia_tarjeta: number | null;
+  diferencia_transferencia: number | null;
   cuadra_sugerido: boolean;
   resumen: string;
   generado_en: string;
+}
+
+/** Los 5 documentos que se suben una vez por semana (no por día) — cada uno
+ *  cubre varios días y, salvo Bancolombia, una sola sede — y a partir de los
+ *  cuales se genera/actualiza el cierre de cada uno de los 7 días × 2 sedes
+ *  de esa semana en cierres_caja. */
+export interface CierreCajaSemana {
+  id: string;
+  semana_inicio: string;
+  url_datafono_americas: string | null;
+  url_datafono_fabricato: string | null;
+  url_bancolombia: string | null;
+  url_bold_fabricato: string | null;
+  url_recibos_caja: string | null;
+  procesando: boolean;
+  procesado_en: string | null;
+  resumen_ia: string | null;
+  error_ia: string | null;
+  created_at: string;
 }
