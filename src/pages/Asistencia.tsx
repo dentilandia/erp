@@ -449,6 +449,11 @@ export function Asistencia() {
   // asistencia". Por defecto hoy, pero se puede mirar cualquier otro día.
   const [fechaDashboard, setFechaDashboard] = useState(() => fechaBogota(new Date().toISOString()));
   const [marcasDashboard, setMarcasDashboard] = useState<Record<string, Partial<Record<TipoAsistencia, string>>>>({});
+  // Sede real donde marcó ese día (de la marca en sí, no la sede fija del
+  // perfil) — para alguien como Sirley, que no tiene una sede fija asignada
+  // y puede marcar en cualquiera de las dos, así se ve dónde estuvo hoy en
+  // vez de quedar siempre en blanco.
+  const [sedeDelDiaDashboard, setSedeDelDiaDashboard] = useState<Record<string, string>>({});
   const [cargandoDashboard, setCargandoDashboard] = useState(true);
 
   async function cargarDashboardHoy() {
@@ -457,16 +462,25 @@ export function Asistencia() {
     const hasta = `${sumarDias(fechaDashboard, 1)}T00:00:00-05:00`;
     const { data } = await supabase
       .from("asistencia_registros")
-      .select("perfil_id, tipo, marcado_en")
+      .select("perfil_id, tipo, marcado_en, sedes(nombre)")
       .gte("marcado_en", desde)
       .lt("marcado_en", hasta)
       .order("marcado_en");
     const mapa: Record<string, Partial<Record<TipoAsistencia, string>>> = {};
-    for (const r of (data as { perfil_id: string; tipo: TipoAsistencia; marcado_en: string }[]) ?? []) {
+    const sedeDia: Record<string, string> = {};
+    for (const r of (data as unknown as {
+      perfil_id: string; tipo: TipoAsistencia; marcado_en: string; sedes: { nombre: string } | null;
+    }[]) ?? []) {
       const entrada = (mapa[r.perfil_id] ??= {});
       if (!entrada[r.tipo]) entrada[r.tipo] = r.marcado_en;
+      // La sede de la llegada manda; si no marcó llegada ese día, se queda
+      // con la de la primera marca que sí tenga (por el order() de arriba).
+      if (r.sedes?.nombre && (r.tipo === "llegada" || !sedeDia[r.perfil_id])) {
+        sedeDia[r.perfil_id] = r.sedes.nombre;
+      }
     }
     setMarcasDashboard(mapa);
+    setSedeDelDiaDashboard(sedeDia);
     setCargandoDashboard(false);
   }
 
@@ -1443,7 +1457,7 @@ export function Asistencia() {
                     return (
                       <tr key={p.id}>
                         <td className="py-1.5 pr-3 font-medium">{p.nombre}</td>
-                        <td className="py-1.5 pr-3 text-gray-500">{p.sedeNombre ?? "—"}</td>
+                        <td className="py-1.5 pr-3 text-gray-500">{sedeDelDiaDashboard[p.id] ?? p.sedeNombre ?? "—"}</td>
                         {TIPOS_ASISTENCIA.map((t) => {
                           const marca = marcas[t.value];
                           return (
