@@ -588,11 +588,8 @@ export function Asistencia() {
   const [heColaboradoresIds, setHeColaboradoresIds] = useState<string[]>([]);
   const [hePacienteNombre, setHePacienteNombre] = useState("");
   const [heMotivo, setHeMotivo] = useState("");
-  const [heHoraIngreso, setHeHoraIngreso] = useState("");
   const [guardandoHE, setGuardandoHE] = useState(false);
   const [errorHE, setErrorHE] = useState<string | null>(null);
-  const [horaSalidaInput, setHoraSalidaInput] = useState<Record<string, string>>({});
-  const [guardandoSalidaHE, setGuardandoSalidaHE] = useState<string | null>(null);
   const [finalizarForm, setFinalizarForm] = useState<
     Record<string, { pacientePago: boolean | null; seAgendoCita: boolean | null; tareas: Record<string, string> }>
   >({});
@@ -1187,7 +1184,10 @@ export function Asistencia() {
         doctora_id: heDoctoraId,
         paciente_nombre: hePacienteNombre.trim(),
         motivo: heMotivo.trim(),
-        hora_ingreso_consultorio: heHoraIngreso || null,
+        // Hora real del sistema al registrar la solicitud — ya no se pide
+        // manualmente, para que quede la hora exacta en que de verdad llegó
+        // el paciente, no una que alguien escriba de memoria después.
+        hora_ingreso_consultorio: horaBogotaAhora(),
         created_by: perfil?.id ?? null,
       })
       .select("id")
@@ -1209,65 +1209,18 @@ export function Asistencia() {
     setHeColaboradoresIds([]);
     setHePacienteNombre("");
     setHeMotivo("");
-    setHeHoraIngreso("");
     cargarSolicitudesHE();
   }
 
-  // Si ya había una salida marcada ese día, se reemplaza por esta — la idea
-  // es que quede una sola salida real por día en asistencia_registros, sin
-  // tener que corregirla a mano una segunda vez.
-  async function guardarSalidaColaborador(
-    solicitud: SolicitudHorasExtra,
-    colaborador: ColaboradorHorasExtra & { nombre: string },
-  ) {
-    const hora = horaSalidaInput[colaborador.id];
-    if (!hora) return;
-    setGuardandoSalidaHE(colaborador.id);
-    setErrorHE(null);
-    const marcadoEn = new Date(`${solicitud.fecha}T${hora}:00-05:00`).toISOString();
-    const desde = `${solicitud.fecha}T00:00:00-05:00`;
-    const hasta = `${sumarDias(solicitud.fecha, 1)}T00:00:00-05:00`;
-    const { data: existentes } = await supabase
-      .from("asistencia_registros")
-      .select("id")
-      .eq("perfil_id", colaborador.perfil_id)
-      .eq("tipo", "salida")
-      .gte("marcado_en", desde)
-      .lt("marcado_en", hasta);
-    for (const ex of existentes ?? []) {
-      await supabase.from("asistencia_registros").delete().eq("id", ex.id);
-    }
-    const { data: nuevaMarca, error } = await supabase
-      .from("asistencia_registros")
-      .insert({
-        perfil_id: colaborador.perfil_id,
-        sede_id: personas.find((p) => p.id === colaborador.perfil_id)?.sede_id ?? null,
-        tipo: "salida",
-        marcado_en: marcadoEn,
-      })
-      .select("id")
-      .single();
-    if (error || !nuevaMarca) {
-      setGuardandoSalidaHE(null);
-      setErrorHE(error?.message ?? "No se pudo registrar la salida.");
-      return;
-    }
-    const { error: errorUpd } = await supabase
-      .from("asistencia_horas_extra_colaboradores")
-      .update({ hora_salida: marcadoEn, marca_registro_id: nuevaMarca.id })
-      .eq("id", colaborador.id);
-    setGuardandoSalidaHE(null);
-    if (errorUpd) {
-      setErrorHE(errorUpd.message);
-      return;
-    }
-    // La salida cambió — si ese día ya tenía un "compensado" guardado
-    // (calculado contra la salida anterior), queda desactualizado.
-    await recalcularCompensadoDia(colaborador.perfil_id, solicitud.fecha);
-    cargarSolicitudesHE();
-    cargarReporte();
-  }
-
+  // Antes se marcaba la salida de cada colaborador (con una hora escrita a
+  // mano) antes de saber siquiera si el paciente ya había sido atendido —
+  // podía quedar una hora de salida de alguien que en realidad seguía con el
+  // paciente. Ahora la salida se registra acá, junto con el resto de la
+  // solicitud, en un solo guardado y con la hora real del sistema en ese
+  // momento — es decir, primero se atiende y se llenan los datos, y llenarlos
+  // es lo que marca la salida, no al revés. Si ya había una salida marcada
+  // ese día, se reemplaza por esta, para que quede una sola salida real por
+  // día en asistencia_registros.
   async function finalizarSolicitudHE(
     solicitud: SolicitudHorasExtra & { colaboradores: (ColaboradorHorasExtra & { nombre: string })[] },
   ) {
@@ -1275,28 +1228,65 @@ export function Asistencia() {
     if (!form || form.pacientePago === null || form.seAgendoCita === null) return;
     setGuardandoFinalizarHE(solicitud.id);
     setErrorHE(null);
+    const ahora = new Date().toISOString();
+    const desde = `${solicitud.fecha}T00:00:00-05:00`;
+    const hasta = `${sumarDias(solicitud.fecha, 1)}T00:00:00-05:00`;
+    for (const c of solicitud.colaboradores) {
+      const { data: existentes } = await supabase
+        .from("asistencia_registros")
+        .select("id")
+        .eq("perfil_id", c.perfil_id)
+        .eq("tipo", "salida")
+        .gte("marcado_en", desde)
+        .lt("marcado_en", hasta);
+      for (const ex of existentes ?? []) {
+        await supabase.from("asistencia_registros").delete().eq("id", ex.id);
+      }
+      const { data: nuevaMarca, error: errorMarca } = await supabase
+        .from("asistencia_registros")
+        .insert({
+          perfil_id: c.perfil_id,
+          sede_id: personas.find((p) => p.id === c.perfil_id)?.sede_id ?? null,
+          tipo: "salida",
+          marcado_en: ahora,
+        })
+        .select("id")
+        .single();
+      if (errorMarca || !nuevaMarca) {
+        setGuardandoFinalizarHE(null);
+        setErrorHE(errorMarca?.message ?? "No se pudo registrar la salida.");
+        return;
+      }
+      const tarea = form.tareas[c.id]?.trim();
+      const { error: errorUpd } = await supabase
+        .from("asistencia_horas_extra_colaboradores")
+        .update({ hora_salida: ahora, marca_registro_id: nuevaMarca.id, ...(tarea ? { tareas_realizadas: tarea } : {}) })
+        .eq("id", c.id);
+      if (errorUpd) {
+        setGuardandoFinalizarHE(null);
+        setErrorHE(errorUpd.message);
+        return;
+      }
+      // La salida cambió — si ese día ya tenía un "compensado" guardado
+      // (calculado contra la salida anterior), queda desactualizado.
+      await recalcularCompensadoDia(c.perfil_id, solicitud.fecha);
+    }
     const { error } = await supabase
       .from("asistencia_horas_extra")
       .update({
         estado: "finalizada",
         paciente_pago: form.pacientePago,
         se_agendo_cita: form.seAgendoCita,
-        finalizada_en: new Date().toISOString(),
+        finalizada_en: ahora,
       })
       .eq("id", solicitud.id);
+    setGuardandoFinalizarHE(null);
     if (error) {
-      setGuardandoFinalizarHE(null);
       setErrorHE(error.message);
       return;
     }
-    for (const c of solicitud.colaboradores) {
-      const tarea = form.tareas[c.id]?.trim();
-      if (tarea) {
-        await supabase.from("asistencia_horas_extra_colaboradores").update({ tareas_realizadas: tarea }).eq("id", c.id);
-      }
-    }
-    setGuardandoFinalizarHE(null);
     cargarSolicitudesHE();
+    cargarReporte();
   }
 
   async function cancelarSolicitudHE(id: string) {
@@ -1765,13 +1755,6 @@ export function Asistencia() {
                   </option>
                 ))}
               </select>
-              <input
-                type="time"
-                value={heHoraIngreso}
-                onChange={(e) => setHeHoraIngreso(e.target.value)}
-                title="Hora de ingreso al consultorio"
-                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-              />
             </div>
             <input
               value={hePacienteNombre}
@@ -1824,7 +1807,6 @@ export function Asistencia() {
           {solicitudesHE.length > 0 && (
             <div className="space-y-3">
               {solicitudesHE.map((s) => {
-                const todasConSalida = s.colaboradores.every((c) => c.hora_salida);
                 const form = finalizarForm[s.id] ?? { pacientePago: null, seAgendoCita: null, tareas: {} };
                 return (
                   <div
@@ -1858,30 +1840,16 @@ export function Asistencia() {
                             <span className="text-tinta font-medium">
                               Salida: {new Date(c.hora_salida).toLocaleTimeString("es-CO")}
                             </span>
-                          ) : s.estado === "finalizada" ? (
-                            <span className="text-gray-400">Sin salida registrada</span>
                           ) : (
-                            <>
-                              <input
-                                type="time"
-                                value={horaSalidaInput[c.id] ?? ""}
-                                onChange={(e) => setHoraSalidaInput((prev) => ({ ...prev, [c.id]: e.target.value }))}
-                                className="rounded-md border border-gray-300 px-2 py-1 text-sm"
-                              />
-                              <button
-                                onClick={() => guardarSalidaColaborador(s, c)}
-                                disabled={!horaSalidaInput[c.id] || guardandoSalidaHE === c.id}
-                                className="text-xs font-medium px-2.5 py-1.5 rounded-md bg-[var(--acento)] text-white disabled:opacity-40"
-                              >
-                                {guardandoSalidaHE === c.id ? "Guardando…" : "Guardar salida"}
-                              </button>
-                            </>
+                            <span className="text-gray-400">
+                              {s.estado === "finalizada" ? "Sin salida registrada" : "Salida pendiente — se registra al finalizar"}
+                            </span>
                           )}
                         </div>
                       ))}
                     </div>
 
-                    {s.estado === "abierta" && todasConSalida && (
+                    {s.estado === "abierta" && (
                       <div className="mt-3 pt-3 border-t border-amber-200 space-y-2">
                         <p className="text-xs font-medium text-gray-600">Para finalizar:</p>
                         <div className="flex items-center gap-2 flex-wrap text-xs">
