@@ -219,6 +219,9 @@ export interface SaldoFavor {
   cargo_pago_origen_id: string | null;
   motivo: string | null;
   notas: string | null;
+  financiacion_pagado: boolean | null;
+  financiacion_fecha_pago: string | null;
+  comprobante_financiacion_url: string | null;
 }
 
 /** Para qué es el saldo a favor — sedación (anticipo o pago completo por
@@ -459,6 +462,11 @@ export interface CierreDiario {
   entregado_admin: boolean;
   fecha_entrega_admin: string | null;
   notas: string | null;
+  // Total facturado por medio de pago (efectivo, tarjeta_debito, tarjeta_credito,
+  // transferencia_debito, addi, sistecredito), calculado y guardado por esta
+  // misma pantalla — es la fuente oficial que consume Cierre de Caja (admin),
+  // en vez de que esa pantalla recalcule aparte desde cargo_pagos/saldos_favor.
+  totales_por_medio: Record<string, number>;
 }
 
 export interface ErrorCruzado {

@@ -523,6 +523,9 @@ function FormularioCierre({
   }
 
   async function facturadoDesdeErp() {
+    // El detalle Addi/Sistecrédito (para mostrar paciente por paciente) sigue
+    // saliendo directo de cargo_pagos/saldos_favor — cierres_diarios solo
+    // guarda el total agregado por medio, no el detalle por paciente.
     const { data: pagosData } = await supabase
       .from("cargo_pagos")
       .select("medio_pago, valor, cargos!inner(sede_id, fecha, visitas(pacientes(nombre)))")
@@ -535,12 +538,7 @@ function FormularioCierre({
         valor: number;
         cargos: { visitas: { pacientes: { nombre: string } | null } | null };
       }[]) ?? [];
-    const porMedio: Record<string, number> = {};
-    for (const p of filas) porMedio[p.medio_pago] = (porMedio[p.medio_pago] ?? 0) + Number(p.valor);
 
-    // Saldos a favor creados sin cita (ej. anticipo de sedación pagado por
-    // teléfono) son plata real del día pero no tienen cargo — hay que sumarlos
-    // aparte, igual que ya hace Cierre diario en Operación.
     const { data: saldosData } = await supabase
       .from("saldos_favor")
       .select("valor, medio_origen, pacientes(nombre)")
@@ -548,7 +546,6 @@ function FormularioCierre({
       .eq("fecha", fecha)
       .neq("medio_origen", "ajuste_manual");
     const saldosFilas = (saldosData as unknown as { valor: number; medio_origen: string; pacientes: { nombre: string } | null }[]) ?? [];
-    for (const s of saldosFilas) porMedio[s.medio_origen] = (porMedio[s.medio_origen] ?? 0) + Number(s.valor);
 
     const addiDetalle = [
       ...filas
@@ -566,8 +563,34 @@ function FormularioCierre({
           medio: s.medio_origen === "addi" ? "Addi" : "Sistecrédito",
         })),
     ];
+
+    // Fuente oficial de los totales: lo que ya calculó y guardó Cierre diario
+    // de Operación para este día (totales_por_medio, ya con el gasto restado
+    // del efectivo — ver más abajo). Si Recepción todavía no ha abierto ese
+    // día (fecha vieja, antes de esto, o un día que nadie ha tocado), se cae
+    // al cálculo directo de abajo como respaldo.
+    const { data: cierreDiario } = await supabase
+      .from("cierres_diarios")
+      .select("totales_por_medio, gasto")
+      .eq("sede_id", sedeActiva.id)
+      .eq("fecha", fecha)
+      .maybeSingle();
+    const totales = (cierreDiario?.totales_por_medio as Record<string, number> | undefined) ?? {};
+    if (Object.keys(totales).length > 0) {
+      return {
+        efectivo: (totales["efectivo"] ?? 0) - Number(cierreDiario?.gasto ?? 0),
+        tarjeta: (totales["tarjeta_debito"] ?? 0) + (totales["tarjeta_credito"] ?? 0),
+        transferencia: totales["transferencia_debito"] ?? 0,
+        addi: (totales["addi"] ?? 0) + (totales["sistecredito"] ?? 0),
+        addiDetalle,
+      };
+    }
+
+    const porMedio: Record<string, number> = {};
+    for (const p of filas) porMedio[p.medio_pago] = (porMedio[p.medio_pago] ?? 0) + Number(p.valor);
+    for (const s of saldosFilas) porMedio[s.medio_origen] = (porMedio[s.medio_origen] ?? 0) + Number(s.valor);
     return {
-      efectivo: porMedio["efectivo"] ?? 0,
+      efectivo: (porMedio["efectivo"] ?? 0) - Number(cierreDiario?.gasto ?? 0),
       tarjeta: (porMedio["tarjeta_debito"] ?? 0) + (porMedio["tarjeta_credito"] ?? 0),
       transferencia: porMedio["transferencia_debito"] ?? 0,
       addi: (porMedio["addi"] ?? 0) + (porMedio["sistecredito"] ?? 0),

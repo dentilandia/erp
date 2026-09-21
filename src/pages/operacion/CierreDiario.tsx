@@ -46,8 +46,13 @@ export function CierreDiario() {
   const [gasto, setGasto] = useState("0");
   const [gastoConcepto, setGastoConcepto] = useState("");
   const [subiendo, setSubiendo] = useState(false);
+  // Evita que el efecto que guarda totales_por_medio (más abajo) escriba un
+  // {} vacío mientras esta consulta todavía está en camino, antes de que
+  // lleguen los datos reales del día.
+  const [cargado, setCargado] = useState(false);
 
   useEffect(() => {
+    setCargado(false);
     (async () => {
       const { data } = await supabase
         .from("cargo_pagos")
@@ -110,6 +115,7 @@ export function CierreDiario() {
       setCierre((cierreRow as CierreDiarioRow) ?? null);
       setGasto(String(cierreRow?.gasto ?? 0));
       setGastoConcepto(cierreRow?.gasto_concepto ?? "");
+      setCargado(true);
     })();
   }, [sedeActiva.id, fecha]);
 
@@ -221,6 +227,29 @@ export function CierreDiario() {
 
   const totalEfectivoCierre =
     (totalPorMedioTodos["efectivo"] ?? 0) + (totalOtrosAutoPorMedioTodos["efectivo"] ?? 0) - Number(gasto || 0);
+
+  // Total facturado por medio de pago, del día completo (sin importar el
+  // filtro de cajera) — es lo que consume Cierre de Caja (admin) como fuente
+  // oficial, en vez de recalcular aparte desde cargo_pagos/saldos_favor.
+  const totalesPorMedio = useMemo(() => {
+    const combinado: Record<string, number> = { ...totalPorMedioTodos };
+    for (const [medio, valor] of Object.entries(totalOtrosAutoPorMedioTodos)) {
+      combinado[medio] = (combinado[medio] ?? 0) + valor;
+    }
+    return combinado;
+  }, [totalPorMedioTodos, totalOtrosAutoPorMedioTodos]);
+
+  // Se guarda solo, cada vez que Recepción abre este día — sin depender de
+  // que alguien haga clic en un botón de "guardar" aparte para esto. El
+  // upsert solo toca estas dos columnas (gracias a onConflict), así que no
+  // pisa gasto/consignado/etc. si el día ya existía.
+  useEffect(() => {
+    if (!cargado) return;
+    supabase
+      .from("cierres_diarios")
+      .upsert({ sede_id: sedeActiva.id, fecha, totales_por_medio: totalesPorMedio }, { onConflict: "sede_id,fecha" })
+      .then();
+  }, [cargado, totalesPorMedio, sedeActiva.id, fecha]);
 
   async function guardarManual() {
     await supabase.from("cierres_diarios").upsert(

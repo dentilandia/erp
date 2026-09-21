@@ -6,18 +6,17 @@ import type { MedioPago } from "../lib/types";
 
 interface FilaFinanciacion {
   id: string;
+  origen: "cargo" | "saldo";
   valor: number;
   medio_pago: MedioPago;
   financiacion_pagado: boolean | null;
   financiacion_fecha_pago: string | null;
   comprobante_financiacion_url: string | null;
-  cargos: {
-    concepto: string;
-    fecha: string;
-    doctoras: { nombre: string; color_pastel: string } | null;
-    sedes: { nombre: string } | null;
-    visitas: { pacientes: { nombre: string } | null } | null;
-  };
+  paciente: string;
+  concepto: string;
+  sedeNombre: string | null;
+  doctoraNombre: string | null;
+  doctoraColor: string | null;
 }
 
 export function Financiacion() {
@@ -26,7 +25,7 @@ export function Financiacion() {
   const [subiendoId, setSubiendoId] = useState<string | null>(null);
 
   async function cargar() {
-    let q = supabase
+    let qCargos = supabase
       .from("cargo_pagos")
       .select(
         "id, valor, medio_pago, financiacion_pagado, financiacion_fecha_pago, comprobante_financiacion_url, cargos!inner(concepto, fecha, doctoras(nombre, color_pastel), sedes(nombre), visitas(pacientes(nombre)))",
@@ -35,9 +34,77 @@ export function Financiacion() {
       .order("cargos(fecha)", { ascending: false });
     // financiacion_pagado queda en null hasta que se marca explícitamente pagado —
     // "pendiente" debe incluir null además de false, si no los recién creados se pierden.
-    if (soloPendientes) q = q.not("financiacion_pagado", "is", true);
-    const { data } = await q;
-    setFilas((data as unknown as FilaFinanciacion[]) ?? []);
+    if (soloPendientes) qCargos = qCargos.not("financiacion_pagado", "is", true);
+    const { data: cargosData } = await qCargos;
+
+    // Anticipos/saldos a favor pagados por Addi/Sistecrédito sin cargo
+    // todavía (ej. sedación pagada por teléfono) — antes no aparecían acá.
+    let qSaldos = supabase
+      .from("saldos_favor")
+      .select("id, valor, medio_origen, financiacion_pagado, financiacion_fecha_pago, comprobante_financiacion_url, fecha, pacientes(nombre), sedes:sede_origen_id(nombre)")
+      .in("medio_origen", ["addi", "sistecredito"]);
+    if (soloPendientes) qSaldos = qSaldos.not("financiacion_pagado", "is", true);
+    const { data: saldosData } = await qSaldos;
+
+    const deCargos = (
+      (cargosData as unknown as {
+        id: string;
+        valor: number;
+        medio_pago: MedioPago;
+        financiacion_pagado: boolean | null;
+        financiacion_fecha_pago: string | null;
+        comprobante_financiacion_url: string | null;
+        cargos: {
+          concepto: string;
+          fecha: string;
+          doctoras: { nombre: string; color_pastel: string } | null;
+          sedes: { nombre: string } | null;
+          visitas: { pacientes: { nombre: string } | null } | null;
+        };
+      }[]) ?? []
+    ).map((f) => ({
+      id: f.id,
+      origen: "cargo" as const,
+      valor: Number(f.valor),
+      medio_pago: f.medio_pago,
+      financiacion_pagado: f.financiacion_pagado,
+      financiacion_fecha_pago: f.financiacion_fecha_pago,
+      comprobante_financiacion_url: f.comprobante_financiacion_url,
+      paciente: f.cargos.visitas?.pacientes?.nombre ?? "—",
+      concepto: `${f.cargos.fecha} · ${f.cargos.concepto}`,
+      sedeNombre: f.cargos.sedes?.nombre ?? null,
+      doctoraNombre: f.cargos.doctoras?.nombre ?? null,
+      doctoraColor: f.cargos.doctoras?.color_pastel ?? null,
+    }));
+
+    const deSaldos = (
+      (saldosData as unknown as {
+        id: string;
+        valor: number;
+        medio_origen: MedioPago;
+        financiacion_pagado: boolean | null;
+        financiacion_fecha_pago: string | null;
+        comprobante_financiacion_url: string | null;
+        fecha: string;
+        pacientes: { nombre: string } | null;
+        sedes: { nombre: string } | null;
+      }[]) ?? []
+    ).map((s) => ({
+      id: s.id,
+      origen: "saldo" as const,
+      valor: Number(s.valor),
+      medio_pago: s.medio_origen,
+      financiacion_pagado: s.financiacion_pagado,
+      financiacion_fecha_pago: s.financiacion_fecha_pago,
+      comprobante_financiacion_url: s.comprobante_financiacion_url,
+      paciente: s.pacientes?.nombre ?? "—",
+      concepto: `${s.fecha} · Anticipo / saldo a favor`,
+      sedeNombre: s.sedes?.nombre ?? null,
+      doctoraNombre: null,
+      doctoraColor: null,
+    }));
+
+    setFilas([...deCargos, ...deSaldos].sort((a, b) => b.concepto.localeCompare(a.concepto)));
   }
 
   useEffect(() => {
@@ -45,11 +112,12 @@ export function Financiacion() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [soloPendientes]);
 
-  async function marcarPagado(id: string, pagado: boolean) {
+  async function marcarPagado(fila: FilaFinanciacion, pagado: boolean) {
+    const tabla = fila.origen === "cargo" ? "cargo_pagos" : "saldos_favor";
     await supabase
-      .from("cargo_pagos")
+      .from(tabla)
       .update({ financiacion_pagado: pagado, financiacion_fecha_pago: pagado ? today() : null })
-      .eq("id", id);
+      .eq("id", fila.id);
     cargar();
   }
 
@@ -58,16 +126,17 @@ export function Financiacion() {
     if (data?.signedUrl) window.open(data.signedUrl, "_blank");
   }
 
-  async function subirComprobante(id: string, file: File) {
-    setSubiendoId(id);
-    const path = `financiacion-admin/${id}-${file.name}`;
+  async function subirComprobante(fila: FilaFinanciacion, file: File) {
+    setSubiendoId(fila.id);
+    const path = `financiacion-admin/${fila.id}-${file.name}`;
     const { error: errorSubida } = await supabase.storage.from("comprobantes").upload(path, file, { upsert: true });
     if (errorSubida) {
       window.alert(`No se pudo subir el comprobante: ${errorSubida.message}`);
       setSubiendoId(null);
       return;
     }
-    const { error: errorGuardado } = await supabase.from("cargo_pagos").update({ comprobante_financiacion_url: path }).eq("id", id);
+    const tabla = fila.origen === "cargo" ? "cargo_pagos" : "saldos_favor";
+    const { error: errorGuardado } = await supabase.from(tabla).update({ comprobante_financiacion_url: path }).eq("id", fila.id);
     if (errorGuardado) window.alert(`El archivo se subió pero no se pudo guardar el registro: ${errorGuardado.message}`);
     setSubiendoId(null);
     cargar();
@@ -89,20 +158,18 @@ export function Financiacion() {
 
       <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
         {filas.map((f) => (
-          <div key={f.id} className="flex items-center justify-between px-4 py-3 text-sm flex-wrap gap-2">
+          <div key={`${f.origen}-${f.id}`} className="flex items-center justify-between px-4 py-3 text-sm flex-wrap gap-2">
             <div className="flex items-center gap-2 flex-wrap">
               <div>
-                <span className="font-medium">{f.cargos.visitas?.pacientes?.nombre ?? "—"}</span>{" "}
+                <span className="font-medium">{f.paciente}</span>{" "}
                 <span className="text-gray-400">
-                  · {f.cargos.fecha} · {f.cargos.concepto} · {f.cargos.sedes?.nombre}
+                  · {f.concepto}
+                  {f.sedeNombre && ` · ${f.sedeNombre}`}
                 </span>
               </div>
-              {f.cargos.doctoras && (
-                <span
-                  className="text-xs font-semibold px-2 py-0.5 rounded-full text-white"
-                  style={{ background: f.cargos.doctoras.color_pastel }}
-                >
-                  {f.cargos.doctoras.nombre}
+              {f.doctoraNombre && (
+                <span className="text-xs font-semibold px-2 py-0.5 rounded-full text-white" style={{ background: f.doctoraColor ?? undefined }}>
+                  {f.doctoraNombre}
                 </span>
               )}
             </div>
@@ -129,7 +196,7 @@ export function Financiacion() {
                     type="file"
                     accept="image/*,.pdf"
                     className="hidden"
-                    onChange={(e) => e.target.files?.[0] && subirComprobante(f.id, e.target.files[0])}
+                    onChange={(e) => e.target.files?.[0] && subirComprobante(f, e.target.files[0])}
                   />
                 </label>
               )}
@@ -137,7 +204,7 @@ export function Financiacion() {
                 <span className="text-xs text-gray-400">Pagado {f.financiacion_fecha_pago}</span>
               ) : null}
               <button
-                onClick={() => marcarPagado(f.id, !f.financiacion_pagado)}
+                onClick={() => marcarPagado(f, !f.financiacion_pagado)}
                 className={`text-xs font-medium px-3 py-1.5 rounded-lg ${
                   f.financiacion_pagado ? "bg-gray-100 text-gray-500" : "bg-[var(--acento)] text-white"
                 }`}
