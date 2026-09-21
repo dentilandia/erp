@@ -99,11 +99,19 @@ export function Layout() {
   const enOperacion = location.pathname.startsWith("/operacion");
   const enAdministracion = location.pathname.startsWith("/administracion");
 
-  // Recuerda la última pantalla visitada — al volver a abrir el ERP (o si el
-  // navegador recarga la pestaña en segundo plano), retoma ahí en vez de
-  // reiniciar siempre en Recepción.
+  // Recuerda la última pantalla de OPERACIÓN visitada (Recepción,
+  // Consultorio, etc.) — al volver a abrir el ERP (o si el navegador recarga
+  // la pestaña en segundo plano), retoma ahí en vez de reiniciar siempre en
+  // Recepción. Solo se guardan rutas de /operacion a propósito: si se
+  // guardara cualquier ruta, quien la última vez que usó ese navegador se
+  // quedó en Asistencia (algo que ahora hace todo el equipo, no solo admin)
+  // quedaría "atrapado" ahí la próxima vez que entre — sin ver la barra de
+  // pestañas de Recepción/Consultorio, porque esa solo aparece dentro de
+  // /operacion. Eso fue justo el bug que le pasó a todo el equipo el lunes.
   useEffect(() => {
-    localStorage.setItem("erp_ultima_ruta", location.pathname);
+    if (location.pathname.startsWith("/operacion")) {
+      localStorage.setItem("erp_ultima_ruta", location.pathname);
+    }
   }, [location.pathname]);
 
   return (

@@ -260,7 +260,11 @@ function Gate({ children }: { children: React.ReactNode }) {
 const CLAVE_ULTIMA_RUTA = "erp_ultima_ruta";
 
 function App() {
-  const ultimaRuta = localStorage.getItem(CLAVE_ULTIMA_RUTA);
+  // Solo se respeta si es una ruta de operación — quien tenga guardado un
+  // valor viejo de antes de este arreglo (ej. "/asistencia", de cuando ese
+  // era el bug) cae al valor por defecto en vez de quedarse atrapado ahí.
+  const ultimaRutaGuardada = localStorage.getItem(CLAVE_ULTIMA_RUTA);
+  const ultimaRuta = ultimaRutaGuardada?.startsWith("/operacion") ? ultimaRutaGuardada : null;
   return (
     <AuthProvider>
       <BrowserRouter>
