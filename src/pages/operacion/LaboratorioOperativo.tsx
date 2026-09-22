@@ -26,6 +26,7 @@ interface LabRow {
   fecha_recibido: string | null;
   fecha_instalado: string | null;
   mes_liquidacion: string | null;
+  numero_orden: string | null;
   doctora_id: string;
   laboratorio_id: string;
   paciente_id: string;
@@ -64,6 +65,7 @@ export function LaboratorioOperativo() {
   const [editValorFactura, setEditValorFactura] = useState("");
   const [editFechaEmision, setEditFechaEmision] = useState("");
   const [editMesLiquidacion, setEditMesLiquidacion] = useState("");
+  const [editNumeroOrden, setEditNumeroOrden] = useState("");
   const [editFechaCita, setEditFechaCita] = useState("");
   const [editSinCita, setEditSinCita] = useState(false);
   const [guardandoEdit, setGuardandoEdit] = useState(false);
@@ -107,7 +109,7 @@ export function LaboratorioOperativo() {
     let q = supabase
       .from("lab_ordenes")
       .select(
-        "id, estado, fecha_envio, factura_numero, consecutivo, valor_factura, fecha_emision_factura, fecha_entrega_laboratorio, fecha_cita_paciente, fecha_recepcion_laboratorio, fecha_recibido, fecha_instalado, mes_liquidacion, doctora_id, laboratorio_id, paciente_id, tipo_servicio, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), laboratorios(nombre)",
+        "id, estado, fecha_envio, factura_numero, consecutivo, valor_factura, fecha_emision_factura, fecha_entrega_laboratorio, fecha_cita_paciente, fecha_recepcion_laboratorio, fecha_recibido, fecha_instalado, mes_liquidacion, numero_orden, doctora_id, laboratorio_id, paciente_id, tipo_servicio, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), laboratorios(nombre)",
       )
       .eq("sede_id", sedeActiva.id)
       .order("fecha_envio", { ascending: false });
@@ -159,6 +161,7 @@ export function LaboratorioOperativo() {
     setEditValorFactura(o.valor_factura === null ? "" : String(o.valor_factura));
     setEditFechaEmision(o.fecha_emision_factura ?? "");
     setEditMesLiquidacion(o.mes_liquidacion ?? "");
+    setEditNumeroOrden(o.numero_orden ?? "");
     setEditFechaCita(o.fecha_cita_paciente ?? "");
     setEditSinCita(false);
   }
@@ -174,6 +177,7 @@ export function LaboratorioOperativo() {
     setEditDoctoraId(o.doctora_id);
     setEditLaboratorioId(o.laboratorio_id);
     setEditTipoServicio(o.tipo_servicio);
+    setEditNumeroOrden(o.numero_orden ?? "");
     setEditFechaCita(o.fecha_cita_paciente ?? "");
     setEditSinCita(false);
   }
@@ -192,6 +196,7 @@ export function LaboratorioOperativo() {
     setEditValorFactura("");
     setEditFechaEmision(today());
     setEditMesLiquidacion("");
+    setEditNumeroOrden(o.numero_orden ?? "");
     setEditFechaCita(o.fecha_cita_paciente ?? "");
     setEditSinCita(false);
   }
@@ -220,6 +225,8 @@ export function LaboratorioOperativo() {
       doctora_id: editDoctoraId,
       laboratorio_id: editLaboratorioId,
       tipo_servicio: editTipoServicio,
+      // Se conoce al otro día, no al enviar — editable en cualquier momento.
+      numero_orden: editNumeroOrden.trim() || null,
     };
     if (tieneFactura) {
       cambios.factura_numero = editFacturaNumero.trim() || null;
@@ -477,6 +484,17 @@ export function LaboratorioOperativo() {
                           ))}
                         </select>
                       </div>
+                      <div>
+                        <label className="block text-[10px] text-gray-400 mb-1">
+                          Número de orden del laboratorio (se sabe al otro día, se completa cuando lo tengas)
+                        </label>
+                        <input
+                          value={editNumeroOrden}
+                          onChange={(e) => setEditNumeroOrden(e.target.value)}
+                          placeholder="N° de orden"
+                          className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                        />
+                      </div>
                       {(o.estado !== "enviado" || marcandoRecibido) && (
                         <div className="flex gap-2 flex-wrap">
                           <input
@@ -576,6 +594,7 @@ export function LaboratorioOperativo() {
                     <div key={o.id} className="flex items-center justify-between px-4 py-2 text-sm">
                       <span>
                         {o.pacientes?.nombre} <span className="text-gray-400">· {o.doctoras?.nombre} · {o.laboratorios?.nombre}</span>
+                        {o.numero_orden && <span className="text-gray-400"> · N° {o.numero_orden}</span>}
                         {e.value === "entregado" && o.fecha_cita_paciente && (
                           <span className="ml-2 text-xs font-semibold text-amber-700">Cita: {o.fecha_cita_paciente}</span>
                         )}

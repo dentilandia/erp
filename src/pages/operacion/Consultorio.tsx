@@ -35,6 +35,27 @@ interface EnvioLab {
   tipoServicio: string;
   doctoraId: string;
   doctoraNombre: string;
+  incluyeAparato: boolean;
+  incluyeModeloSuperior: boolean;
+  incluyeModeloInferior: boolean;
+  incluyeRegistroMordida: boolean;
+}
+
+/** Resumen corto de qué se incluyó en el envío (ej. "Sup · Inf"), para las
+ *  listas compactas donde no cabe un checklist completo. */
+function resumenEnvio(e: {
+  incluyeAparato: boolean;
+  incluyeModeloSuperior: boolean;
+  incluyeModeloInferior: boolean;
+  incluyeRegistroMordida: boolean;
+}): string {
+  const partes = [
+    e.incluyeAparato && "Aparato",
+    e.incluyeModeloSuperior && "Sup",
+    e.incluyeModeloInferior && "Inf",
+    e.incluyeRegistroMordida && "Mordida",
+  ].filter(Boolean);
+  return partes.length > 0 ? partes.join(" · ") : "";
 }
 
 export function Consultorio() {
@@ -441,6 +462,10 @@ function ModalAtencion({
   const [laboratorioId, setLaboratorioId] = useState("");
   const [tipoServicio, setTipoServicio] = useState(TIPOS_SERVICIO_LAB[0].value);
   const [envioDoctoraId, setEnvioDoctoraId] = useState("");
+  const [envioAparato, setEnvioAparato] = useState(false);
+  const [envioModeloSuperior, setEnvioModeloSuperior] = useState(false);
+  const [envioModeloInferior, setEnvioModeloInferior] = useState(false);
+  const [envioRegistroMordida, setEnvioRegistroMordida] = useState(false);
   const [enviosLab, setEnviosLab] = useState<EnvioLab[]>([]);
   const [remitido, setRemitido] = useState(false);
   const [remisionEspecialidad, setRemisionEspecialidad] = useState("");
@@ -496,8 +521,22 @@ function ModalAtencion({
     if (!lab || !doctora) return;
     setEnviosLab((prev) => [
       ...prev,
-      { laboratorioId, laboratorioNombre: lab.nombre, tipoServicio, doctoraId: doctora.id, doctoraNombre: doctora.nombre },
+      {
+        laboratorioId,
+        laboratorioNombre: lab.nombre,
+        tipoServicio,
+        doctoraId: doctora.id,
+        doctoraNombre: doctora.nombre,
+        incluyeAparato: envioAparato,
+        incluyeModeloSuperior: envioModeloSuperior,
+        incluyeModeloInferior: envioModeloInferior,
+        incluyeRegistroMordida: envioRegistroMordida,
+      },
     ]);
+    setEnvioAparato(false);
+    setEnvioModeloSuperior(false);
+    setEnvioModeloInferior(false);
+    setEnvioRegistroMordida(false);
   }
 
   function quitarEnvioLab(idx: number) {
@@ -589,6 +628,10 @@ function ModalAtencion({
         // registrando con retraso una atención de un día anterior, el envío
         // al laboratorio debe quedar en el día real de la atención.
         fecha_envio: visita.fecha,
+        incluye_aparato: envio.incluyeAparato,
+        incluye_modelo_superior: envio.incluyeModeloSuperior,
+        incluye_modelo_inferior: envio.incluyeModeloInferior,
+        incluye_registro_mordida: envio.incluyeRegistroMordida,
       });
     }
     if (interconsulta && interconsultaEspecialidad.trim()) {
@@ -822,6 +865,7 @@ function ModalAtencion({
                     <div key={idx} className="flex items-center justify-between rounded-md bg-gray-50 px-2 py-1.5 text-sm">
                       <span>
                         {e.laboratorioNombre} · {TIPOS_SERVICIO_LAB.find((t) => t.value === e.tipoServicio)?.label}
+                        {resumenEnvio(e) && <span className="text-gray-400"> · {resumenEnvio(e)}</span>}
                       </span>
                       <button onClick={() => quitarEnvioLab(idx)}>
                         <X size={14} className="text-gray-400" />
@@ -857,9 +901,24 @@ function ModalAtencion({
                   <Plus size={14} />
                 </button>
               </div>
+              <div className="flex flex-wrap gap-x-3 gap-y-1">
+                {(
+                  [
+                    ["Aparato", envioAparato, setEnvioAparato],
+                    ["Modelo superior", envioModeloSuperior, setEnvioModeloSuperior],
+                    ["Modelo inferior", envioModeloInferior, setEnvioModeloInferior],
+                    ["Registro de mordida", envioRegistroMordida, setEnvioRegistroMordida],
+                  ] as const
+                ).map(([label, checked, setChecked]) => (
+                  <label key={label} className="flex items-center gap-1.5 text-xs text-gray-600">
+                    <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
+                    {label}
+                  </label>
+                ))}
+              </div>
               <p className="text-xs text-gray-400">
-                Agrega uno por cada aparato (ej. si va superior e inferior, agrega los dos). Queda a nombre de la
-                doctora de la visita.
+                Marca qué va físicamente en este envío — Ruby lo necesita para su control. Agrega uno por cada
+                aparato (ej. si va superior e inferior, agrega los dos). Queda a nombre de la doctora de la visita.
               </p>
             </div>
           )}
@@ -912,6 +971,10 @@ function ModalEditarValor({
   const [agregarLab, setAgregarLab] = useState(false);
   const [laboratorioId, setLaboratorioId] = useState("");
   const [tipoServicio, setTipoServicio] = useState(TIPOS_SERVICIO_LAB[0].value);
+  const [envioAparato, setEnvioAparato] = useState(false);
+  const [envioModeloSuperior, setEnvioModeloSuperior] = useState(false);
+  const [envioModeloInferior, setEnvioModeloInferior] = useState(false);
+  const [envioRegistroMordida, setEnvioRegistroMordida] = useState(false);
   const [guardandoLab, setGuardandoLab] = useState(false);
 
   // El resto de lo que se puede dar en una atención — mismos campos que
@@ -1082,6 +1145,10 @@ function ModalEditarValor({
       tipo_servicio: tipoServicio,
       estado: "enviado",
       fecha_envio: visitaDatos.fecha,
+      incluye_aparato: envioAparato,
+      incluye_modelo_superior: envioModeloSuperior,
+      incluye_modelo_inferior: envioModeloInferior,
+      incluye_registro_mordida: envioRegistroMordida,
     });
     setGuardandoLab(false);
     if (errorLab) {
@@ -1089,6 +1156,10 @@ function ModalEditarValor({
       return;
     }
     setAgregarLab(false);
+    setEnvioAparato(false);
+    setEnvioModeloSuperior(false);
+    setEnvioModeloInferior(false);
+    setEnvioRegistroMordida(false);
     cargarLabOrdenes();
   }
 
@@ -1480,36 +1551,53 @@ function ModalEditarValor({
                 </div>
               )}
               {agregarLab ? (
-                <div className="flex gap-2 flex-wrap items-center">
-                  <select
-                    value={laboratorioId}
-                    onChange={(e) => setLaboratorioId(e.target.value)}
-                    className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1 text-sm"
-                  >
-                    {laboratorios.map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.nombre}
-                      </option>
+                <div className="space-y-1.5">
+                  <div className="flex gap-2 flex-wrap items-center">
+                    <select
+                      value={laboratorioId}
+                      onChange={(e) => setLaboratorioId(e.target.value)}
+                      className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1 text-sm"
+                    >
+                      {laboratorios.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.nombre}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={tipoServicio}
+                      onChange={(e) => setTipoServicio(e.target.value)}
+                      className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1 text-sm"
+                    >
+                      {TIPOS_SERVICIO_LAB.map((t) => (
+                        <option key={t.value} value={t.value}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={agregarLabOrden}
+                      disabled={guardandoLab}
+                      className="rounded-md bg-gray-100 px-3 py-1 text-sm font-medium disabled:opacity-40"
+                    >
+                      {guardandoLab ? "…" : "Agregar"}
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1">
+                    {(
+                      [
+                        ["Aparato", envioAparato, setEnvioAparato],
+                        ["Modelo superior", envioModeloSuperior, setEnvioModeloSuperior],
+                        ["Modelo inferior", envioModeloInferior, setEnvioModeloInferior],
+                        ["Registro de mordida", envioRegistroMordida, setEnvioRegistroMordida],
+                      ] as const
+                    ).map(([label, checked, setChecked]) => (
+                      <label key={label} className="flex items-center gap-1.5 text-xs text-gray-600">
+                        <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
+                        {label}
+                      </label>
                     ))}
-                  </select>
-                  <select
-                    value={tipoServicio}
-                    onChange={(e) => setTipoServicio(e.target.value)}
-                    className="flex-1 min-w-[120px] rounded-md border border-gray-300 px-2 py-1 text-sm"
-                  >
-                    {TIPOS_SERVICIO_LAB.map((t) => (
-                      <option key={t.value} value={t.value}>
-                        {t.label}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={agregarLabOrden}
-                    disabled={guardandoLab}
-                    className="rounded-md bg-gray-100 px-3 py-1 text-sm font-medium disabled:opacity-40"
-                  >
-                    {guardandoLab ? "…" : "Agregar"}
-                  </button>
+                  </div>
                 </div>
               ) : (
                 <button onClick={() => setAgregarLab(true)} className="flex items-center gap-1 text-sm font-medium text-[var(--acento)]">

@@ -425,6 +425,18 @@ export interface LabOrden {
   fecha_recibido: string | null;
   fecha_instalado: string | null;
   mes_liquidacion: string | null;
+  // Qué se incluyó físicamente en el envío (aparato para reparar, modelo
+  // superior, modelo inferior, registro de mordida) — igual a la planilla de
+  // control que ya llevaba Ruby por fuera del sistema.
+  incluye_aparato: boolean;
+  incluye_modelo_superior: boolean;
+  incluye_modelo_inferior: boolean;
+  incluye_registro_mordida: boolean;
+  // Se conoce al otro día, no al momento de enviar — se completa por edición.
+  numero_orden: string | null;
+  // Cuándo Ruby lo despachó de vuelta a la clínica (distinto de
+  // fecha_recibido, que es cuando la clínica confirma que ya lo tiene).
+  fecha_despacho_laboratorio: string | null;
 }
 
 export interface Interconsulta {
