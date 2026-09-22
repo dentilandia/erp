@@ -192,6 +192,8 @@ export function LaboratorioOperativo() {
     setEditValorFactura("");
     setEditFechaEmision(today());
     setEditMesLiquidacion("");
+    setEditFechaCita(o.fecha_cita_paciente ?? "");
+    setEditSinCita(false);
   }
 
   async function guardarEdicion(id: string, tieneFactura: boolean) {
@@ -592,9 +594,16 @@ export function LaboratorioOperativo() {
                           <Pencil size={14} />
                         </button>
                         {e.value === "enviado" && (
-                          <button onClick={() => empezarEntregar(o)} className="text-[var(--acento)] font-medium text-xs">
-                            Ya se lo entregué al mensajero
-                          </button>
+                          <>
+                            <button onClick={() => empezarEntregar(o)} className="text-[var(--acento)] font-medium text-xs">
+                              Ya se lo entregué al mensajero
+                            </button>
+                            {/* Por si a alguien se le pasó marcar "entregado" y ya tiene el aparato
+                                de vuelta — sin esto quedaba sin ninguna forma de marcarlo recibido. */}
+                            <button onClick={() => empezarRecibir(o)} className="text-gray-400 font-medium text-xs hover:text-[var(--acento)]">
+                              Marcar recibido
+                            </button>
+                          </>
                         )}
                         {e.value === "entregado" && (
                           <button onClick={() => empezarRecibir(o)} className="text-[var(--acento)] font-medium text-xs">

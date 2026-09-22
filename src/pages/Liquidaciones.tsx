@@ -352,6 +352,11 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
             "doctora_id, doctora_instala_id, tipo_servicio, sede_id, valor_factura, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, factura_numero, pacientes(nombre), laboratorios(nombre)",
           )
           .not("valor_factura", "is", null)
+          // Sin esto no había ningún orden garantizado — el detalle de
+          // aparatos instalados de cada doctora salía revuelto, sin que
+          // coincidiera con la fecha de instalación (que es justo lo que
+          // determina en qué liquidación entra cada uno).
+          .order("fecha_instalado", { ascending: false })
           .range(desde, hasta);
         if (sedeId) q = q.eq("sede_id", sedeId);
         return q as unknown as PromiseLike<{ data: LabRowLiq[] | null }>;
@@ -931,6 +936,9 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
             "id, sede_id, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, valor_factura, factura_numero, tipo_servicio, doctora_id, laboratorio_id, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), doctora_instala:doctoras!lab_ordenes_doctora_instala_id_fkey(nombre), laboratorios(nombre)",
           )
           .not("valor_factura", "is", null)
+          // Sin esto no había orden garantizado — la lista salía revuelta en
+          // vez de coincidir con la fecha de instalación.
+          .order("fecha_instalado", { ascending: false })
           .range(desde, hasta);
         if (sedeId) q = q.eq("sede_id", sedeId);
         if (doctoraId) q = q.or(`doctora_id.eq.${doctoraId},doctora_instala_id.eq.${doctoraId}`);
