@@ -5,14 +5,6 @@ import type { Perfil, Sede } from "../lib/types";
 
 export type ModoOperacion = "recepcion" | "clinica";
 
-function claveModo(perfilId: string) {
-  return `erp_modo_operacion:${perfilId}`;
-}
-
-function claveSedeElegida(perfilId: string) {
-  return `erp_sede_elegida:${perfilId}`;
-}
-
 interface AuthState {
   loading: boolean;
   session: Session | null;
@@ -45,18 +37,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [errorSede, setErrorSede] = useState<string | null>(null);
 
   function elegirModoOperacion(modo: ModoOperacion) {
-    if (perfil) sessionStorage.setItem(claveModo(perfil.id), modo);
     setModoOperacion(modo);
   }
 
   // Alguien de operación puede terminar trabajando en otra sede ese día
   // (cubre a una compañera, va a cobrar allá, etc.) — se elige al iniciar
-  // sesión, igual que el modo, y no queda guardado para la próxima. Hay que
-  // actualizar perfiles.sede_id de verdad (vía RPC, no una policy de update
-  // genérica) porque fn_perfil_sede() —con la que están armadas casi todas
-  // las policies de RLS de operación— la lee directo de la base: si no, el
-  // front mostraría la sede elegida pero cualquier inserción real seguiría
-  // bloqueada contra la sede vieja.
+  // sesión, igual que el modo. Hay que actualizar perfiles.sede_id de verdad
+  // (vía RPC, no una policy de update genérica) porque fn_perfil_sede()
+  // —con la que están armadas casi todas las policies de RLS de operación—
+  // la lee directo de la base: si no, el front mostraría la sede elegida
+  // pero cualquier inserción real seguiría bloqueada contra la sede vieja.
   async function elegirSede(sedeId: string) {
     setErrorSede(null);
     const { error: rpcError } = await supabase.rpc("fn_elegir_sede_trabajo", { p_sede_id: sedeId });
@@ -64,7 +54,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setErrorSede(rpcError.message);
       return;
     }
-    if (perfil) sessionStorage.setItem(claveSedeElegida(perfil.id), sedeId);
     setSedeElegidaId(sedeId);
     const { data } = await supabase.from("sedes").select("id, nombre, color_acento, ip_permitida").eq("id", sedeId).single();
     if (data) setSede(data as Sede);
@@ -111,19 +100,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       setPerfil(perfilRow as Perfil);
-      const modoGuardado = sessionStorage.getItem(claveModo(perfilRow.id));
-      setModoOperacion(modoGuardado === "recepcion" || modoGuardado === "clinica" ? modoGuardado : null);
-      // La sede elegida esta sesión manda sobre la sede asignada por defecto
-      // (perfil.sede_id) — para cuando alguien de operación se desplaza a
-      // trabajar a otra sede ese día.
-      const sedeGuardada = sessionStorage.getItem(claveSedeElegida(perfilRow.id));
-      setSedeElegidaId(sedeGuardada);
-      const sedeIdEfectiva = sedeGuardada || perfilRow.sede_id;
-      if (sedeIdEfectiva) {
+      // Modo y sede se preguntan de nuevo cada vez que arranca la app (no
+      // quedan guardados de una vez para la próxima) — antes se guardaban en
+      // sessionStorage, que sobrevive a que alguien cierre y vuelva a abrir
+      // el navegador/la pestaña sin que la app realmente se recargue (pasa
+      // seguido en celular), así que la pantalla de elegir modo/sede no
+      // volvía a salir aunque la persona sintiera que "entró de nuevo".
+      setModoOperacion(null);
+      setSedeElegidaId(null);
+      if (perfilRow.sede_id) {
         const { data: sedeRow } = await supabase
           .from("sedes")
           .select("id, nombre, color_acento, ip_permitida")
-          .eq("id", sedeIdEfectiva)
+          .eq("id", perfilRow.sede_id)
           .single();
         if (!cancelled) setSede((sedeRow as Sede) ?? null);
       } else {
