@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { Plus, X, Pencil, Check, Trash2 } from "lucide-react";
 import { supabase } from "../../lib/supabase";
-import { fmtCOP, today } from "../../lib/format";
+import { fmtCOP, today, mesActual, periodoCiclo2625 } from "../../lib/format";
 import { TIPOS_SERVICIO_LAB, type Sede, type Doctora, type Laboratorio, type Paciente, type EstadoLab } from "../../lib/types";
 import { PacienteAutocomplete } from "../../components/PacienteAutocomplete";
 
@@ -65,9 +65,18 @@ export function LaboratorioOperativo() {
   const [editFechaEmision, setEditFechaEmision] = useState("");
   const [editMesLiquidacion, setEditMesLiquidacion] = useState("");
   const [editFechaCita, setEditFechaCita] = useState("");
+  const [editSinCita, setEditSinCita] = useState(false);
   const [guardandoEdit, setGuardandoEdit] = useState(false);
   const [marcandoRecibido, setMarcandoRecibido] = useState(false);
   const [marcandoEntregado, setMarcandoEntregado] = useState(false);
+
+  // "Instalados" es el único tab con tantos meses acumulados que hace falta
+  // filtrarlo por período — igual que se liquida (26 del mes anterior al 25
+  // del actual) — y ordenado por cuándo se instaló, no por cuándo se envió
+  // originalmente al laboratorio (si no, un aparato instalado hoy pero
+  // enviado hace semanas se pierde entre los enviados recientemente).
+  const [filtrarPeriodoInstalados, setFiltrarPeriodoInstalados] = useState(false);
+  const [mesInstalados, setMesInstalados] = useState(mesActual());
 
   const [mostrarForm, setMostrarForm] = useState(false);
   const [nuevoPaciente, setNuevoPaciente] = useState<Paciente | null>(null);
@@ -151,6 +160,7 @@ export function LaboratorioOperativo() {
     setEditFechaEmision(o.fecha_emision_factura ?? "");
     setEditMesLiquidacion(o.mes_liquidacion ?? "");
     setEditFechaCita(o.fecha_cita_paciente ?? "");
+    setEditSinCita(false);
   }
 
   // Paso intermedio entre "pedido" e "instalado": cuando alguien de la
@@ -165,6 +175,7 @@ export function LaboratorioOperativo() {
     setEditLaboratorioId(o.laboratorio_id);
     setEditTipoServicio(o.tipo_servicio);
     setEditFechaCita(o.fecha_cita_paciente ?? "");
+    setEditSinCita(false);
   }
 
   // Reemplaza el flujo anterior de 3 window.prompt() seguidos — si salías a
@@ -222,9 +233,13 @@ export function LaboratorioOperativo() {
     if (marcandoEntregado) {
       cambios.estado = "entregado";
       cambios.fecha_entrega_laboratorio = today();
-      if (esLaboratorioRuby(laboratorios, editLaboratorioId)) {
-        cambios.fecha_cita_paciente = editFechaCita || null;
-      }
+    }
+    // Editable en cualquier momento (no solo al marcar "entregado") — antes
+    // quedaba invisible al volver a abrir la orden por edición normal, así
+    // que no había forma de corregirla ni de agregarla después si al
+    // entregar todavía no se sabía la cita.
+    if (esLaboratorioRuby(laboratorios, editLaboratorioId)) {
+      cambios.fecha_cita_paciente = editSinCita ? null : editFechaCita || null;
     }
     await supabase.from("lab_ordenes").update(cambios).eq("id", id);
     setGuardandoEdit(false);
@@ -370,9 +385,24 @@ export function LaboratorioOperativo() {
         </p>
       )}
       {ESTADOS.map((e) => {
-        const items = ordenes.filter(
+        let items = ordenes.filter(
           (o) => o.estado === e.value && (!filtroPaciente.trim() || o.pacientes?.nombre?.toLowerCase().includes(filtroPaciente.trim().toLowerCase())),
         );
+        if (e.value === "instalado") {
+          // Por fecha de instalación, no por fecha de envío original — si no,
+          // un aparato instalado hoy pero enviado hace semanas queda
+          // enterrado entre envíos viejos y parece que no se instaló nada.
+          items = items
+            .slice()
+            .sort((a, b) => (b.fecha_instalado ?? b.fecha_envio).localeCompare(a.fecha_instalado ?? a.fecha_envio));
+          if (filtrarPeriodoInstalados) {
+            const periodo = periodoCiclo2625(mesInstalados);
+            items = items.filter((o) => {
+              const f = o.mes_liquidacion ?? o.fecha_instalado;
+              return !!f && f >= periodo.inicio && f <= periodo.fin;
+            });
+          }
+        }
         const expandido = abierto === e.value || filtroPaciente.trim() !== "";
         return (
           <div key={e.value} className="bg-white rounded-xl border border-gray-200">
@@ -382,6 +412,26 @@ export function LaboratorioOperativo() {
             >
               {e.label} ({items.length})
             </button>
+            {expandido && e.value === "instalado" && (
+              <div className="px-4 pt-3 pb-1 flex items-center gap-2 flex-wrap border-t border-gray-100">
+                <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                  <input
+                    type="checkbox"
+                    checked={filtrarPeriodoInstalados}
+                    onChange={(ev) => setFiltrarPeriodoInstalados(ev.target.checked)}
+                  />
+                  Filtrar por período de liquidación (26 a 25, igual que Liquidaciones)
+                </label>
+                {filtrarPeriodoInstalados && (
+                  <input
+                    type="month"
+                    value={mesInstalados}
+                    onChange={(ev) => setMesInstalados(ev.target.value)}
+                    className="rounded-lg border border-gray-300 px-2 py-1 text-xs"
+                  />
+                )}
+              </div>
+            )}
             {expandido && (
               <div className="border-t border-gray-100 divide-y divide-gray-100">
                 {items.map((o) =>
@@ -461,17 +511,30 @@ export function LaboratorioOperativo() {
                           />
                         </div>
                       )}
-                      {marcandoEntregado && esLaboratorioRuby(laboratorios, editLaboratorioId) && (
+                      {esLaboratorioRuby(laboratorios, editLaboratorioId) && (
                         <div>
                           <label className="block text-xs font-medium text-amber-700 mb-1">
-                            Fecha de la cita del paciente (obligatoria para el laboratorio de Ruby)
+                            Fecha de la cita del paciente
+                            {marcandoEntregado && !editSinCita ? " (obligatoria para el laboratorio de Ruby)" : ""}
                           </label>
                           <input
                             type="date"
                             value={editFechaCita}
+                            disabled={editSinCita}
                             onChange={(e) => setEditFechaCita(e.target.value)}
-                            className="w-full rounded-md border border-amber-300 px-2 py-1.5 text-sm"
+                            className="w-full rounded-md border border-amber-300 px-2 py-1.5 text-sm disabled:opacity-40"
                           />
+                          <label className="flex items-center gap-1.5 mt-1 text-xs text-amber-700">
+                            <input
+                              type="checkbox"
+                              checked={editSinCita}
+                              onChange={(e) => {
+                                setEditSinCita(e.target.checked);
+                                if (e.target.checked) setEditFechaCita("");
+                              }}
+                            />
+                            El paciente todavía no tiene cita agendada
+                          </label>
                         </div>
                       )}
                       <div className="flex gap-2">
@@ -479,7 +542,10 @@ export function LaboratorioOperativo() {
                           onClick={() => guardarEdicion(o.id, o.estado !== "enviado" || marcandoRecibido)}
                           disabled={
                             guardandoEdit ||
-                            (marcandoEntregado && esLaboratorioRuby(laboratorios, editLaboratorioId) && !editFechaCita)
+                            (marcandoEntregado &&
+                              esLaboratorioRuby(laboratorios, editLaboratorioId) &&
+                              !editFechaCita &&
+                              !editSinCita)
                           }
                           className="flex items-center gap-1 rounded-md bg-[var(--acento)] text-white px-3 text-sm font-medium disabled:opacity-40"
                         >
