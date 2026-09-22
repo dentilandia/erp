@@ -186,6 +186,26 @@ export function Layout() {
               </NavLink>
             );
           })}
+        {perfil?.rol === "operacion" && (
+          // Único camino de vuelta a Operación para el equipo operativo desde
+          // fuera de /operacion (ej. parado en Asistencia) — sin esto, quien
+          // llegara a /asistencia por una ruta guardada vieja o un enlace
+          // directo se quedaba sin forma de volver, porque esta barra solo
+          // muestra las pestañas de Recepción/Consultorio dentro de
+          // /operacion, y la barra de Secciones de arriba es solo para admin.
+          <NavLink
+            to="/operacion/recepcion"
+            className={({ isActive }) =>
+              `flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${
+                isActive || enOperacion ? "text-white" : "text-gris hover:bg-white/10"
+              }`
+            }
+            style={enOperacion ? { background: "#009F98" } : {}}
+          >
+            <LayoutGrid size={16} />
+            Operación
+          </NavLink>
+        )}
         {perfil && (
           // El marcado y las herramientas administrativas siguen solo para
           // admin (gate adentro del componente) — acá se abre la pestaña
