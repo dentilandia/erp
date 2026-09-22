@@ -44,6 +44,9 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   const [periodoId, setPeriodoId] = useState("");
   const [movimientos, setMovimientos] = useState<Record<string, InsumoGeneralMovimiento>>({});
   const [entregasRecibidas, setEntregasRecibidas] = useState<EntregaConCatalogo[]>([]);
+  // Lo que la persona que recibe puede corregir antes de confirmar — arranca
+  // igual a lo que administración dijo que envió, editable si no coincide.
+  const [cantidadRecibidaEdit, setCantidadRecibidaEdit] = useState<Record<string, string>>({});
   const [salidasRegistradas, setSalidasRegistradas] = useState<SalidaConCatalogo[]>([]);
   const [cargando, setCargando] = useState(true);
   const [categoriasAbiertas, setCategoriasAbiertas] = useState<Record<string, boolean>>({});
@@ -107,11 +110,12 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   }
 
   // Cada línea se confirma por separado — no un solo botón para todas — para
-  // que la sede pueda decir exactamente cuál sí y cuál no le llegó.
-  async function marcarEntregaRecibida(id: string) {
+  // que la sede pueda decir exactamente cuál sí y cuál no le llegó, y en qué
+  // cantidad (puede ser menos de lo que administración registró que envió).
+  async function marcarEntregaRecibida(id: string, cantidadRecibida: number) {
     // Al confirmar es cuando de verdad se suma a "Entradas" del período —
     // no antes, para no contarlo hasta que la sede confirme que llegó.
-    await supabase.from("insumos_generales_entregas").update({ visto: true }).eq("id", id);
+    await supabase.from("insumos_generales_entregas").update({ visto: true, cantidad_recibida: cantidadRecibida }).eq("id", id);
     cargarEntregasRecibidas();
     cargarMovimientos();
   }
@@ -348,32 +352,46 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
         <section className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-4">
           <p className="font-semibold text-emerald-800 mb-2">📦 Llegaron entregas nuevas de administración</p>
           <p className="text-xs text-emerald-600 mb-2">
-            Confirma línea por línea si de verdad te llegó — lo que confirmes como recibido se suma solo a
-            "Entradas"; lo que marques como no recibido queda para que administración lo revise.
+            Confirma línea por línea si de verdad te llegó, y corrige la cantidad si no coincide con lo que
+            administración registró que envió (ej. entregaron 8 y solo llegaron 4) — eso es lo que se suma a
+            "Entradas", y le queda un aviso a administración de la diferencia. Lo que marques como no recibido queda
+            para que administración lo revise.
           </p>
           <div className="space-y-1.5">
-            {entregasNoVistas.map((e) => (
-              <div key={e.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
-                <p className="text-emerald-700">
-                  {e.fecha} · {e.insumos_generales_catalogo?.nombre ?? "—"} ·{" "}
-                  <span className="font-semibold">{e.cantidad}</span>
-                </p>
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => marcarEntregaRecibida(e.id)}
-                    className="rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-emerald-700"
-                  >
-                    Recibido
-                  </button>
-                  <button
-                    onClick={() => marcarEntregaNoRecibida(e.id)}
-                    className="rounded-lg border border-emerald-400 text-emerald-700 px-3 py-1.5 text-xs font-medium hover:bg-emerald-100"
-                  >
-                    No recibido
-                  </button>
+            {entregasNoVistas.map((e) => {
+              const valorEdit = cantidadRecibidaEdit[e.id] ?? String(e.cantidad);
+              return (
+                <div key={e.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
+                  <p className="text-emerald-700">
+                    {e.fecha} · {e.insumos_generales_catalogo?.nombre ?? "—"} · administración envió:{" "}
+                    <span className="font-semibold">{e.cantidad}</span>
+                  </p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <label className="flex items-center gap-1 text-xs text-emerald-700">
+                      Recibí:
+                      <input
+                        type="number"
+                        value={valorEdit}
+                        onChange={(ev) => setCantidadRecibidaEdit((prev) => ({ ...prev, [e.id]: ev.target.value }))}
+                        className="w-16 rounded-md border border-emerald-300 px-1.5 py-1 text-right"
+                      />
+                    </label>
+                    <button
+                      onClick={() => marcarEntregaRecibida(e.id, Number(valorEdit) || 0)}
+                      className="rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-emerald-700"
+                    >
+                      Confirmar
+                    </button>
+                    <button
+                      onClick={() => marcarEntregaNoRecibida(e.id)}
+                      className="rounded-lg border border-emerald-400 text-emerald-700 px-3 py-1.5 text-xs font-medium hover:bg-emerald-100"
+                    >
+                      No recibido
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       )}
@@ -598,11 +616,17 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
             <div>
               <p className="text-xs font-medium text-gray-400 mb-1.5">Últimas entregas recibidas de la bodega administrativa</p>
               <div className="space-y-1">
-                {entregasRecibidas.map((e) => (
-                  <div key={e.id} className="text-xs text-gray-500">
-                    {e.fecha} · {e.insumos_generales_catalogo?.nombre ?? "—"} · <span className="font-medium">{e.cantidad}</span>
-                  </div>
-                ))}
+                {entregasRecibidas.map((e) => {
+                  const conDiferencia = e.cantidad_recibida !== null && e.cantidad_recibida !== e.cantidad;
+                  return (
+                    <div key={e.id} className="text-xs text-gray-500">
+                      {e.fecha} · {e.insumos_generales_catalogo?.nombre ?? "—"} ·{" "}
+                      <span className="font-medium">
+                        {conDiferencia ? `recibiste ${e.cantidad_recibida} de ${e.cantidad}` : e.cantidad}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

@@ -66,6 +66,7 @@ export function AdministracionInventarios() {
   const [notasPedidoPorSede, setNotasPedidoPorSede] = useState<{ sedeNombre: string; nota: string }[]>([]);
 
   const [entregasNoRecibidas, setEntregasNoRecibidas] = useState<EntregaHistorial[]>([]);
+  const [entregasConDiferencia, setEntregasConDiferencia] = useState<EntregaHistorial[]>([]);
 
   const [sedeIdVista, setSedeIdVista] = useState("");
 
@@ -237,6 +238,29 @@ export function AdministracionInventarios() {
   async function resolverEntregaNoRecibida(id: string) {
     await supabase.from("insumos_generales_entregas").update({ reportado_no_recibido: false }).eq("id", id);
     cargarEntregasNoRecibidas();
+  }
+
+  async function cargarEntregasConDiferencia() {
+    const { data } = await supabase
+      .from("insumos_generales_entregas")
+      .select("*, insumos_generales_catalogo(categoria, nombre), insumos_generales_periodos(etiqueta), sedes(nombre)")
+      .eq("visto", true)
+      .eq("diferencia_vista", false)
+      .not("cantidad_recibida", "is", null)
+      .order("fecha", { ascending: false });
+    const filas = (data as unknown as (EntregaHistorial & { sedes: { nombre: string } | null })[]) ?? [];
+    // cantidad_recibida vs cantidad es una comparación entre 2 columnas —
+    // PostgREST no la soporta como filtro, se hace del lado del cliente.
+    setEntregasConDiferencia(filas.filter((e) => e.cantidad_recibida !== e.cantidad));
+  }
+
+  useEffect(() => {
+    cargarEntregasConDiferencia();
+  }, []);
+
+  async function resolverEntregaConDiferencia(id: string) {
+    await supabase.from("insumos_generales_entregas").update({ diferencia_vista: true }).eq("id", id);
+    cargarEntregasConDiferencia();
   }
 
   // Marcar "Entregado" hace lo mismo que "Entregar a una sede" (resta de la
@@ -507,6 +531,35 @@ export function AdministracionInventarios() {
                 <button
                   onClick={() => resolverEntregaNoRecibida(e.id)}
                   className="shrink-0 rounded-lg bg-rose-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-rose-700"
+                >
+                  Descartar aviso
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {entregasConDiferencia.length > 0 && (
+        <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
+          <p className="font-semibold text-amber-800 mb-2">⚠️ Entregas confirmadas con una cantidad distinta</p>
+          <p className="text-xs text-amber-700 mb-2">
+            La sede confirmó que recibió una cantidad distinta a la que se registró como enviada — ya quedó sumado
+            a "Entradas" lo que de verdad llegó, esto es solo el aviso de la diferencia.
+          </p>
+          <div className="space-y-1.5">
+            {entregasConDiferencia.map((e) => (
+              <div key={e.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
+                <p className="text-amber-800 flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorSede(e.sede_id) }} />
+                  <span className="font-medium">{(e as unknown as { sedes: { nombre: string } | null }).sedes?.nombre ?? "—"}</span> ·{" "}
+                  {e.fecha} · {e.insumos_generales_catalogo?.nombre ?? "—"} · se envió{" "}
+                  <span className="font-semibold">{e.cantidad}</span>, llegó{" "}
+                  <span className="font-semibold">{e.cantidad_recibida}</span>
+                </p>
+                <button
+                  onClick={() => resolverEntregaConDiferencia(e.id)}
+                  className="shrink-0 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700"
                 >
                   Descartar aviso
                 </button>

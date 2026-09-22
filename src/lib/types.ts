@@ -344,6 +344,11 @@ export interface InsumoGeneralEntrega {
   created_at: string;
   visto: boolean;
   reportado_no_recibido: boolean;
+  // Lo que la sede confirma que de verdad llegó — puede ser distinto de
+  // "cantidad" (lo que administración registró que envió). Null hasta que
+  // se confirma; ahí es cuando "Entradas" del período se llena con esto.
+  cantidad_recibida: number | null;
+  diferencia_vista: boolean;
 }
 
 /** Solicitud de una sede a la bodega administrativa — el primer paso del
