@@ -46,6 +46,7 @@ export function CierreDiario() {
   const [gasto, setGasto] = useState("0");
   const [gastoConcepto, setGastoConcepto] = useState("");
   const [subiendo, setSubiendo] = useState(false);
+  const [subiendoTirilla, setSubiendoTirilla] = useState(false);
   // Evita que el efecto que guarda totales_por_medio (más abajo) escriba un
   // {} vacío mientras esta consulta todavía está en camino, antes de que
   // lleguen los datos reales del día.
@@ -251,21 +252,31 @@ export function CierreDiario() {
       .then();
   }, [cargado, totalesPorMedio, sedeActiva.id, fecha]);
 
+  // Cada acción de abajo (consignado, entregado, tirilla...) hace su propio
+  // upsert, y cada uno tiene que reenviar TODAS las columnas — no solo la que
+  // cambia — porque si el día todavía no existía en la tabla, un upsert
+  // parcial dejaría el resto en su valor por defecto (ej. re-abrir "Día
+  // consignado" sin querer). Centralizado acá para no repetir los mismos
+  // ocho campos en cada función y arriesgarse a que a alguna le falte uno.
+  function baseCierrePayload() {
+    return {
+      sede_id: sedeActiva.id,
+      fecha,
+      gasto: Number(gasto) || 0,
+      gasto_concepto: gastoConcepto.trim() || null,
+      consignado: cierre?.consignado ?? false,
+      comprobante_url: cierre?.comprobante_url ?? null,
+      fecha_consignacion: cierre?.fecha_consignacion ?? null,
+      entregado_admin: cierre?.entregado_admin ?? false,
+      fecha_entrega_admin: cierre?.fecha_entrega_admin ?? null,
+      tirilla_datafono: cierre?.tirilla_datafono ?? false,
+      tirilla_datafono_url: cierre?.tirilla_datafono_url ?? null,
+      fecha_tirilla_datafono: cierre?.fecha_tirilla_datafono ?? null,
+    };
+  }
+
   async function guardarManual() {
-    await supabase.from("cierres_diarios").upsert(
-      {
-        sede_id: sedeActiva.id,
-        fecha,
-        gasto: Number(gasto) || 0,
-        gasto_concepto: gastoConcepto.trim() || null,
-        consignado: cierre?.consignado ?? false,
-        comprobante_url: cierre?.comprobante_url ?? null,
-        fecha_consignacion: cierre?.fecha_consignacion ?? null,
-        entregado_admin: cierre?.entregado_admin ?? false,
-        fecha_entrega_admin: cierre?.fecha_entrega_admin ?? null,
-      },
-      { onConflict: "sede_id,fecha" },
-    );
+    await supabase.from("cierres_diarios").upsert(baseCierrePayload(), { onConflict: "sede_id,fecha" });
   }
 
   async function marcarConsignado(consignado: boolean) {
@@ -276,17 +287,7 @@ export function CierreDiario() {
     await supabase
       .from("cierres_diarios")
       .upsert(
-        {
-          sede_id: sedeActiva.id,
-          fecha,
-          gasto: Number(gasto) || 0,
-          gasto_concepto: gastoConcepto.trim() || null,
-          consignado,
-          fecha_consignacion: consignado ? today() : null,
-          comprobante_url: cierre?.comprobante_url ?? null,
-          entregado_admin: cierre?.entregado_admin ?? false,
-          fecha_entrega_admin: cierre?.fecha_entrega_admin ?? null,
-        },
+        { ...baseCierrePayload(), consignado, fecha_consignacion: consignado ? today() : null },
         { onConflict: "sede_id,fecha" },
       )
       .select("*")
@@ -300,17 +301,23 @@ export function CierreDiario() {
     await supabase
       .from("cierres_diarios")
       .upsert(
-        {
-          sede_id: sedeActiva.id,
-          fecha,
-          gasto: Number(gasto) || 0,
-          gasto_concepto: gastoConcepto.trim() || null,
-          consignado: cierre?.consignado ?? false,
-          comprobante_url: cierre?.comprobante_url ?? null,
-          fecha_consignacion: cierre?.fecha_consignacion ?? null,
-          entregado_admin: entregado,
-          fecha_entrega_admin: entregado ? today() : null,
-        },
+        { ...baseCierrePayload(), entregado_admin: entregado, fecha_entrega_admin: entregado ? today() : null },
+        { onConflict: "sede_id,fecha" },
+      )
+      .select("*")
+      .single()
+      .then(({ data }) => setCierre((data as CierreDiarioRow) ?? null));
+  }
+
+  async function marcarTirillaDatafono(marcado: boolean) {
+    if (marcado && !cierre?.tirilla_datafono_url) {
+      window.alert("Adjunta la tirilla del datáfono antes de marcar el día.");
+      return;
+    }
+    await supabase
+      .from("cierres_diarios")
+      .upsert(
+        { ...baseCierrePayload(), tirilla_datafono: marcado, fecha_tirilla_datafono: marcado ? today() : null },
         { onConflict: "sede_id,fecha" },
       )
       .select("*")
@@ -329,20 +336,7 @@ export function CierreDiario() {
     }
     const { data, error: errorGuardado } = await supabase
       .from("cierres_diarios")
-      .upsert(
-        {
-          sede_id: sedeActiva.id,
-          fecha,
-          gasto: Number(gasto) || 0,
-          gasto_concepto: gastoConcepto.trim() || null,
-          consignado: cierre?.consignado ?? false,
-          comprobante_url: path,
-          fecha_consignacion: cierre?.fecha_consignacion ?? null,
-          entregado_admin: cierre?.entregado_admin ?? false,
-          fecha_entrega_admin: cierre?.fecha_entrega_admin ?? null,
-        },
-        { onConflict: "sede_id,fecha" },
-      )
+      .upsert({ ...baseCierrePayload(), comprobante_url: path }, { onConflict: "sede_id,fecha" })
       .select("*")
       .single();
     if (errorGuardado) {
@@ -351,6 +345,28 @@ export function CierreDiario() {
       setCierre((data as CierreDiarioRow) ?? null);
     }
     setSubiendo(false);
+  }
+
+  async function subirTirillaDatafono(file: File) {
+    setSubiendoTirilla(true);
+    const path = `${sedeActiva.id}/${fecha}-tirilla-${file.name}`;
+    const { error: errorSubida } = await supabase.storage.from("comprobantes").upload(path, file, { upsert: true });
+    if (errorSubida) {
+      window.alert(`No se pudo subir la tirilla: ${errorSubida.message}`);
+      setSubiendoTirilla(false);
+      return;
+    }
+    const { data, error: errorGuardado } = await supabase
+      .from("cierres_diarios")
+      .upsert({ ...baseCierrePayload(), tirilla_datafono_url: path }, { onConflict: "sede_id,fecha" })
+      .select("*")
+      .single();
+    if (errorGuardado) {
+      window.alert(`El archivo se subió pero no se pudo guardar el registro: ${errorGuardado.message}`);
+    } else {
+      setCierre((data as CierreDiarioRow) ?? null);
+    }
+    setSubiendoTirilla(false);
   }
 
   async function verComprobante(path: string) {
@@ -424,6 +440,7 @@ export function CierreDiario() {
             <p>Gasto del día: ${fmtCOP(Number(gasto) || 0)}${gastoConcepto.trim() ? ` — ${gastoConcepto.trim()}` : ""}</p>
             <p><strong>Total efectivo (Cierre): ${fmtCOP(totalEfectivoCierre)}</strong></p>
             <p>Día consignado: ${cierre?.consignado ? "Sí" : "No"}</p>
+            <p>Tirilla datáfono: ${cierre?.tirilla_datafono ? "Sí" : "No"}</p>
             <p>Entregado a la administración: ${cierre?.entregado_admin ? "Sí" : "No"}</p>
           </div>
           <div class="vouchers">Adjuntar aquí los vouchers del datafono y demás soportes físicos del día.</div>
@@ -646,6 +663,35 @@ export function CierreDiario() {
                 type="file"
                 className="hidden"
                 onChange={(e) => e.target.files?.[0] && subirComprobante(e.target.files[0])}
+              />
+            </label>
+          </div>
+        </div>
+        <div className="flex items-center justify-between flex-wrap gap-2 pt-3 border-t border-gray-100">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={cierre?.tirilla_datafono ?? false}
+              onChange={(e) => marcarTirillaDatafono(e.target.checked)}
+            />
+            Tirilla datáfono
+          </label>
+          <div className="flex items-center gap-3">
+            {cierre?.tirilla_datafono_url && (
+              <button
+                onClick={() => verComprobante(cierre.tirilla_datafono_url!)}
+                className="text-sm text-[var(--acento)] font-medium underline"
+              >
+                Ver comprobante
+              </button>
+            )}
+            <label className="flex items-center gap-2 text-sm text-[var(--acento)] font-medium cursor-pointer">
+              <Paperclip size={14} />
+              {subiendoTirilla ? "Subiendo…" : cierre?.tirilla_datafono_url ? "Reemplazar" : "Adjuntar comprobante"}
+              <input
+                type="file"
+                className="hidden"
+                onChange={(e) => e.target.files?.[0] && subirTirillaDatafono(e.target.files[0])}
               />
             </label>
           </div>

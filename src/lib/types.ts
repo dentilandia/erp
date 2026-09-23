@@ -478,6 +478,9 @@ export interface CierreDiario {
   fecha_consignacion: string | null;
   entregado_admin: boolean;
   fecha_entrega_admin: string | null;
+  tirilla_datafono: boolean;
+  tirilla_datafono_url: string | null;
+  fecha_tirilla_datafono: string | null;
   notas: string | null;
   // Total facturado por medio de pago (efectivo, tarjeta_debito, tarjeta_credito,
   // transferencia_debito, addi, sistecredito), calculado y guardado por esta
