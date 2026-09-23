@@ -631,6 +631,13 @@ export function Asistencia() {
   // revisada.
   const [horaSalidaAutorizada, setHoraSalidaAutorizada] = useState("");
   const [horaSalidaAutorizadaOriginal, setHoraSalidaAutorizadaOriginal] = useState("");
+  // Para dejar "Compensado" programado ANTES de que la persona marque ese
+  // día (ej. hoy programar mañana) — como todavía no hay llegada/salida
+  // reales, no se puede calcular el faltante solo, así que se escribe a
+  // mano. Una vez la persona marque, recalcularCompensadoDia lo recalcula
+  // contra las marcas reales y corrige el número solo, sin volver acá.
+  const [minutosCompensadoManual, setMinutosCompensadoManual] = useState("");
+  const [minutosCompensadoManualOriginal, setMinutosCompensadoManualOriginal] = useState("");
   const [ausenciaPersona, setAusenciaPersona] = useState<{
     id: string;
     tipo: "vacaciones" | "incapacidad" | "descanso";
@@ -723,6 +730,12 @@ export function Asistencia() {
     setNotaOriginal(nota?.nota ?? "");
     setEsCompensado(minutosCompensados > 0);
     setEsCompensadoOriginal(minutosCompensados > 0);
+    // Si ese día no hay llegada y salida cargadas todavía, "compensado" no se
+    // pudo calcular solo — lo que haya guardado es el estimado escrito a mano.
+    const hayLlegadaYSalida = marcas.some((m) => m.tipo === "llegada") && marcas.some((m) => m.tipo === "salida");
+    const manual = !hayLlegadaYSalida && minutosCompensados > 0 ? String(minutosCompensados) : "";
+    setMinutosCompensadoManual(manual);
+    setMinutosCompensadoManualOriginal(manual);
     const horaAutorizada = nota?.hora_entrada_autorizada?.slice(0, 5) ?? "";
     setHoraEntradaAutorizada(horaAutorizada);
     setHoraEntradaAutorizadaOriginal(horaAutorizada);
@@ -785,20 +798,29 @@ export function Asistencia() {
     // sábado) y ese faltante se suma de vuelta a las horas de la semana en
     // el reporte, para no descontarlo dos veces (ya estaba a su favor de un
     // período anterior).
-    if (esCompensado) {
-      const horasTrabajadas = horasTrabajadasDeMarcas(marcasPersona, fechaAdmin, horaEntradaAutorizada || null);
-      if (horasTrabajadas === 0) {
-        setErrorAdmin('Para marcar "compensado" primero hay que cargar la llegada y la salida de ese día.');
-        return;
-      }
+    // Si todavía no hay llegada y salida cargadas ese día (ej. se está
+    // programando de un día para otro, antes de que la persona marque), no
+    // se puede calcular el faltante solo — se usa el estimado escrito a
+    // mano. Una vez la persona marque, recalcularCompensadoDia lo corrige
+    // solo contra las horas reales la próxima vez que se abra este día.
+    const hayLlegadaYSalida = marcasPersona.some((m) => m.tipo === "llegada") && marcasPersona.some((m) => m.tipo === "salida");
+    if (esCompensado && !hayLlegadaYSalida && !minutosCompensadoManual.trim()) {
+      setErrorAdmin(
+        'Todavía no hay llegada y salida cargadas ese día — escribe cuántos minutos aproximados vas a compensarle (se ajusta solo cuando la persona marque).',
+      );
+      return;
     }
     setGuardandoAdmin(true);
     setErrorAdmin(null);
     const minutosCompensados = esCompensado
-      ? Math.round(
-          Math.max(0, jornadaOrdinariaHoras(fechaAdmin) - horasTrabajadasDeMarcas(marcasPersona, fechaAdmin, horaEntradaAutorizada || null)) *
-            60,
-        )
+      ? hayLlegadaYSalida
+        ? Math.round(
+            Math.max(
+              0,
+              jornadaOrdinariaHoras(fechaAdmin) - horasTrabajadasDeMarcas(marcasPersona, fechaAdmin, horaEntradaAutorizada || null),
+            ) * 60,
+          )
+        : Math.max(0, Math.round(Number(minutosCompensadoManual) || 0))
       : 0;
     const { error } = await supabase.from("asistencia_notas_dia").upsert(
       {
@@ -821,6 +843,7 @@ export function Asistencia() {
     setEsCompensadoOriginal(esCompensado);
     setHoraEntradaAutorizadaOriginal(horaEntradaAutorizada);
     setHoraSalidaAutorizadaOriginal(horaSalidaAutorizada);
+    setMinutosCompensadoManualOriginal(minutosCompensadoManual);
     cargarReporte();
     cargarDashboardHoy();
   }
@@ -1829,7 +1852,8 @@ export function Asistencia() {
                   (notaPersona.trim() === notaOriginal &&
                     esCompensado === esCompensadoOriginal &&
                     horaEntradaAutorizada === horaEntradaAutorizadaOriginal &&
-                    horaSalidaAutorizada === horaSalidaAutorizadaOriginal)
+                    horaSalidaAutorizada === horaSalidaAutorizadaOriginal &&
+                    minutosCompensadoManual === minutosCompensadoManualOriginal)
                 }
                 className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
               >
@@ -1846,6 +1870,27 @@ export function Asistencia() {
               ({jornadaOrdinariaHoras(fechaAdmin)}h) y lo suma de vuelta a las horas de la semana, para no
               descontárselo dos veces.
             </p>
+            {esCompensado &&
+              !(marcasPersona.some((m) => m.tipo === "llegada") && marcasPersona.some((m) => m.tipo === "salida")) && (
+                <div className="mt-2">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">
+                    Minutos aproximados a compensar (todavía no hay llegada y salida cargadas ese día — ej. lo estás
+                    programando desde el día anterior)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={minutosCompensadoManual}
+                    onChange={(e) => setMinutosCompensadoManual(e.target.value)}
+                    placeholder="Ej. 60"
+                    className="w-28 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">
+                    En cuanto la persona marque llegada y salida ese día, este número se recalcula solo contra las
+                    horas reales — no hay que volver a corregirlo a mano.
+                  </p>
+                </div>
+              )}
             <div className="mt-2">
               <label className="block text-xs font-medium text-gray-500 mb-1">
                 Hora de entrada autorizada ese día (si es distinta a la normal — ej. reunión desde las 8am, o alguien
