@@ -548,6 +548,17 @@ function ModalAtencion({
       setError("Marcaste \"Comprobante de datáfono\" pero falta adjuntar el archivo.");
       return;
     }
+    // Marcar el check y llenar laboratorio/tipo de servicio no agrega nada
+    // por sí solo — hay que tocar el botón "Agregar" de esa sección para que
+    // quede en la lista que sí se guarda. Sin este aviso, quedaba pasando
+    // que alguien llenaba el formulario, nunca tocaba "Agregar" y el envío
+    // a laboratorio no quedaba registrado en ningún lado, sin ningún error.
+    if (enviarLab && enviosLab.length === 0) {
+      setError(
+        'Marcaste "Enviar aparato a laboratorio" pero no agregaste ningún envío a la lista — toca "Agregar" en esa sección antes de guardar (o desmarca el check si no vas a enviar nada).',
+      );
+      return;
+    }
     setGuardando(true);
     setError(null);
     const { data: visita } = await supabase.from("visitas").select("doctora_id, paciente_id, fecha").eq("id", visitaId).single();
@@ -616,7 +627,7 @@ function ModalAtencion({
       });
     }
     for (const envio of enviosLab) {
-      await supabase.from("lab_ordenes").insert({
+      const { error: errorLab } = await supabase.from("lab_ordenes").insert({
         visita_id: visitaId,
         sede_id: sedeId,
         doctora_id: envio.doctoraId,
@@ -633,6 +644,7 @@ function ModalAtencion({
         incluye_modelo_inferior: envio.incluyeModeloInferior,
         incluye_registro_mordida: envio.incluyeRegistroMordida,
       });
+      if (errorLab) setError(`No se pudo registrar el envío a ${envio.laboratorioNombre}: ${errorLab.message}`);
     }
     if (interconsulta && interconsultaEspecialidad.trim()) {
       await supabase.from("interconsultas").insert({

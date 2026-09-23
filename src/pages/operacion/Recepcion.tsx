@@ -8,6 +8,7 @@ import {
   CONCEPTOS_ADMINISTRATIVOS,
   MOTIVOS_SALDO_FAVOR,
   TIPOS_INSUMO_CONSULTA,
+  TIPOS_SERVICIO_LAB,
   type Sede,
   type Doctora,
   type Paciente,
@@ -1086,6 +1087,10 @@ function ModalCobro({
   const [guardando, setGuardando] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [cargandoModal, setCargandoModal] = useState(true);
+  // Para que Recepción pueda ver, sin tener que preguntarle a consultorio,
+  // si a este paciente se le envió aparato a laboratorio ese día — antes no
+  // había forma de validarlo desde acá.
+  const [labOrdenes, setLabOrdenes] = useState<{ laboratorioNombre: string; tipoServicio: string }[]>([]);
 
   useEffect(() => {
     (async () => {
@@ -1169,6 +1174,17 @@ function ModalCobro({
       const preciosMap: Record<string, number> = {};
       (preciosData ?? []).forEach((p) => (preciosMap[p.clave] = Number(p.valor)));
       setPrecios(preciosMap);
+
+      const { data: labOrdenesData } = await supabase
+        .from("lab_ordenes")
+        .select("tipo_servicio, laboratorios(nombre)")
+        .eq("visita_id", visitaId);
+      setLabOrdenes(
+        ((labOrdenesData as unknown as { tipo_servicio: string; laboratorios: { nombre: string } | null }[]) ?? []).map((o) => ({
+          laboratorioNombre: o.laboratorios?.nombre ?? "—",
+          tipoServicio: o.tipo_servicio,
+        })),
+      );
       setCargandoModal(false);
     })();
   }, [visitaId]);
@@ -1492,6 +1508,21 @@ function ModalCobro({
                   placeholder="Nota de consultorio, o la fecha ya agendada"
                   className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
                 />
+              </div>
+
+              <div>
+                <p className="text-xs font-medium text-gray-500 mb-1">Aparatos enviados a laboratorio</p>
+                {labOrdenes.length > 0 ? (
+                  <ul className="text-sm space-y-0.5">
+                    {labOrdenes.map((o, idx) => (
+                      <li key={idx}>
+                        {o.laboratorioNombre} · {TIPOS_SERVICIO_LAB.find((t) => t.value === o.tipoServicio)?.label ?? o.tipoServicio}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-gray-400">Sin envío a laboratorio registrado para esta visita.</p>
+                )}
               </div>
             </div>
 
