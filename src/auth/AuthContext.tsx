@@ -1,9 +1,17 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 import type { Perfil, Sede } from "../lib/types";
 
 export type ModoOperacion = "recepcion" | "clinica";
+
+function claveModo(perfilId: string) {
+  return `erp_modo_operacion:${perfilId}`;
+}
+
+function claveSedeElegida(perfilId: string) {
+  return `erp_sede_elegida:${perfilId}`;
+}
 
 interface AuthState {
   loading: boolean;
@@ -35,8 +43,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [modoOperacion, setModoOperacion] = useState<ModoOperacion | null>(null);
   const [sedeElegidaId, setSedeElegidaId] = useState<string | null>(null);
   const [errorSede, setErrorSede] = useState<string | null>(null);
+  // Referencia al perfil actual para poder limpiar su sessionStorage al
+  // cerrar sesión (real logout, no un refresh) — en ese momento el estado ya
+  // se puso en null, así que no sirve leer `perfil` directo ahí.
+  const perfilRef = useRef<Perfil | null>(null);
+  perfilRef.current = perfil;
 
   function elegirModoOperacion(modo: ModoOperacion) {
+    if (perfil) sessionStorage.setItem(claveModo(perfil.id), modo);
     setModoOperacion(modo);
   }
 
@@ -54,6 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setErrorSede(rpcError.message);
       return;
     }
+    if (perfil) sessionStorage.setItem(claveSedeElegida(perfil.id), sedeId);
     setSedeElegidaId(sedeId);
     const { data } = await supabase.from("sedes").select("id, nombre, color_acento, ip_permitida").eq("id", sedeId).single();
     if (data) setSede(data as Sede);
@@ -71,6 +86,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(next);
       if (event === "PASSWORD_RECOVERY") setRecuperandoClave(true);
       if (!next) {
+        // Cierre de sesión real (o sesión perdida) — acá sí hay que borrar lo
+        // guardado, para que un login posterior (mismo u otro usuario en el
+        // mismo navegador) vuelva a preguntar modo/sede en vez de arrastrar
+        // la elección de la sesión anterior.
+        if (perfilRef.current) {
+          sessionStorage.removeItem(claveModo(perfilRef.current.id));
+          sessionStorage.removeItem(claveSedeElegida(perfilRef.current.id));
+        }
         setPerfil(null);
         setSede(null);
         setModoOperacion(null);
@@ -100,19 +123,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       setPerfil(perfilRow as Perfil);
-      // Modo y sede se preguntan de nuevo cada vez que arranca la app (no
-      // quedan guardados de una vez para la próxima) — antes se guardaban en
-      // sessionStorage, que sobrevive a que alguien cierre y vuelva a abrir
-      // el navegador/la pestaña sin que la app realmente se recargue (pasa
-      // seguido en celular), así que la pantalla de elegir modo/sede no
-      // volvía a salir aunque la persona sintiera que "entró de nuevo".
-      setModoOperacion(null);
-      setSedeElegidaId(null);
-      if (perfilRow.sede_id) {
+      // Modo y sede quedan en sessionStorage (por perfil), que sobrevive a un
+      // refresh normal de la página pero se borra explícitamente al cerrar
+      // sesión de verdad (arriba, en onAuthStateChange) — así un refresh a
+      // mitad de turno no obliga a volver a elegir, pero un logout/login sí.
+      const modoGuardado = sessionStorage.getItem(claveModo(perfilRow.id));
+      setModoOperacion(modoGuardado === "recepcion" || modoGuardado === "clinica" ? modoGuardado : null);
+      // La sede elegida esta sesión manda sobre la sede asignada por defecto
+      // (perfil.sede_id) — para cuando alguien de operación se desplaza a
+      // trabajar a otra sede ese día.
+      const sedeGuardada = sessionStorage.getItem(claveSedeElegida(perfilRow.id));
+      setSedeElegidaId(sedeGuardada);
+      const sedeIdEfectiva = sedeGuardada || perfilRow.sede_id;
+      if (sedeIdEfectiva) {
         const { data: sedeRow } = await supabase
           .from("sedes")
           .select("id, nombre, color_acento, ip_permitida")
-          .eq("id", perfilRow.sede_id)
+          .eq("id", sedeIdEfectiva)
           .single();
         if (!cancelled) setSede((sedeRow as Sede) ?? null);
       } else {
