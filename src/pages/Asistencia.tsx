@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { LogIn, LogOut, Coffee, Utensils, Sunrise, PartyPopper } from "lucide-react";
+import { LogIn, LogOut, Coffee, Utensils, Sunrise, PartyPopper, Eye, EyeOff } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthContext";
 import {
@@ -187,6 +187,11 @@ function horaBogotaAhora(): string {
 }
 
 /** 0 = domingo ... 6 = sábado. */
+// Debe coincidir con FECHA_INICIO_FRASES del edge function marcar-asistencia
+// — antes de esta fecha no se mostró ningún mensaje, así que no tiene sentido
+// avisar que "no lo leyó".
+const FECHA_INICIO_FRASES = "2026-09-21";
+
 function diaDeSemana(fechaYMD: string): number {
   const [y, m, d] = fechaYMD.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
@@ -433,7 +438,7 @@ export function Asistencia() {
   const [marcando, setMarcando] = useState<TipoAsistencia | null>(null);
   const [mensaje, setMensaje] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [registros, setRegistros] = useState<AsistenciaRegistro[]>([]);
-  const [frase, setFrase] = useState<{ tipo: "llegada" | "salida"; texto: string } | null>(null);
+  const [frase, setFrase] = useState<{ tipo: "llegada" | "salida"; texto: string; fecha: string } | null>(null);
 
   // Alerta administrativa: cada intento de marcar rechazado por no estar en
   // la red de la sede queda acá — para que Tomás/Sirley vean quién intentó
@@ -510,6 +515,9 @@ export function Asistencia() {
   // para saber si una llegada distinta a la normal ya está justificada o
   // todavía hay que revisarla.
   const [horaAutorizadaDashboard, setHoraAutorizadaDashboard] = useState<Record<string, string>>({});
+  // Quién confirmó haber leído el mensaje de llegada/salida ese día (clave
+  // "perfilId|tipo") — para avisar a admin quién no lo está leyendo.
+  const [frasesLeidasDashboard, setFrasesLeidasDashboard] = useState<Set<string>>(new Set());
   const [cargandoDashboard, setCargandoDashboard] = useState(true);
 
   async function cargarDashboardHoy() {
@@ -547,6 +555,13 @@ export function Asistencia() {
       autorizadas[n.perfil_id] = n.hora_entrada_autorizada.slice(0, 5);
     }
     setHoraAutorizadaDashboard(autorizadas);
+    const { data: leidasData } = await supabase
+      .from("asistencia_frases_leidas")
+      .select("perfil_id, tipo")
+      .eq("fecha", fechaDashboard);
+    setFrasesLeidasDashboard(
+      new Set((leidasData as { perfil_id: string; tipo: string }[] ?? []).map((l) => `${l.perfil_id}|${l.tipo}`)),
+    );
     setCargandoDashboard(false);
   }
 
@@ -1425,11 +1440,22 @@ export function Asistencia() {
     const etiqueta = TIPOS_ASISTENCIA.find((t) => t.value === tipo)?.label ?? tipo;
     setMensaje({ tipo: "ok", texto: `${etiqueta} registrada.` });
     if (data?.frase && (tipo === "llegada" || tipo === "salida")) {
-      setFrase({ tipo, texto: data.frase });
+      setFrase({ tipo, texto: data.frase, fecha: fechaBogota(new Date().toISOString()) });
     }
     cargarRegistros();
     cargarReporte();
     if (perfil?.rol === "admin") cargarDashboardHoy();
+  }
+
+  // Confirmación de que la persona sí vio el mensaje (para que admin pueda
+  // saber quién no lo está leyendo, no solo quién marcó) — se registra al
+  // cerrar el mensaje con "Entendido", que es el único botón para cerrarlo.
+  async function confirmarLecturaFrase() {
+    if (!frase || !perfil) return;
+    await supabase
+      .from("asistencia_frases_leidas")
+      .upsert({ perfil_id: perfil.id, fecha: frase.fecha, tipo: frase.tipo }, { onConflict: "perfil_id,fecha,tipo" });
+    setFrase(null);
   }
 
   return (
@@ -1551,6 +1577,12 @@ export function Asistencia() {
                         {TIPOS_ASISTENCIA.map((t) => {
                           const marca = marcas[t.value];
                           const revisar = (t.value === "llegada" && llegadaSinAutorizar) || (t.value === "salida" && salidaSinAutorizar);
+                          // Si vio (confirmó con "Entendido") el mensaje que le
+                          // salió al marcar — solo aplica desde que existen los
+                          // mensajes, y solo a llegada/salida (no almuerzo).
+                          const mostrarLectura =
+                            marca && (t.value === "llegada" || t.value === "salida") && fechaDashboard >= FECHA_INICIO_FRASES;
+                          const leyoMensaje = mostrarLectura && frasesLeidasDashboard.has(`${p.id}|${t.value}`);
                           return (
                             <td
                               key={t.value}
@@ -1565,8 +1597,20 @@ export function Asistencia() {
                                     : "text-gray-300"
                               }`}
                             >
-                              {marca ? new Date(marca).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }) : "—"}
-                              {revisar && " ⚠"}
+                              <span className="inline-flex items-center gap-1">
+                                {marca ? new Date(marca).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }) : "—"}
+                                {revisar && "⚠"}
+                                {mostrarLectura &&
+                                  (leyoMensaje ? (
+                                    <span title="Confirmó haber leído el mensaje">
+                                      <Eye size={12} className="text-green-500" />
+                                    </span>
+                                  ) : (
+                                    <span title="No confirmó haber leído el mensaje">
+                                      <EyeOff size={12} className="text-gray-400" />
+                                    </span>
+                                  ))}
+                              </span>
                             </td>
                           );
                         })}
@@ -2305,7 +2349,7 @@ export function Asistencia() {
               </div>
               <p className="text-base font-medium leading-snug bg-white/15 rounded-xl px-4 py-3">{frase.texto}</p>
               <button
-                onClick={() => setFrase(null)}
+                onClick={confirmarLecturaFrase}
                 className={`w-full rounded-xl bg-white py-3 text-sm font-bold hover:bg-white/90 ${
                   frase.tipo === "llegada" ? "text-orange-600" : "text-violet-700"
                 }`}
