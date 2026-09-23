@@ -95,15 +95,19 @@ async function recalcularCompensadoDia(perfilId: string, fecha: string): Promise
     .gte("marcado_en", desde)
     .lt("marcado_en", hasta)
     .order("marcado_en");
+  const marcasTyped = (marcas as { tipo: TipoAsistencia; marcado_en: string }[]) ?? [];
+  // Sin llegada y salida cargadas todavía (ej. se dejó "compensado"
+  // programado de un día para otro, antes de que la persona marque), no hay
+  // nada real contra qué recalcular — horasTrabajadasDeMarcas([]) da 0, lo
+  // que haría creer que faltó la jornada COMPLETA y pisaría el estimado
+  // escrito a mano con el total del día. Se deja el valor guardado intacto.
+  if (!(marcasTyped.some((m) => m.tipo === "llegada") && marcasTyped.some((m) => m.tipo === "salida"))) {
+    return minutosGuardados;
+  }
   const recalculado = Math.round(
     Math.max(
       0,
-      jornadaOrdinariaHoras(fecha) -
-        horasTrabajadasDeMarcas(
-          (marcas as { tipo: TipoAsistencia; marcado_en: string }[]) ?? [],
-          fecha,
-          nota?.hora_entrada_autorizada,
-        ),
+      jornadaOrdinariaHoras(fecha) - horasTrabajadasDeMarcas(marcasTyped, fecha, nota?.hora_entrada_autorizada),
     ) * 60,
   );
   if (recalculado !== minutosGuardados) {
