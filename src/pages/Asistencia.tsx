@@ -515,6 +515,7 @@ export function Asistencia() {
   // para saber si una llegada distinta a la normal ya está justificada o
   // todavía hay que revisarla.
   const [horaAutorizadaDashboard, setHoraAutorizadaDashboard] = useState<Record<string, string>>({});
+  const [horaSalidaAutorizadaDashboard, setHoraSalidaAutorizadaDashboard] = useState<Record<string, string>>({});
   // Quién confirmó haber leído el mensaje de llegada/salida ese día (clave
   // "perfilId|tipo") — para avisar a admin quién no lo está leyendo.
   const [frasesLeidasDashboard, setFrasesLeidasDashboard] = useState<Set<string>>(new Set());
@@ -547,14 +548,19 @@ export function Asistencia() {
     setSedeDelDiaDashboard(sedeDia);
     const { data: notasData } = await supabase
       .from("asistencia_notas_dia")
-      .select("perfil_id, hora_entrada_autorizada")
+      .select("perfil_id, hora_entrada_autorizada, hora_salida_autorizada")
       .eq("fecha", fechaDashboard)
-      .not("hora_entrada_autorizada", "is", null);
+      .or("hora_entrada_autorizada.not.is.null,hora_salida_autorizada.not.is.null");
     const autorizadas: Record<string, string> = {};
-    for (const n of (notasData as { perfil_id: string; hora_entrada_autorizada: string }[]) ?? []) {
-      autorizadas[n.perfil_id] = n.hora_entrada_autorizada.slice(0, 5);
+    const autorizadasSalida: Record<string, string> = {};
+    for (const n of (notasData as {
+      perfil_id: string; hora_entrada_autorizada: string | null; hora_salida_autorizada: string | null;
+    }[]) ?? []) {
+      if (n.hora_entrada_autorizada) autorizadas[n.perfil_id] = n.hora_entrada_autorizada.slice(0, 5);
+      if (n.hora_salida_autorizada) autorizadasSalida[n.perfil_id] = n.hora_salida_autorizada.slice(0, 5);
     }
     setHoraAutorizadaDashboard(autorizadas);
+    setHoraSalidaAutorizadaDashboard(autorizadasSalida);
     const { data: leidasData } = await supabase
       .from("asistencia_frases_leidas")
       .select("perfil_id, tipo")
@@ -619,6 +625,12 @@ export function Asistencia() {
   // entrar a las 10am) — llegar antes de esto no suma horas de más.
   const [horaEntradaAutorizada, setHoraEntradaAutorizada] = useState("");
   const [horaEntradaAutorizadaOriginal, setHoraEntradaAutorizadaOriginal] = useState("");
+  // Igual que arriba pero para la salida — no cambia el cálculo de horas
+  // (salir temprano de verdad resta horas trabajadas; para perdonar eso está
+  // "Compensado de tiempo"), solo apaga la alerta del dashboard una vez
+  // revisada.
+  const [horaSalidaAutorizada, setHoraSalidaAutorizada] = useState("");
+  const [horaSalidaAutorizadaOriginal, setHoraSalidaAutorizadaOriginal] = useState("");
   const [ausenciaPersona, setAusenciaPersona] = useState<{
     id: string;
     tipo: "vacaciones" | "incapacidad" | "descanso";
@@ -702,7 +714,7 @@ export function Asistencia() {
     setMarcasPersona(marcas);
     const { data: nota } = await supabase
       .from("asistencia_notas_dia")
-      .select("nota, hora_entrada_autorizada")
+      .select("nota, hora_entrada_autorizada, hora_salida_autorizada")
       .eq("perfil_id", personaAdminId)
       .eq("fecha", fechaAdmin)
       .maybeSingle();
@@ -714,6 +726,9 @@ export function Asistencia() {
     const horaAutorizada = nota?.hora_entrada_autorizada?.slice(0, 5) ?? "";
     setHoraEntradaAutorizada(horaAutorizada);
     setHoraEntradaAutorizadaOriginal(horaAutorizada);
+    const horaSalidaAutorizadaValor = nota?.hora_salida_autorizada?.slice(0, 5) ?? "";
+    setHoraSalidaAutorizada(horaSalidaAutorizadaValor);
+    setHoraSalidaAutorizadaOriginal(horaSalidaAutorizadaValor);
     const { data: ausencia } = await supabase
       .from("asistencia_ausencias")
       .select("id, tipo")
@@ -792,6 +807,7 @@ export function Asistencia() {
         nota: notaPersona.trim(),
         minutos_compensados: minutosCompensados,
         hora_entrada_autorizada: horaEntradaAutorizada || null,
+        hora_salida_autorizada: horaSalidaAutorizada || null,
         created_by: perfil?.id ?? null,
       },
       { onConflict: "perfil_id,fecha" },
@@ -804,7 +820,9 @@ export function Asistencia() {
     setNotaOriginal(notaPersona.trim());
     setEsCompensadoOriginal(esCompensado);
     setHoraEntradaAutorizadaOriginal(horaEntradaAutorizada);
+    setHoraSalidaAutorizadaOriginal(horaSalidaAutorizada);
     cargarReporte();
+    cargarDashboardHoy();
   }
 
   async function marcarAusencia(tipo: "vacaciones" | "incapacidad" | "descanso") {
@@ -1563,11 +1581,13 @@ export function Asistencia() {
                           new Date(`${fechaDashboard}T${horasPorDefecto(fechaDashboard).llegada}:00-05:00`).getTime(),
                       ) >
                         5 * 60_000;
-                    // Salida antes de la hora normal — no hay concepto de
-                    // "salida autorizada" todavía, así que esto solo avisa,
-                    // no bloquea nada.
+                    // Salida antes de la hora normal, sin hora de salida
+                    // autorizada guardada — igual que llegada, una vez que
+                    // admin la revisa y la guarda, deja de avisar.
+                    const horaSalidaAutorizada = horaSalidaAutorizadaDashboard[p.id];
                     const salidaSinAutorizar =
                       marcas.salida &&
+                      !horaSalidaAutorizada &&
                       new Date(marcas.salida).getTime() <
                         new Date(`${fechaDashboard}T${horasPorDefecto(fechaDashboard).salida}:00-05:00`).getTime() - 5 * 60_000;
                     return (
@@ -1808,7 +1828,8 @@ export function Asistencia() {
                   guardandoAdmin ||
                   (notaPersona.trim() === notaOriginal &&
                     esCompensado === esCompensadoOriginal &&
-                    horaEntradaAutorizada === horaEntradaAutorizadaOriginal)
+                    horaEntradaAutorizada === horaEntradaAutorizadaOriginal &&
+                    horaSalidaAutorizada === horaSalidaAutorizadaOriginal)
                 }
                 className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
               >
@@ -1839,6 +1860,22 @@ export function Asistencia() {
               <p className="text-xs text-gray-400 mt-1">
                 Llegar antes de esta hora (o de la jornada normal, {horasPorDefecto(fechaAdmin).llegada}, si dejas
                 esto vacío) no suma horas de más — las horas trabajadas se cuentan desde acá, no desde la marca real.
+              </p>
+            </div>
+            <div className="mt-2">
+              <label className="block text-xs font-medium text-gray-500 mb-1">
+                Hora de salida autorizada ese día (si salió antes de la normal con permiso)
+              </label>
+              <input
+                type="time"
+                value={horaSalidaAutorizada}
+                onChange={(e) => setHoraSalidaAutorizada(e.target.value)}
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Esto no cambia las horas trabajadas (salir antes sí resta horas de verdad — para perdonar ese
+                faltante usa "Compensado de tiempo" arriba). Solo apaga la alerta del dashboard de "Hoy — quién ha
+                marcado" una vez que ya revisaste que la salida temprano estaba autorizada.
               </p>
             </div>
           </div>
