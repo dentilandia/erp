@@ -1511,17 +1511,22 @@ function ModalCobro({
               </div>
 
               <div>
-                <p className="text-xs font-medium text-gray-500 mb-1">Aparatos enviados a laboratorio</p>
                 {labOrdenes.length > 0 ? (
-                  <ul className="text-sm space-y-0.5">
-                    {labOrdenes.map((o, idx) => (
-                      <li key={idx}>
-                        {o.laboratorioNombre} · {TIPOS_SERVICIO_LAB.find((t) => t.value === o.tipoServicio)?.label ?? o.tipoServicio}
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="rounded-md bg-emerald-50 border border-emerald-300 px-2.5 py-2">
+                    <p className="text-xs font-semibold text-emerald-700 mb-1">Aparatos enviados a laboratorio</p>
+                    <ul className="text-sm text-emerald-800 space-y-0.5">
+                      {labOrdenes.map((o, idx) => (
+                        <li key={idx}>
+                          {o.laboratorioNombre} · {TIPOS_SERVICIO_LAB.find((t) => t.value === o.tipoServicio)?.label ?? o.tipoServicio}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 ) : (
-                  <p className="text-sm text-gray-400">Sin envío a laboratorio registrado para esta visita.</p>
+                  <>
+                    <p className="text-xs font-medium text-gray-500 mb-1">Aparatos enviados a laboratorio</p>
+                    <p className="text-sm text-gray-400">Sin envío a laboratorio registrado para esta visita.</p>
+                  </>
                 )}
               </div>
             </div>
