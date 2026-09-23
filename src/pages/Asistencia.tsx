@@ -21,16 +21,40 @@ function jornadaOrdinariaHoras(fechaYMD: string): number {
   return diaDeSemana(fechaYMD) === 6 ? 4 : 8.5;
 }
 
+/** Hora a la que "empieza a contar" la jornada ese día: la normal (8:30
+ *  entre semana, 8:00 sábado) salvo que admin haya autorizado una distinta
+ *  para esa persona ese día puntual (ej. reunión desde las 8am, alguien
+ *  autorizado a entrar a las 10am). */
+function horaInicioEsperada(fechaYMD: string, horaAutorizada?: string | null): string {
+  // Postgres devuelve un "time" como "10:00:00" (con segundos) — se recorta
+  // a "HH:MM" para poder concatenarle ":00" siempre de forma segura abajo.
+  return (horaAutorizada || horasPorDefecto(fechaYMD).llegada).slice(0, 5);
+}
+
+/** Si llegó antes de la hora esperada, la llegada "efectiva" para contar
+ *  horas es la hora esperada, no la real — llegar temprano no debe generar
+ *  horas de más, ya que de todas formas empieza antes de lo que le tocaba. */
+function llegadaEfectivaISO(marcadoEnLlegada: string, fechaYMD: string, horaAutorizada?: string | null): string {
+  const inicioISO = new Date(`${fechaYMD}T${horaInicioEsperada(fechaYMD, horaAutorizada)}:00-05:00`).toISOString();
+  return marcadoEnLlegada < inicioISO ? inicioISO : marcadoEnLlegada;
+}
+
 /** Horas realmente trabajadas ese día según sus marcas (mismo cálculo que
  *  usa el reporte mensual: llegada→salida, descontando almuerzo si hay).
  *  Si es entre semana y no marcó las dos horas de almuerzo, se asume 1h fija
  *  en vez de contarla como trabajada (el sábado no tiene almuerzo, no
- *  aplica). */
-function horasTrabajadasDeMarcas(marcas: { tipo: TipoAsistencia; marcado_en: string }[], fecha: string): number {
+ *  aplica). Llegar antes de la hora esperada de ese día no suma horas de
+ *  más — se cuenta desde ahí, no desde la marca real. */
+function horasTrabajadasDeMarcas(
+  marcas: { tipo: TipoAsistencia; marcado_en: string }[],
+  fecha: string,
+  horaEntradaAutorizada?: string | null,
+): number {
   const porTipo: Partial<Record<TipoAsistencia, string>> = {};
   for (const m of marcas) if (!porTipo[m.tipo]) porTipo[m.tipo] = m.marcado_en;
   if (!porTipo.llegada || !porTipo.salida) return 0;
-  let horas = (new Date(porTipo.salida).getTime() - new Date(porTipo.llegada).getTime()) / 3_600_000;
+  const llegadaEfectiva = llegadaEfectivaISO(porTipo.llegada, fecha, horaEntradaAutorizada);
+  let horas = (new Date(porTipo.salida).getTime() - new Date(llegadaEfectiva).getTime()) / 3_600_000;
   if (porTipo.salida_almuerzo && porTipo.entrada_almuerzo) {
     horas -= (new Date(porTipo.entrada_almuerzo).getTime() - new Date(porTipo.salida_almuerzo).getTime()) / 3_600_000;
   } else if (diaDeSemana(fecha) !== 6) {
@@ -56,7 +80,7 @@ function escPdf(texto: string): string {
 async function recalcularCompensadoDia(perfilId: string, fecha: string): Promise<number> {
   const { data: nota } = await supabase
     .from("asistencia_notas_dia")
-    .select("minutos_compensados")
+    .select("minutos_compensados, hora_entrada_autorizada")
     .eq("perfil_id", perfilId)
     .eq("fecha", fecha)
     .maybeSingle();
@@ -75,7 +99,11 @@ async function recalcularCompensadoDia(perfilId: string, fecha: string): Promise
     Math.max(
       0,
       jornadaOrdinariaHoras(fecha) -
-        horasTrabajadasDeMarcas((marcas as { tipo: TipoAsistencia; marcado_en: string }[]) ?? [], fecha),
+        horasTrabajadasDeMarcas(
+          (marcas as { tipo: TipoAsistencia; marcado_en: string }[]) ?? [],
+          fecha,
+          nota?.hora_entrada_autorizada,
+        ),
     ) * 60,
   );
   if (recalculado !== minutosGuardados) {
@@ -213,6 +241,12 @@ interface CompensacionReporte {
   minutos: number;
 }
 
+interface AutorizacionReporte {
+  perfil_id: string;
+  fecha: string;
+  hora: string;
+}
+
 /** Arma el reporte de horas del rango (mes calendario o período de
  *  liquidación): agrupa las marcas por persona y día calendario, calcula
  *  horas trabajadas (llegada→salida, descontando el almuerzo si hay
@@ -228,11 +262,15 @@ function armarReporteHoras(
   registros: RegistroReporte[],
   ausencias: AusenciaReporte[],
   compensaciones: CompensacionReporte[],
+  autorizaciones: AutorizacionReporte[],
   festivos: Set<string>,
   rangoInicio: string,
   rangoFin: string,
   metaSemanal: number,
 ): FilaPersona[] {
+  const horaAutorizadaPorDia = new Map<string, string>();
+  for (const a of autorizaciones) horaAutorizadaPorDia.set(`${a.perfil_id}|${a.fecha}`, a.hora);
+
   const compensadosPorDia = new Map<string, number>();
   for (const c of compensaciones) {
     compensadosPorDia.set(`${c.perfil_id}|${c.fecha}`, (compensadosPorDia.get(`${c.perfil_id}|${c.fecha}`) ?? 0) + c.minutos);
@@ -285,7 +323,10 @@ function armarReporteHoras(
   for (const [clave, { nombre, marcas }] of porPersonaYDia) {
     const [perfilId, dia] = clave.split("|");
     if (!marcas.llegada || !marcas.salida) continue;
-    let horas = (new Date(marcas.salida).getTime() - new Date(marcas.llegada).getTime()) / 3_600_000;
+    // Llegar antes de la hora esperada (normal, o autorizada puntualmente
+    // por admin ese día) no suma horas de más — se cuenta desde ahí.
+    const llegadaEfectiva = llegadaEfectivaISO(marcas.llegada, dia, horaAutorizadaPorDia.get(clave));
+    let horas = (new Date(marcas.salida).getTime() - new Date(llegadaEfectiva).getTime()) / 3_600_000;
     if (marcas.salida_almuerzo && marcas.entrada_almuerzo) {
       horas -= (new Date(marcas.entrada_almuerzo).getTime() - new Date(marcas.salida_almuerzo).getTime()) / 3_600_000;
     } else if (diaDeSemana(dia) !== 6) {
@@ -465,6 +506,10 @@ export function Asistencia() {
   // y puede marcar en cualquiera de las dos, así se ve dónde estuvo hoy en
   // vez de quedar siempre en blanco.
   const [sedeDelDiaDashboard, setSedeDelDiaDashboard] = useState<Record<string, string>>({});
+  // Hora de entrada autorizada ese día por persona (si admin ya la puso) —
+  // para saber si una llegada distinta a la normal ya está justificada o
+  // todavía hay que revisarla.
+  const [horaAutorizadaDashboard, setHoraAutorizadaDashboard] = useState<Record<string, string>>({});
   const [cargandoDashboard, setCargandoDashboard] = useState(true);
 
   async function cargarDashboardHoy() {
@@ -492,6 +537,16 @@ export function Asistencia() {
     }
     setMarcasDashboard(mapa);
     setSedeDelDiaDashboard(sedeDia);
+    const { data: notasData } = await supabase
+      .from("asistencia_notas_dia")
+      .select("perfil_id, hora_entrada_autorizada")
+      .eq("fecha", fechaDashboard)
+      .not("hora_entrada_autorizada", "is", null);
+    const autorizadas: Record<string, string> = {};
+    for (const n of (notasData as { perfil_id: string; hora_entrada_autorizada: string }[]) ?? []) {
+      autorizadas[n.perfil_id] = n.hora_entrada_autorizada.slice(0, 5);
+    }
+    setHoraAutorizadaDashboard(autorizadas);
     setCargandoDashboard(false);
   }
 
@@ -544,6 +599,11 @@ export function Asistencia() {
   const [notaOriginal, setNotaOriginal] = useState("");
   const [esCompensado, setEsCompensado] = useState(false);
   const [esCompensadoOriginal, setEsCompensadoOriginal] = useState(false);
+  // Hora en la que admin autoriza puntualmente que empiece a contar la
+  // jornada ese día (ej. reunión desde las 8am, alguien autorizado a
+  // entrar a las 10am) — llegar antes de esto no suma horas de más.
+  const [horaEntradaAutorizada, setHoraEntradaAutorizada] = useState("");
+  const [horaEntradaAutorizadaOriginal, setHoraEntradaAutorizadaOriginal] = useState("");
   const [ausenciaPersona, setAusenciaPersona] = useState<{
     id: string;
     tipo: "vacaciones" | "incapacidad" | "descanso";
@@ -627,7 +687,7 @@ export function Asistencia() {
     setMarcasPersona(marcas);
     const { data: nota } = await supabase
       .from("asistencia_notas_dia")
-      .select("nota")
+      .select("nota, hora_entrada_autorizada")
       .eq("perfil_id", personaAdminId)
       .eq("fecha", fechaAdmin)
       .maybeSingle();
@@ -636,6 +696,9 @@ export function Asistencia() {
     setNotaOriginal(nota?.nota ?? "");
     setEsCompensado(minutosCompensados > 0);
     setEsCompensadoOriginal(minutosCompensados > 0);
+    const horaAutorizada = nota?.hora_entrada_autorizada?.slice(0, 5) ?? "";
+    setHoraEntradaAutorizada(horaAutorizada);
+    setHoraEntradaAutorizadaOriginal(horaAutorizada);
     const { data: ausencia } = await supabase
       .from("asistencia_ausencias")
       .select("id, tipo")
@@ -693,7 +756,7 @@ export function Asistencia() {
     // el reporte, para no descontarlo dos veces (ya estaba a su favor de un
     // período anterior).
     if (esCompensado) {
-      const horasTrabajadas = horasTrabajadasDeMarcas(marcasPersona, fechaAdmin);
+      const horasTrabajadas = horasTrabajadasDeMarcas(marcasPersona, fechaAdmin, horaEntradaAutorizada || null);
       if (horasTrabajadas === 0) {
         setErrorAdmin('Para marcar "compensado" primero hay que cargar la llegada y la salida de ese día.');
         return;
@@ -702,7 +765,10 @@ export function Asistencia() {
     setGuardandoAdmin(true);
     setErrorAdmin(null);
     const minutosCompensados = esCompensado
-      ? Math.round(Math.max(0, jornadaOrdinariaHoras(fechaAdmin) - horasTrabajadasDeMarcas(marcasPersona, fechaAdmin)) * 60)
+      ? Math.round(
+          Math.max(0, jornadaOrdinariaHoras(fechaAdmin) - horasTrabajadasDeMarcas(marcasPersona, fechaAdmin, horaEntradaAutorizada || null)) *
+            60,
+        )
       : 0;
     const { error } = await supabase.from("asistencia_notas_dia").upsert(
       {
@@ -710,6 +776,7 @@ export function Asistencia() {
         fecha: fechaAdmin,
         nota: notaPersona.trim(),
         minutos_compensados: minutosCompensados,
+        hora_entrada_autorizada: horaEntradaAutorizada || null,
         created_by: perfil?.id ?? null,
       },
       { onConflict: "perfil_id,fecha" },
@@ -721,6 +788,7 @@ export function Asistencia() {
     }
     setNotaOriginal(notaPersona.trim());
     setEsCompensadoOriginal(esCompensado);
+    setHoraEntradaAutorizadaOriginal(horaEntradaAutorizada);
     cargarReporte();
   }
 
@@ -853,11 +921,13 @@ export function Asistencia() {
 
     const { data: notas } = await supabase
       .from("asistencia_notas_dia")
-      .select("perfil_id, fecha, nota, minutos_compensados")
+      .select("perfil_id, fecha, nota, minutos_compensados, hora_entrada_autorizada")
       .gte("fecha", desde)
       .lt("fecha", hasta);
     const notasRows =
-      (notas as { perfil_id: string; fecha: string; nota: string; minutos_compensados: number }[]) ?? [];
+      (notas as {
+        perfil_id: string; fecha: string; nota: string; minutos_compensados: number; hora_entrada_autorizada: string | null;
+      }[]) ?? [];
     const notasAgrupadas: Record<string, { fecha: string; nota: string; minutosCompensados: number }[]> = {};
     for (const n of notasRows) {
       if (n.nota || n.minutos_compensados) {
@@ -868,6 +938,9 @@ export function Asistencia() {
     const compensaciones: CompensacionReporte[] = notasRows
       .filter((n) => n.minutos_compensados)
       .map((n) => ({ perfil_id: n.perfil_id, fecha: n.fecha, minutos: n.minutos_compensados }));
+    const autorizaciones: AutorizacionReporte[] = notasRows
+      .filter((n) => n.hora_entrada_autorizada)
+      .map((n) => ({ perfil_id: n.perfil_id, fecha: n.fecha, hora: n.hora_entrada_autorizada as string }));
 
     const { data: festivosData } = await supabase.from("festivos_colombia").select("fecha").gte("fecha", desde).lt("fecha", hasta);
     const festivosSet = new Set((festivosData ?? []).map((f) => f.fecha as string));
@@ -901,7 +974,9 @@ export function Asistencia() {
     setExtraAtencionPorPersonaYSemana(extraAtencion);
     setExtraAtencionPorPersonaYDia(extraAtencionDia);
 
-    setReporte(armarReporteHoras(filas, ausencias, compensaciones, festivosSet, rango.inicio, rango.fin, metaSemanal));
+    setReporte(
+      armarReporteHoras(filas, ausencias, compensaciones, autorizaciones, festivosSet, rango.inicio, rango.fin, metaSemanal),
+    );
     setCargandoReporte(false);
   }
 
@@ -1448,20 +1523,50 @@ export function Asistencia() {
                     const horaLimiteLlegada = diaDeSemana(fechaDashboard) === 6 ? "08:15" : "08:45";
                     const faltaLlegada =
                       !marcas.llegada && esHoy && diaDeSemana(fechaDashboard) !== 0 && horaBogotaAhora() >= horaLimiteLlegada;
+                    // Llegada distinta (antes o después) a la esperada de ese
+                    // día, sin que quede una hora autorizada guardada — para
+                    // que no se pierda de vista sin tener que revisar marca
+                    // por marca. Más de 5 min de diferencia para no marcar
+                    // ruido por segundos de diferencia al marcar.
+                    const horaAutorizada = horaAutorizadaDashboard[p.id];
+                    const llegadaSinAutorizar =
+                      marcas.llegada &&
+                      !horaAutorizada &&
+                      Math.abs(
+                        new Date(marcas.llegada).getTime() -
+                          new Date(`${fechaDashboard}T${horasPorDefecto(fechaDashboard).llegada}:00-05:00`).getTime(),
+                      ) >
+                        5 * 60_000;
+                    // Salida antes de la hora normal — no hay concepto de
+                    // "salida autorizada" todavía, así que esto solo avisa,
+                    // no bloquea nada.
+                    const salidaSinAutorizar =
+                      marcas.salida &&
+                      new Date(marcas.salida).getTime() <
+                        new Date(`${fechaDashboard}T${horasPorDefecto(fechaDashboard).salida}:00-05:00`).getTime() - 5 * 60_000;
                     return (
                       <tr key={p.id}>
                         <td className="py-1.5 pr-3 font-medium">{p.nombre}</td>
                         <td className="py-1.5 pr-3 text-gray-500">{sedeDelDiaDashboard[p.id] ?? p.sedeNombre ?? "—"}</td>
                         {TIPOS_ASISTENCIA.map((t) => {
                           const marca = marcas[t.value];
+                          const revisar = (t.value === "llegada" && llegadaSinAutorizar) || (t.value === "salida" && salidaSinAutorizar);
                           return (
                             <td
                               key={t.value}
+                              title={revisar ? "Distinto a la hora normal — sin hora autorizada guardada. Revisar en Registro administrativo." : undefined}
                               className={`py-1.5 pr-3 text-right ${
-                                marca ? "text-tinta" : t.value === "llegada" && faltaLlegada ? "text-red-600 font-semibold" : "text-gray-300"
+                                marca
+                                  ? revisar
+                                    ? "text-amber-600 font-semibold"
+                                    : "text-tinta"
+                                  : t.value === "llegada" && faltaLlegada
+                                    ? "text-red-600 font-semibold"
+                                    : "text-gray-300"
                               }`}
                             >
                               {marca ? new Date(marca).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }) : "—"}
+                              {revisar && " ⚠"}
                             </td>
                           );
                         })}
@@ -1655,7 +1760,12 @@ export function Asistencia() {
               />
               <button
                 onClick={guardarNotaPersona}
-                disabled={guardandoAdmin || (notaPersona.trim() === notaOriginal && esCompensado === esCompensadoOriginal)}
+                disabled={
+                  guardandoAdmin ||
+                  (notaPersona.trim() === notaOriginal &&
+                    esCompensado === esCompensadoOriginal &&
+                    horaEntradaAutorizada === horaEntradaAutorizadaOriginal)
+                }
                 className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
               >
                 {guardandoAdmin ? "Guardando…" : "Guardar"}
@@ -1671,6 +1781,22 @@ export function Asistencia() {
               ({jornadaOrdinariaHoras(fechaAdmin)}h) y lo suma de vuelta a las horas de la semana, para no
               descontárselo dos veces.
             </p>
+            <div className="mt-2">
+              <label className="block text-xs font-medium text-gray-500 mb-1">
+                Hora de entrada autorizada ese día (si es distinta a la normal — ej. reunión desde las 8am, o alguien
+                autorizado a entrar más tarde)
+              </label>
+              <input
+                type="time"
+                value={horaEntradaAutorizada}
+                onChange={(e) => setHoraEntradaAutorizada(e.target.value)}
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Llegar antes de esta hora (o de la jornada normal, {horasPorDefecto(fechaAdmin).llegada}, si dejas
+                esto vacío) no suma horas de más — las horas trabajadas se cuentan desde acá, no desde la marca real.
+              </p>
+            </div>
           </div>
 
           {errorAdmin && <p className="text-sm text-red-600">{errorAdmin}</p>}
