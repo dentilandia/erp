@@ -670,6 +670,10 @@ export function Asistencia() {
   const [heFecha, setHeFecha] = useState(() => fechaBogota(new Date().toISOString()));
   const [heDoctoraId, setHeDoctoraId] = useState("");
   const [heColaboradoresIds, setHeColaboradoresIds] = useState<string[]>([]);
+  // Horas extra que no son por atención de un paciente (ej. una visita
+  // sorpresa de la secretaría de salud) — quita la exigencia de doctora y
+  // nombre de paciente, dejando "motivo" como el único lugar para explicar.
+  const [heOtroMotivo, setHeOtroMotivo] = useState(false);
   const [hePacienteNombre, setHePacienteNombre] = useState("");
   const [heMotivo, setHeMotivo] = useState("");
   const [guardandoHE, setGuardandoHE] = useState(false);
@@ -1302,15 +1306,20 @@ export function Asistencia() {
   }, [perfil?.rol]);
 
   async function crearSolicitudHE() {
-    if (!heDoctoraId || heColaboradoresIds.length === 0 || !hePacienteNombre.trim() || !heMotivo.trim()) return;
+    if (
+      heColaboradoresIds.length === 0 ||
+      !heMotivo.trim() ||
+      (!heOtroMotivo && (!heDoctoraId || !hePacienteNombre.trim()))
+    )
+      return;
     setGuardandoHE(true);
     setErrorHE(null);
     const { data: solicitud, error } = await supabase
       .from("asistencia_horas_extra")
       .insert({
         fecha: heFecha,
-        doctora_id: heDoctoraId,
-        paciente_nombre: hePacienteNombre.trim(),
+        doctora_id: heOtroMotivo ? null : heDoctoraId,
+        paciente_nombre: heOtroMotivo ? null : hePacienteNombre.trim(),
         motivo: heMotivo.trim(),
         // Hora real del sistema al registrar la solicitud — ya no se pide
         // manualmente, para que quede la hora exacta en que de verdad llegó
@@ -1335,6 +1344,7 @@ export function Asistencia() {
     }
     setHeDoctoraId("");
     setHeColaboradoresIds([]);
+    setHeOtroMotivo(false);
     setHePacienteNombre("");
     setHeMotivo("");
     cargarSolicitudesHE();
@@ -1353,7 +1363,10 @@ export function Asistencia() {
     solicitud: SolicitudHorasExtra & { colaboradores: (ColaboradorHorasExtra & { nombre: string })[] },
   ) {
     const form = finalizarForm[solicitud.id];
-    if (!form || form.pacientePago === null || form.seAgendoCita === null) return;
+    if (!form) return;
+    // "¿Pagó?"/"¿Se agendó cita?" solo aplican cuando sí hay un paciente de
+    // por medio — para "otro motivo" esas preguntas no tienen sentido.
+    if (solicitud.paciente_nombre !== null && (form.pacientePago === null || form.seAgendoCita === null)) return;
     setGuardandoFinalizarHE(solicitud.id);
     setErrorHE(null);
     const ahora = new Date().toISOString();
@@ -1945,6 +1958,21 @@ export function Asistencia() {
 
           <div className="rounded-lg bg-gray-50 border border-gray-200 p-3 space-y-2">
             <p className="text-sm font-medium text-gray-600">Nueva solicitud</p>
+            <label className="flex items-center gap-2 text-xs text-gray-600">
+              <input
+                type="checkbox"
+                checked={heOtroMotivo}
+                onChange={(e) => {
+                  const marcado = e.target.checked;
+                  setHeOtroMotivo(marcado);
+                  if (marcado) {
+                    setHeDoctoraId("");
+                    setHePacienteNombre("");
+                  }
+                }}
+              />
+              Otro motivo (no es atención de un paciente)
+            </label>
             <div className="flex items-center gap-2 flex-wrap">
               <input
                 type="date"
@@ -1952,29 +1980,33 @@ export function Asistencia() {
                 onChange={(e) => setHeFecha(e.target.value)}
                 className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
               />
-              <select
-                value={heDoctoraId}
-                onChange={(e) => setHeDoctoraId(e.target.value)}
-                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-              >
-                <option value="">Doctora…</option>
-                {doctoras.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.nombre}
-                  </option>
-                ))}
-              </select>
+              {!heOtroMotivo && (
+                <select
+                  value={heDoctoraId}
+                  onChange={(e) => setHeDoctoraId(e.target.value)}
+                  className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                >
+                  <option value="">Doctora…</option>
+                  {doctoras.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.nombre}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
-            <input
-              value={hePacienteNombre}
-              onChange={(e) => setHePacienteNombre(e.target.value)}
-              placeholder="Nombre del paciente"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            />
+            {!heOtroMotivo && (
+              <input
+                value={hePacienteNombre}
+                onChange={(e) => setHePacienteNombre(e.target.value)}
+                placeholder="Nombre del paciente"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            )}
             <input
               value={heMotivo}
               onChange={(e) => setHeMotivo(e.target.value)}
-              placeholder="Motivo del atraso"
+              placeholder={heOtroMotivo ? "Motivo de la hora extra" : "Motivo del atraso"}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
             />
             <div>
@@ -2005,7 +2037,10 @@ export function Asistencia() {
             <button
               onClick={crearSolicitudHE}
               disabled={
-                guardandoHE || !heDoctoraId || heColaboradoresIds.length === 0 || !hePacienteNombre.trim() || !heMotivo.trim()
+                guardandoHE ||
+                heColaboradoresIds.length === 0 ||
+                !heMotivo.trim() ||
+                (!heOtroMotivo && (!heDoctoraId || !hePacienteNombre.trim()))
               }
               className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
             >
@@ -2026,7 +2061,7 @@ export function Asistencia() {
                   >
                     <div className="flex items-center justify-between flex-wrap gap-1 mb-1">
                       <p className="font-medium">
-                        {formatFechaLarga(s.fecha)} — {s.paciente_nombre}
+                        {formatFechaLarga(s.fecha)} — {s.paciente_nombre ?? s.motivo}
                         {s.estado === "finalizada" && (
                           <span className="ml-2 text-xs text-emerald-700 font-normal">Finalizada</span>
                         )}
@@ -2038,8 +2073,8 @@ export function Asistencia() {
                       )}
                     </div>
                     <p className="text-xs text-gray-500 mb-2">
-                      Doctora: {doctoras.find((d) => d.id === s.doctora_id)?.nombre ?? "—"}
-                      {s.hora_ingreso_consultorio && ` · Ingreso: ${s.hora_ingreso_consultorio}`} · Motivo: {s.motivo}
+                      {s.doctora_id && `Doctora: ${doctoras.find((d) => d.id === s.doctora_id)?.nombre ?? "—"} · `}
+                      {s.hora_ingreso_consultorio && `Ingreso: ${s.hora_ingreso_consultorio} · `}Motivo: {s.motivo}
                     </p>
                     <div className="space-y-1.5">
                       {s.colaboradores.map((c) => (
@@ -2061,38 +2096,42 @@ export function Asistencia() {
                     {s.estado === "abierta" && (
                       <div className="mt-3 pt-3 border-t border-amber-200 space-y-2">
                         <p className="text-xs font-medium text-gray-600">Para finalizar:</p>
-                        <div className="flex items-center gap-2 flex-wrap text-xs">
-                          <span className="text-gray-500">¿El paciente pagó?</span>
-                          {[true, false].map((v) => (
-                            <button
-                              key={String(v)}
-                              onClick={() =>
-                                setFinalizarForm((prev) => ({ ...prev, [s.id]: { ...form, pacientePago: v } }))
-                              }
-                              className={`px-2.5 py-1 rounded-md font-medium ${
-                                form.pacientePago === v ? "bg-[var(--acento)] text-white" : "bg-white border border-gray-300 text-gray-600"
-                              }`}
-                            >
-                              {v ? "Sí" : "No"}
-                            </button>
-                          ))}
-                        </div>
-                        <div className="flex items-center gap-2 flex-wrap text-xs">
-                          <span className="text-gray-500">¿Se agendó cita?</span>
-                          {[true, false].map((v) => (
-                            <button
-                              key={String(v)}
-                              onClick={() =>
-                                setFinalizarForm((prev) => ({ ...prev, [s.id]: { ...form, seAgendoCita: v } }))
-                              }
-                              className={`px-2.5 py-1 rounded-md font-medium ${
-                                form.seAgendoCita === v ? "bg-[var(--acento)] text-white" : "bg-white border border-gray-300 text-gray-600"
-                              }`}
-                            >
-                              {v ? "Sí" : "No"}
-                            </button>
-                          ))}
-                        </div>
+                        {s.paciente_nombre !== null && (
+                          <>
+                            <div className="flex items-center gap-2 flex-wrap text-xs">
+                              <span className="text-gray-500">¿El paciente pagó?</span>
+                              {[true, false].map((v) => (
+                                <button
+                                  key={String(v)}
+                                  onClick={() =>
+                                    setFinalizarForm((prev) => ({ ...prev, [s.id]: { ...form, pacientePago: v } }))
+                                  }
+                                  className={`px-2.5 py-1 rounded-md font-medium ${
+                                    form.pacientePago === v ? "bg-[var(--acento)] text-white" : "bg-white border border-gray-300 text-gray-600"
+                                  }`}
+                                >
+                                  {v ? "Sí" : "No"}
+                                </button>
+                              ))}
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap text-xs">
+                              <span className="text-gray-500">¿Se agendó cita?</span>
+                              {[true, false].map((v) => (
+                                <button
+                                  key={String(v)}
+                                  onClick={() =>
+                                    setFinalizarForm((prev) => ({ ...prev, [s.id]: { ...form, seAgendoCita: v } }))
+                                  }
+                                  className={`px-2.5 py-1 rounded-md font-medium ${
+                                    form.seAgendoCita === v ? "bg-[var(--acento)] text-white" : "bg-white border border-gray-300 text-gray-600"
+                                  }`}
+                                >
+                                  {v ? "Sí" : "No"}
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        )}
                         {s.colaboradores.map((c) => (
                           <input
                             key={c.id}
@@ -2109,7 +2148,10 @@ export function Asistencia() {
                         ))}
                         <button
                           onClick={() => finalizarSolicitudHE(s)}
-                          disabled={form.pacientePago === null || form.seAgendoCita === null || guardandoFinalizarHE === s.id}
+                          disabled={
+                            (s.paciente_nombre !== null && (form.pacientePago === null || form.seAgendoCita === null)) ||
+                            guardandoFinalizarHE === s.id
+                          }
                           className="rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
                         >
                           {guardandoFinalizarHE === s.id ? "Guardando…" : "Finalizar solicitud"}
@@ -2119,9 +2161,11 @@ export function Asistencia() {
 
                     {s.estado === "finalizada" && (
                       <div className="mt-2 pt-2 border-t border-gray-200 text-xs text-gray-500 space-y-0.5">
-                        <p>
-                          Pagó: {s.paciente_pago ? "Sí" : "No"} · Cita agendada: {s.se_agendo_cita ? "Sí" : "No"}
-                        </p>
+                        {s.paciente_nombre !== null && (
+                          <p>
+                            Pagó: {s.paciente_pago ? "Sí" : "No"} · Cita agendada: {s.se_agendo_cita ? "Sí" : "No"}
+                          </p>
+                        )}
                         {s.colaboradores
                           .filter((c) => c.tareas_realizadas)
                           .map((c) => (

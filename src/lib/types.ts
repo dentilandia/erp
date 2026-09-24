@@ -88,12 +88,14 @@ export interface PeriodoLiquidacion {
 /** Solicitud de horas extra por atención de un paciente fuera de la
  *  jornada normal (antes se avisaba por un grupo de WhatsApp aparte y no
  *  quedaba nada registrado). Al finalizarla se carga la hora de salida real
- *  de cada colaborador directamente en asistencia_registros. */
+ *  de cada colaborador directamente en asistencia_registros. Si
+ *  paciente_nombre es null, la solicitud es por otro motivo ajeno a un
+ *  paciente (ver motivo). */
 export interface SolicitudHorasExtra {
   id: string;
   fecha: string;
   doctora_id: string | null;
-  paciente_nombre: string;
+  paciente_nombre: string | null;
   motivo: string;
   hora_ingreso_consultorio: string | null;
   estado: "abierta" | "finalizada";
