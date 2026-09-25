@@ -3,7 +3,8 @@ import { Download, Check } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { fmtCOP, mesActual, periodoCiclo2625, periodoMesCompleto } from "../lib/format";
 import { fetchTodasLasFilas } from "../lib/db";
-import { TIPOS_INSUMO_CONSULTA, type Doctora, type Sede, type Laboratorio } from "../lib/types";
+import { TIPOS_INSUMO_CONSULTA, type Doctora, type Sede, type Laboratorio, type Paciente } from "../lib/types";
+import { PacienteAutocomplete } from "../components/PacienteAutocomplete";
 
 const TIPOS_INSUMO_LABEL: Record<string, string> = Object.fromEntries(TIPOS_INSUMO_CONSULTA.map((t) => [t.value, t.label]));
 
@@ -134,6 +135,17 @@ interface FilaDoctora {
   detalleAbierto: boolean;
   historialAbierto: boolean;
   historial: HistorialLiquidacion[];
+}
+
+interface FormAtrasado {
+  abierto: boolean;
+  paciente: Paciente | null;
+  laboratorioId: string;
+  sedeId: string;
+  facturaNumero: string;
+  valor: string;
+  fechaInstalado: string;
+  guardando: boolean;
 }
 
 interface HistorialLiquidacion {
@@ -320,6 +332,16 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
   const [pctHonorario, setPctHonorario] = useState(30);
   const [filas, setFilas] = useState<FilaDoctora[]>([]);
   const [cargando, setCargando] = useState(true);
+  const [laboratorios, setLaboratorios] = useState<Laboratorio[]>([]);
+  // Se sube en 1 cada vez que se agrega a mano un aparato de período
+  // anterior, para forzar a recargar el efecto de abajo y que aparezca de
+  // una vez en el detalle y en los totales.
+  const [recargar, setRecargar] = useState(0);
+  const [formsAtrasado, setFormsAtrasado] = useState<Record<string, FormAtrasado>>({});
+
+  useEffect(() => {
+    supabase.from("laboratorios").select("*").order("nombre").then(({ data }) => setLaboratorios((data as Laboratorio[]) ?? []));
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -517,10 +539,59 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
       setFilas(nuevasFilas);
       setCargando(false);
     })();
-  }, [periodo.inicio, periodo.fin, sedeId, sedes]);
+  }, [periodo.inicio, periodo.fin, sedeId, sedes, recargar]);
 
   function actualizarFila(idx: number, cambios: Partial<FilaDoctora>) {
     setFilas((prev) => prev.map((f, i) => (i === idx ? { ...f, ...cambios } : f)));
+  }
+
+  const formAtrasadoVacio: FormAtrasado = {
+    abierto: false, paciente: null, laboratorioId: "", sedeId: sedeId || "", facturaNumero: "", valor: "", fechaInstalado: "", guardando: false,
+  };
+  function formAtrasadoDe(doctoraId: string): FormAtrasado {
+    return formsAtrasado[doctoraId] ?? formAtrasadoVacio;
+  }
+  function actualizarFormAtrasado(doctoraId: string, cambios: Partial<FormAtrasado>) {
+    setFormsAtrasado((prev) => ({ ...prev, [doctoraId]: { ...formAtrasadoDe(doctoraId), ...cambios } }));
+  }
+
+  // Aparato instalado en un período anterior que nunca se le cobró a la
+  // doctora — se ingresa a mano acá (Tomás sabe cuáles son, no hay forma
+  // confiable de detectarlos solo). Se inserta como una orden de laboratorio
+  // normal con mes_liquidacion = este período, así entra automáticamente al
+  // total de la doctora y al reporte de pago a laboratorios de este mismo
+  // período, exactamente igual que cualquier aparato instalado a tiempo —
+  // fecha_instalado queda con la fecha real para que se note en el detalle.
+  async function agregarAparatoAtrasado(doctoraId: string) {
+    const form = formAtrasadoDe(doctoraId);
+    if (!form.paciente || !form.laboratorioId || !form.sedeId || !form.facturaNumero.trim() || !Number(form.valor) || !form.fechaInstalado) {
+      return;
+    }
+    actualizarFormAtrasado(doctoraId, { guardando: true });
+    const { error } = await supabase.from("lab_ordenes").insert({
+      sede_id: form.sedeId,
+      doctora_id: doctoraId,
+      paciente_id: form.paciente.id,
+      laboratorio_id: form.laboratorioId,
+      tipo_servicio: "fabricacion",
+      estado: "instalado",
+      fecha_envio: form.fechaInstalado,
+      fecha_instalado: form.fechaInstalado,
+      factura_numero: form.facturaNumero.trim(),
+      valor_factura: Number(form.valor),
+      mes_liquidacion: periodo.inicio,
+    });
+    if (error) {
+      window.alert(`No se pudo agregar: ${error.message}`);
+      actualizarFormAtrasado(doctoraId, { guardando: false });
+      return;
+    }
+    setFormsAtrasado((prev) => {
+      const next = { ...prev };
+      delete next[doctoraId];
+      return next;
+    });
+    setRecargar((n) => n + 1);
   }
 
   async function alternarHistorial(idx: number) {
@@ -755,7 +826,104 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
               <button onClick={() => alternarHistorial(idx)} className="text-xs font-medium text-gray-500">
                 {f.historialAbierto ? "Ocultar historial" : "Ver historial de liquidaciones guardadas"}
               </button>
+              <button
+                onClick={() => actualizarFormAtrasado(f.doctora.id, { abierto: !formAtrasadoDe(f.doctora.id).abierto })}
+                className="text-xs font-medium text-amber-700"
+              >
+                {formAtrasadoDe(f.doctora.id).abierto ? "Cancelar" : "+ Agregar aparato de período anterior"}
+              </button>
             </div>
+
+            {formAtrasadoDe(f.doctora.id).abierto && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 mb-3 space-y-2">
+                <p className="text-xs font-semibold text-amber-800">
+                  Agregar aparato instalado en un período anterior — queda incluido en esta liquidación y en el pago
+                  al laboratorio de este mismo período.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Paciente</label>
+                    {formAtrasadoDe(f.doctora.id).paciente ? (
+                      <div className="flex items-center justify-between rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white">
+                        <span>{formAtrasadoDe(f.doctora.id).paciente!.nombre}</span>
+                        <button
+                          type="button"
+                          onClick={() => actualizarFormAtrasado(f.doctora.id, { paciente: null })}
+                          className="text-xs text-gray-400"
+                        >
+                          Cambiar
+                        </button>
+                      </div>
+                    ) : (
+                      <PacienteAutocomplete onSelect={(p) => actualizarFormAtrasado(f.doctora.id, { paciente: p })} />
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Laboratorio</label>
+                    <select
+                      value={formAtrasadoDe(f.doctora.id).laboratorioId}
+                      onChange={(e) => actualizarFormAtrasado(f.doctora.id, { laboratorioId: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+                    >
+                      <option value="">Seleccionar…</option>
+                      {laboratorios.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.nombre}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Sede</label>
+                    <select
+                      value={formAtrasadoDe(f.doctora.id).sedeId}
+                      onChange={(e) => actualizarFormAtrasado(f.doctora.id, { sedeId: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+                    >
+                      <option value="">Seleccionar…</option>
+                      {sedes.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.nombre}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Fecha de instalación</label>
+                    <input
+                      type="date"
+                      value={formAtrasadoDe(f.doctora.id).fechaInstalado}
+                      onChange={(e) => actualizarFormAtrasado(f.doctora.id, { fechaInstalado: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Número de factura</label>
+                    <input
+                      value={formAtrasadoDe(f.doctora.id).facturaNumero}
+                      onChange={(e) => actualizarFormAtrasado(f.doctora.id, { facturaNumero: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Valor de la factura</label>
+                    <input
+                      type="number"
+                      value={formAtrasadoDe(f.doctora.id).valor}
+                      onChange={(e) => actualizarFormAtrasado(f.doctora.id, { valor: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={() => agregarAparatoAtrasado(f.doctora.id)}
+                  disabled={formAtrasadoDe(f.doctora.id).guardando}
+                  className="rounded-lg bg-amber-700 text-white px-4 py-1.5 text-sm font-medium disabled:opacity-40"
+                >
+                  {formAtrasadoDe(f.doctora.id).guardando ? "Agregando…" : "Agregar"}
+                </button>
+              </div>
+            )}
 
             {f.historialAbierto && (
               <div className="rounded-lg border border-gray-200 overflow-x-auto mb-3">
