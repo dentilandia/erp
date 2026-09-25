@@ -168,11 +168,16 @@ function esc(s: string): string {
 /** Página 1: el estado de cuenta en sí (para enviarle a la doctora) — refleja la misma ficha que se ve en pantalla. */
 function paginaLiquidacion(periodo: { inicio: string; fin: string }, pctHonorario: number, f: FilaDoctora): string {
   const bruto = f.totalVentas * (pctHonorario / 100);
-  const totalLaboratoriosInsumos = f.totalLaboratorios + f.totalInsumos;
+  const totalLabsAtrasados = f.detalleLabs
+    .filter((d) => d.fechaInstalado && d.fechaInstalado !== d.fecha)
+    .reduce((a, d) => a + d.valor, 0);
+  const totalLabsNormal = f.totalLaboratorios - totalLabsAtrasados;
+  const totalLaboratoriosInsumos = totalLabsNormal + f.totalInsumos;
   const deduccion = totalLaboratoriosInsumos * (pctHonorario / 100);
+  const deduccionAtrasados = totalLabsAtrasados * (pctHonorario / 100);
   const retencionVoluntaria = Number(f.retencionValor) || 0;
   const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
-  const subtotal = bruto - deduccion;
+  const subtotal = bruto - deduccion - deduccionAtrasados;
   const totalPago = subtotal - retencionVoluntaria - retencionDepuracion;
   const ibc = totalPago * 0.4;
 
@@ -197,7 +202,12 @@ function paginaLiquidacion(periodo: { inicio: string; fin: string }, pctHonorari
 
   <div class="caja">
     <div class="fila"><span>Honorarios — ${pctHonorario}% de ${esc(fmtCOP(f.totalVentas))} en ventas</span><span class="mas">+${esc(fmtCOP(bruto))}</span></div>
-    <div class="fila"><span>Laboratorios + otros aparatología — ${pctHonorario}% de ${esc(fmtCOP(totalLaboratoriosInsumos))}</span><span class="menos">-${esc(fmtCOP(deduccion))}</span></div>
+    <div class="fila"><span>Laboratorios + otros aparatología — ${pctHonorario}% de ${esc(fmtCOP(totalLaboratoriosInsumos))} (labs ${esc(fmtCOP(totalLabsNormal))} + otros ${esc(fmtCOP(f.totalInsumos))})</span><span class="menos">-${esc(fmtCOP(deduccion))}</span></div>
+    ${
+      totalLabsAtrasados > 0
+        ? `<div class="fila"><span>Laboratorios período anterior — ${pctHonorario}% de ${esc(fmtCOP(totalLabsAtrasados))}</span><span class="menos">-${esc(fmtCOP(deduccionAtrasados))}</span></div>`
+        : ""
+    }
     <div class="fila subtotal"><span>Subtotal (antes de retenciones)</span><span>${esc(fmtCOP(subtotal))}</span></div>
   </div>
 
@@ -699,13 +709,16 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
       </p>
       {filas.map((f, idx) => {
         const bruto = f.totalVentas * (pctHonorario / 100);
-        const totalLaboratoriosInsumos = f.totalLaboratorios + f.totalInsumos;
+        const atrasados = f.detalleLabs.filter((d) => d.fechaInstalado && d.fechaInstalado !== d.fecha);
+        const totalLabsAtrasados = atrasados.reduce((a, d) => a + d.valor, 0);
+        const totalLabsNormal = f.totalLaboratorios - totalLabsAtrasados;
+        const totalLaboratoriosInsumos = totalLabsNormal + f.totalInsumos;
         const deduccion = totalLaboratoriosInsumos * (pctHonorario / 100);
+        const deduccionAtrasados = totalLabsAtrasados * (pctHonorario / 100);
         const retencionVoluntaria = Number(f.retencionValor) || 0;
         const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
-        const totalPago = bruto - deduccion - retencionVoluntaria - retencionDepuracion;
+        const totalPago = bruto - deduccion - deduccionAtrasados - retencionVoluntaria - retencionDepuracion;
         const ibc = totalPago * 0.4;
-        const atrasados = f.detalleLabs.filter((d) => d.fechaInstalado && d.fechaInstalado !== d.fecha);
         return (
           <div key={f.doctora.id} className="bg-white rounded-xl border border-gray-200 p-4">
             <div className="flex items-center gap-2 mb-3">
@@ -753,13 +766,21 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
               <div className="flex items-center justify-between">
                 <span className="text-gray-500">
                   Laboratorios + otros aparatología — {pctHonorario}% de {fmtCOP(totalLaboratoriosInsumos)}{" "}
-                  (labs {fmtCOP(f.totalLaboratorios)} + otros {fmtCOP(f.totalInsumos)})
+                  (labs {fmtCOP(totalLabsNormal)} + otros {fmtCOP(f.totalInsumos)})
                 </span>
                 <span className="font-medium text-red-600">-{fmtCOP(deduccion)}</span>
               </div>
+              {totalLabsAtrasados > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">
+                    Laboratorios período anterior — {pctHonorario}% de {fmtCOP(totalLabsAtrasados)}
+                  </span>
+                  <span className="font-medium text-red-600">-{fmtCOP(deduccionAtrasados)}</span>
+                </div>
+              )}
               <div className="flex items-center justify-between pt-1.5 border-t border-gray-200 font-semibold">
                 <span>Subtotal (antes de retenciones)</span>
-                <span>{fmtCOP(bruto - deduccion)}</span>
+                <span>{fmtCOP(bruto - deduccion - deduccionAtrasados)}</span>
               </div>
             </div>
             <div className="flex items-end gap-4 flex-wrap mb-3">
@@ -793,13 +814,6 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                 <p className="font-semibold text-lg">{fmtCOP(totalPago)}</p>
               </div>
             </div>
-
-            {atrasados.length > 0 && (
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-1.5 mb-3">
-                {atrasados.length} laboratorio{atrasados.length > 1 ? "s" : ""} de este período{" "}
-                {atrasados.length > 1 ? "fueron instalados" : "fue instalado"} en un período anterior — ver detalle.
-              </p>
-            )}
 
             {!sedeId && f.porSede.length >= 1 && f.totalVentas > 0 && (
               <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-3">
