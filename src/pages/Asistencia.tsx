@@ -45,13 +45,15 @@ function llegadaEfectivaISO(marcadoEnLlegada: string, fechaYMD: string, horaAuto
  *  suma horas de más — se cuenta desde ahí, no desde la marca real. Salir
  *  DESPUÉS del cierre normal tampoco rellena el faltante — esa cola es
  *  horas extra (otro concepto, en el reporte de horas extra), no
- *  "recuperación" de una entrada tarde autorizada. Si es entre semana y no
- *  marcó las dos horas de almuerzo, se asume 1h fija en vez de contarla
- *  como trabajada — pero solo si el turno de verdad cruza la ventana de
- *  almuerzo normal (si ya entró después de que el almuerzo hubiera
- *  terminado, ej. autorizada a entrar la 1pm, nunca tuvo un almuerzo que
- *  perderse, y descontarle una hora de todos modos le restaría de más). El
- *  sábado no tiene almuerzo, no aplica. */
+ *  "recuperación" de una entrada tarde autorizada. El almuerzo entre semana
+ *  siempre se descuenta como 1h fija (nunca la duración real marcada) — la
+ *  jornada ordinaria (8.5h) ya asume un almuerzo de exactamente 1h, así que
+ *  usar la duración real metería minutos de más o de menos que no tienen
+ *  nada que ver con la hora de entrada/salida autorizada, que es lo único
+ *  que debe mover este número. Esa hora fija solo se descuenta si el turno
+ *  de verdad cruza la ventana de almuerzo normal (si ya entró después de
+ *  que el almuerzo hubiera terminado, ej. autorizada a entrar la 1pm, nunca
+ *  tuvo un almuerzo que perderse). El sábado no tiene almuerzo, no aplica. */
 function horasTrabajadasDeMarcas(
   marcas: { tipo: TipoAsistencia; marcado_en: string }[],
   fecha: string,
@@ -65,9 +67,7 @@ function horasTrabajadasDeMarcas(
   const finNormalISO = new Date(`${fecha}T${horario.salida}:00-05:00`).toISOString();
   const salidaEfectiva = porTipo.salida > finNormalISO ? finNormalISO : porTipo.salida;
   let horas = (new Date(salidaEfectiva).getTime() - new Date(llegadaEfectiva).getTime()) / 3_600_000;
-  if (porTipo.salida_almuerzo && porTipo.entrada_almuerzo) {
-    horas -= (new Date(porTipo.entrada_almuerzo).getTime() - new Date(porTipo.salida_almuerzo).getTime()) / 3_600_000;
-  } else if (diaDeSemana(fecha) !== 6) {
+  if (diaDeSemana(fecha) !== 6) {
     const almuerzoInicioISO = new Date(`${fecha}T${horario.salida_almuerzo}:00-05:00`).toISOString();
     const almuerzoFinISO = new Date(`${fecha}T${horario.entrada_almuerzo}:00-05:00`).toISOString();
     if (llegadaEfectiva < almuerzoFinISO && salidaEfectiva > almuerzoInicioISO) {
