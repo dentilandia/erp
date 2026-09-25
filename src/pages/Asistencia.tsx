@@ -695,6 +695,7 @@ export function Asistencia() {
   // para diferenciarlas del resto de horas trabajadas normales.
   const [extraAtencionPorPersonaYSemana, setExtraAtencionPorPersonaYSemana] = useState<Record<string, number>>({});
   const [extraAtencionPorPersonaYDia, setExtraAtencionPorPersonaYDia] = useState<Record<string, number>>({});
+  const [extraAtencionMotivoPorPersonaYDia, setExtraAtencionMotivoPorPersonaYDia] = useState<Record<string, string>>({});
 
   useEffect(() => {
     // Operación también necesita esta lista para elegir colaboradores en
@@ -1027,14 +1028,20 @@ export function Asistencia() {
     // duración del incidente (ingreso→salida) en su lugar.
     const { data: heData } = await supabase
       .from("asistencia_horas_extra_colaboradores")
-      .select("perfil_id, hora_salida, asistencia_horas_extra(fecha, hora_ingreso_consultorio)")
+      .select("perfil_id, hora_salida, asistencia_horas_extra(fecha, hora_ingreso_consultorio, paciente_nombre, motivo)")
       .not("hora_salida", "is", null);
     const extraAtencion: Record<string, number> = {};
     const extraAtencionDia: Record<string, number> = {};
+    const extraAtencionMotivoDia: Record<string, string> = {};
     for (const row of (heData as unknown as {
       perfil_id: string;
       hora_salida: string;
-      asistencia_horas_extra: { fecha: string; hora_ingreso_consultorio: string | null } | null;
+      asistencia_horas_extra: {
+        fecha: string;
+        hora_ingreso_consultorio: string | null;
+        paciente_nombre: string | null;
+        motivo: string;
+      } | null;
     }[]) ?? []) {
       const fechaHE = row.asistencia_horas_extra?.fecha;
       if (!fechaHE || fechaHE < desde || fechaHE >= hasta) continue;
@@ -1055,9 +1062,15 @@ export function Asistencia() {
       extraAtencion[claveSemana] = (extraAtencion[claveSemana] ?? 0) + extra;
       const claveDia = `${row.perfil_id}|${fechaHE}`;
       extraAtencionDia[claveDia] = (extraAtencionDia[claveDia] ?? 0) + extra;
+      // El paciente es el motivo real solo cuando sí hay uno — para "otro
+      // motivo" (paciente_nombre null) se usa el motivo tal cual escrito.
+      extraAtencionMotivoDia[claveDia] = row.asistencia_horas_extra?.paciente_nombre
+        ? `atención de paciente (${row.asistencia_horas_extra.paciente_nombre})`
+        : (row.asistencia_horas_extra?.motivo ?? "otro motivo");
     }
     setExtraAtencionPorPersonaYSemana(extraAtencion);
     setExtraAtencionPorPersonaYDia(extraAtencionDia);
+    setExtraAtencionMotivoPorPersonaYDia(extraAtencionMotivoDia);
 
     setReporte(
       armarReporteHoras(filas, ausencias, compensaciones, autorizaciones, festivosSet, rango.inicio, rango.fin, metaSemanal),
@@ -1118,7 +1131,7 @@ export function Asistencia() {
             .filter(([clave]) => clave.startsWith(`${fila.perfilId}|`))
             .map(([clave, horas]) => ({
               fecha: clave.split("|")[1],
-              texto: `${Math.round(horas * 60)} minutos extra acumulados por atención de paciente`,
+              texto: `${Math.round(horas * 60)} minutos extra acumulados por ${extraAtencionMotivoPorPersonaYDia[clave] ?? "atención de paciente"}`,
               color: "#db2777",
             })),
         ].sort((a, b) => a.fecha.localeCompare(b.fecha));
@@ -2345,7 +2358,7 @@ export function Asistencia() {
                       .filter(([clave]) => clave.startsWith(`${fila.perfilId}|`))
                       .map(([clave, horas]) => ({
                         fecha: clave.split("|")[1],
-                        texto: `${Math.round(horas * 60)} minutos extra acumulados por atención de paciente`,
+                        texto: `${Math.round(horas * 60)} minutos extra acumulados por ${extraAtencionMotivoPorPersonaYDia[clave] ?? "atención de paciente"}`,
                         color: "text-pink-600",
                         minutosCompensados: 0,
                       })),
