@@ -145,6 +145,9 @@ interface FormAtrasado {
   facturaNumero: string;
   valor: string;
   fechaInstalado: string;
+  // Fecha de emisión de la factura (fecha_emision_factura) — campo normal de
+  // toda orden de laboratorio, distinto de la fecha de instalación.
+  fechaFactura: string;
   guardando: boolean;
 }
 
@@ -546,7 +549,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
   }
 
   const formAtrasadoVacio: FormAtrasado = {
-    abierto: false, paciente: null, laboratorioId: "", sedeId: sedeId || "", facturaNumero: "", valor: "", fechaInstalado: "", guardando: false,
+    abierto: false, paciente: null, laboratorioId: "", sedeId: sedeId || "", facturaNumero: "", valor: "", fechaInstalado: "", fechaFactura: "", guardando: false,
   };
   function formAtrasadoDe(doctoraId: string): FormAtrasado {
     return formsAtrasado[doctoraId] ?? formAtrasadoVacio;
@@ -564,7 +567,15 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
   // fecha_instalado queda con la fecha real para que se note en el detalle.
   async function agregarAparatoAtrasado(doctoraId: string) {
     const form = formAtrasadoDe(doctoraId);
-    if (!form.paciente || !form.laboratorioId || !form.sedeId || !form.facturaNumero.trim() || !Number(form.valor) || !form.fechaInstalado) {
+    if (
+      !form.paciente ||
+      !form.laboratorioId ||
+      !form.sedeId ||
+      !form.facturaNumero.trim() ||
+      !Number(form.valor) ||
+      !form.fechaInstalado ||
+      !form.fechaFactura
+    ) {
       return;
     }
     actualizarFormAtrasado(doctoraId, { guardando: true });
@@ -577,6 +588,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
       estado: "instalado",
       fecha_envio: form.fechaInstalado,
       fecha_instalado: form.fechaInstalado,
+      fecha_emision_factura: form.fechaFactura,
       factura_numero: form.facturaNumero.trim(),
       valor_factura: Number(form.valor),
       mes_liquidacion: periodo.inicio,
@@ -894,6 +906,15 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                       type="date"
                       value={formAtrasadoDe(f.doctora.id).fechaInstalado}
                       onChange={(e) => actualizarFormAtrasado(f.doctora.id, { fechaInstalado: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Fecha de la factura</label>
+                    <input
+                      type="date"
+                      value={formAtrasadoDe(f.doctora.id).fechaFactura}
+                      onChange={(e) => actualizarFormAtrasado(f.doctora.id, { fechaFactura: e.target.value })}
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
                     />
                   </div>
