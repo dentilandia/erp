@@ -110,6 +110,11 @@ interface DetalleLab {
   facturaNumero: string | null;
   valor: number;
   nota: string | null;
+  // true cuando esta orden de laboratorio se editó (se marcó instalado, se le
+  // puso la factura, etc.) DESPUÉS de que ya se había guardado la
+  // liquidación de esta doctora para este período — esa foto guardada no se
+  // actualiza sola, así que esto avisa que puede estar desactualizada.
+  actualizadoDespuesDeGuardar: boolean;
 }
 
 interface DetalleInsumo {
@@ -389,17 +394,41 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         ventasPorDoctoraSede[doctora_id][sede_id] = (ventasPorDoctoraSede[doctora_id][sede_id] ?? 0) + Number(p.valor);
       }
 
+      // Si el período ya se había liquidado antes (ej. la doctora entregó la
+      // depuración de renta después de guardar), recuperamos lo guardado en vez
+      // de recalcular desde cero, para no perder ediciones manuales previas.
+      // updated_at también sirve para detectar, más abajo, qué laboratorios se
+      // editaron DESPUÉS de esa foto guardada (ver actualizadoDespuesDeGuardar).
+      const { data: guardadasData } = await supabase
+        .from("liquidaciones_doctora")
+        .select("doctora_id, retencion_valor, retencion_depuracion_valor, updated_at")
+        .eq("periodo_inicio", periodo.inicio)
+        .eq("periodo_fin", periodo.fin);
+      const guardadaPorDoctora: Record<
+        string,
+        { retencionValor: number | null; retencionDepuracion: number; updatedAt: string }
+      > = {};
+      for (const g of (guardadasData as {
+        doctora_id: string; retencion_valor: number | null; retencion_depuracion_valor: number; updated_at: string;
+      }[]) ?? []) {
+        guardadaPorDoctora[g.doctora_id] = {
+          retencionValor: g.retencion_valor,
+          retencionDepuracion: Number(g.retencion_depuracion_valor ?? 0),
+          updatedAt: g.updated_at,
+        };
+      }
+
       type LabRowLiq = {
         doctora_id: string; doctora_instala_id: string | null; tipo_servicio: string; sede_id: string; valor_factura: number;
         mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; fecha_instalado: string | null;
-        factura_numero: string | null;
+        factura_numero: string | null; updated_at: string;
         pacientes: { nombre: string } | null; laboratorios: { nombre: string } | null;
       };
       const labsData = await fetchTodasLasFilas<LabRowLiq>((desde, hasta) => {
         let q = supabase
           .from("lab_ordenes")
           .select(
-            "doctora_id, doctora_instala_id, tipo_servicio, sede_id, valor_factura, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, factura_numero, pacientes(nombre), laboratorios(nombre)",
+            "doctora_id, doctora_instala_id, tipo_servicio, sede_id, valor_factura, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, factura_numero, updated_at, pacientes(nombre), laboratorios(nombre)",
           )
           .not("valor_factura", "is", null)
           // Sin esto no había ningún orden garantizado — el detalle de
@@ -423,6 +452,10 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         detalleLabsPorDoctora[doctoraId] = detalleLabsPorDoctora[doctoraId] ?? [];
         detalleLabsPorDoctora[doctoraId].push(det);
       };
+      const editadoDespuesDeGuardar = (doctoraId: string, updatedAt: string) => {
+        const g = guardadaPorDoctora[doctoraId];
+        return !!g && updatedAt > g.updatedAt;
+      };
       for (const l of labsData) {
         // Se paga por aparato instalado, no por factura recibida — el período
         // de liquidación se define por cuándo se instaló (independiente de
@@ -444,16 +477,19 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
           agregarDetalleLab(l.doctora_id, {
             fecha: fechaComparar, fechaInstalado: l.fecha_instalado, sedeNombre: sedeNom, paciente, laboratorio, facturaNumero: l.factura_numero,
             valor: valor / 2, nota: `50/50 con ${nombreInstala}, que instaló`,
+            actualizadoDespuesDeGuardar: editadoDespuesDeGuardar(l.doctora_id, l.updated_at),
           });
           agregarDetalleLab(l.doctora_instala_id, {
             fecha: fechaComparar, fechaInstalado: l.fecha_instalado, sedeNombre: sedeNom, paciente, laboratorio, facturaNumero: l.factura_numero,
             valor: valor / 2, nota: `50/50 con ${nombreImpresion}, que tomó la impresión`,
+            actualizadoDespuesDeGuardar: editadoDespuesDeGuardar(l.doctora_instala_id, l.updated_at),
           });
         } else {
           sumarLab(l.doctora_id, l.sede_id, valor);
           agregarDetalleLab(l.doctora_id, {
             fecha: fechaComparar, fechaInstalado: l.fecha_instalado, sedeNombre: sedeNom, paciente, laboratorio, facturaNumero: l.factura_numero,
             valor, nota: null,
+            actualizadoDespuesDeGuardar: editadoDespuesDeGuardar(l.doctora_id, l.updated_at),
           });
         }
       }
@@ -492,22 +528,6 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
           tipo: TIPOS_INSUMO_LABEL[i.tipo] ?? i.tipo,
           valor,
         });
-      }
-
-      // Si el período ya se había liquidado antes (ej. la doctora entregó la
-      // depuración de renta después de guardar), recuperamos lo guardado en vez
-      // de recalcular desde cero, para no perder ediciones manuales previas.
-      const { data: guardadasData } = await supabase
-        .from("liquidaciones_doctora")
-        .select("doctora_id, retencion_valor, retencion_depuracion_valor")
-        .eq("periodo_inicio", periodo.inicio)
-        .eq("periodo_fin", periodo.fin);
-      const guardadaPorDoctora: Record<string, { retencionValor: number | null; retencionDepuracion: number }> = {};
-      for (const g of (guardadasData as { doctora_id: string; retencion_valor: number | null; retencion_depuracion_valor: number }[]) ?? []) {
-        guardadaPorDoctora[g.doctora_id] = {
-          retencionValor: g.retencion_valor,
-          retencionDepuracion: Number(g.retencion_depuracion_valor ?? 0),
-        };
       }
 
       const nuevasFilas: FilaDoctora[] = ((doctoras as Doctora[]) ?? [])
@@ -712,6 +732,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         const atrasados = f.detalleLabs.filter((d) => d.fechaInstalado && d.fechaInstalado !== d.fecha);
         const totalLabsAtrasados = atrasados.reduce((a, d) => a + d.valor, 0);
         const totalLabsNormal = f.totalLaboratorios - totalLabsAtrasados;
+        const editadosDespuesDeGuardar = f.detalleLabs.filter((d) => d.actualizadoDespuesDeGuardar);
         const totalLaboratoriosInsumos = totalLabsNormal + f.totalInsumos;
         const deduccion = totalLaboratoriosInsumos * (pctHonorario / 100);
         const deduccionAtrasados = totalLabsAtrasados * (pctHonorario / 100);
@@ -814,6 +835,15 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                 <p className="font-semibold text-lg">{fmtCOP(totalPago)}</p>
               </div>
             </div>
+
+            {editadosDespuesDeGuardar.length > 0 && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-1.5 mb-3">
+                ⚠ {editadosDespuesDeGuardar.length} laboratorio{editadosDespuesDeGuardar.length > 1 ? "s" : ""} se{" "}
+                {editadosDespuesDeGuardar.length > 1 ? "editaron" : "editó"} después de que se guardó esta liquidación
+                — la liquidación guardada puede no incluirlo{editadosDespuesDeGuardar.length > 1 ? "s" : ""} todavía.
+                Ver detalle abajo.
+              </p>
+            )}
 
             {!sedeId && f.porSede.length >= 1 && f.totalVentas > 0 && (
               <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-3">
@@ -1016,13 +1046,28 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                       </thead>
                       <tbody>
                         {f.detalleLabs.map((d, i) => (
-                          <tr key={i} className="border-t border-gray-100">
+                          <tr
+                            key={i}
+                            className={
+                              d.actualizadoDespuesDeGuardar
+                                ? "border-t border-amber-200 bg-amber-50"
+                                : "border-t border-gray-100"
+                            }
+                          >
                             <td className="px-2 py-1.5">{d.fecha}</td>
                             <td className="px-2 py-1.5">{d.sedeNombre}</td>
                             <td className="px-2 py-1.5">{d.paciente}</td>
                             <td className="px-2 py-1.5">
                               {d.laboratorio}
                               {notaDetalleLab(d) && <span className="text-gray-400"> ({notaDetalleLab(d)})</span>}
+                              {d.actualizadoDespuesDeGuardar && (
+                                <span
+                                  className="ml-1 text-amber-700 font-medium"
+                                  title="Se editó después de guardar la liquidación de este período — la liquidación guardada puede no incluirlo todavía."
+                                >
+                                  ⚠ nuevo desde que se guardó
+                                </span>
+                              )}
                             </td>
                             <td className="px-2 py-1.5">{d.facturaNumero ?? "—"}</td>
                             <td className="px-2 py-1.5 text-right">{fmtCOP(d.valor)}</td>
