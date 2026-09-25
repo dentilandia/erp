@@ -624,14 +624,6 @@ export function Asistencia() {
       saldoAnteriorFecha: string | null;
     }[]
   >([]);
-  // Cuánto se ha descontado del saldo de horas extra anterior de cada
-  // persona — la suma de "Compensado" marcado desde la fecha en que se puso
-  // ese saldo (no desde siempre, porque lo compensado antes de esa fecha ya
-  // estaba reflejado en el saldo mismo). Se recalcula solo, sin que admin
-  // tenga que ir restando a mano cada vez que alguien compensa tiempo.
-  const [compensadoDesdeBaselinePorPersona, setCompensadoDesdeBaselinePorPersona] = useState<Record<string, number>>(
-    {},
-  );
   const [personaAdminId, setPersonaAdminId] = useState("");
   const [fechaAdmin, setFechaAdmin] = useState(() => fechaBogota(new Date().toISOString()));
   const [marcasPersona, setMarcasPersona] = useState<AsistenciaRegistro[]>([]);
@@ -743,25 +735,6 @@ export function Asistencia() {
     // Solo admin usa "Registro administrativo" (más abajo) — a operación no
     // le hace falta preseleccionar a nadie ahí.
     if (perfil?.rol === "admin" && filas.length > 0) setPersonaAdminId((prev) => prev || filas[0].id);
-
-    // Cuánto se ha compensado desde que se puso el saldo anterior de cada
-    // quien lo tenga — todo el historial, no solo el período del reporte,
-    // porque el saldo es un balance que se va agotando con el tiempo, no
-    // algo atado a un período específico.
-    const conBaseline = filas.filter((p) => p.saldoAnteriorFecha);
-    if (conBaseline.length === 0) return;
-    const { data: compensadosData } = await supabase
-      .from("asistencia_notas_dia")
-      .select("perfil_id, fecha, minutos_compensados")
-      .in("perfil_id", conBaseline.map((p) => p.id))
-      .gt("minutos_compensados", 0);
-    const totales: Record<string, number> = {};
-    for (const c of (compensadosData as { perfil_id: string; fecha: string; minutos_compensados: number }[]) ?? []) {
-      const persona = conBaseline.find((p) => p.id === c.perfil_id);
-      if (!persona?.saldoAnteriorFecha || c.fecha < persona.saldoAnteriorFecha) continue;
-      totales[c.perfil_id] = (totales[c.perfil_id] ?? 0) + c.minutos_compensados / 60;
-    }
-    setCompensadoDesdeBaselinePorPersona(totales);
   }
 
   useEffect(() => {
@@ -1355,17 +1328,20 @@ export function Asistencia() {
       // llamada — así el segundo ya ve el saldo que dejó el primero.
       const { data: perfilData } = await supabase
         .from("perfiles")
-        .select("saldo_horas_extra_anterior, saldo_horas_extra_anterior_fecha")
+        .select("saldo_horas_extra_anterior")
         .eq("id", fp.perfilId)
         .single();
       const saldoActual = Number(perfilData?.saldo_horas_extra_anterior ?? 0);
-      const fechaBase = perfilData?.saldo_horas_extra_anterior_fecha as string | null;
+      // Lo compensado DE ESTE PERÍODO (mismo rango que se le calculó arriba
+      // el totalHorasExtra) — igual que "Saldo restante" en pantalla, para
+      // que el número que queda al cerrar sea el mismo que se veía justo
+      // antes de cerrarlo.
       const { data: compensadosData } = await supabase
         .from("asistencia_notas_dia")
         .select("minutos_compensados")
         .eq("perfil_id", fp.perfilId)
         .gt("minutos_compensados", 0)
-        .gte("fecha", fechaBase ?? "1900-01-01")
+        .gte("fecha", inicio)
         .lt("fecha", finExclusivo);
       const compensadoHoras =
         ((compensadosData as { minutos_compensados: number }[]) ?? []).reduce((a, c) => a + c.minutos_compensados, 0) / 60;
@@ -2426,8 +2402,13 @@ export function Asistencia() {
           <div className="space-y-4">
             {reporte.map((fila) => {
               const persona = personas.find((p) => p.id === fila.perfilId);
-              const compensadoDesdeBaseline = compensadoDesdeBaselinePorPersona[fila.perfilId] ?? 0;
-              const saldoRestante = persona ? persona.saldoAnterior - compensadoDesdeBaseline : 0;
+              // Lo compensado de ESTE período (la misma suma que ya se ve
+              // semana a semana en la columna "Compensadas") se le resta al
+              // saldo que trajo del período anterior — así "Saldo restante"
+              // sí baja a medida que se usa el tiempo a favor, en vez de
+              // quedarse fijo hasta que se cierre el período.
+              const compensadoEstePeriodo = fila.semanas.reduce((a, s) => a + s.minutosCompensados, 0) / 60;
+              const saldoRestante = persona ? persona.saldoAnterior - compensadoEstePeriodo : 0;
               return (
               <div key={fila.perfilId} className="border border-gray-100 rounded-lg p-3">
                 <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
