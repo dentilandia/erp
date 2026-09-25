@@ -615,8 +615,24 @@ export function Asistencia() {
   // (RLS lo permite solo a admin), sin pasar por el edge function de
   // marcado en vivo, que no aplica acá.
   const [personas, setPersonas] = useState<
-    { id: string; nombre: string; sede_id: string | null; sedeNombre: string | null }[]
+    {
+      id: string;
+      nombre: string;
+      sede_id: string | null;
+      sedeNombre: string | null;
+      saldoAnterior: number;
+      saldoAnteriorFecha: string | null;
+    }[]
   >([]);
+  // Cuánto se ha descontado del saldo de horas extra anterior de cada
+  // persona — la suma de "Compensado" marcado desde la fecha en que se puso
+  // ese saldo (no desde siempre, porque lo compensado antes de esa fecha ya
+  // estaba reflejado en el saldo mismo). Se recalcula solo, sin que admin
+  // tenga que ir restando a mano cada vez que alguien compensa tiempo.
+  const [compensadoDesdeBaselinePorPersona, setCompensadoDesdeBaselinePorPersona] = useState<Record<string, number>>(
+    {},
+  );
+  const [guardandoSaldoAnterior, setGuardandoSaldoAnterior] = useState<string | null>(null);
   const [personaAdminId, setPersonaAdminId] = useState("");
   const [fechaAdmin, setFechaAdmin] = useState(() => fechaBogota(new Date().toISOString()));
   const [marcasPersona, setMarcasPersona] = useState<AsistenciaRegistro[]>([]);
@@ -708,19 +724,65 @@ export function Asistencia() {
       // El laboratorio externo (ej. Ruby) no marca asistencia por sede — se
       // excluye acá para que no aparezca en las correcciones manuales, en
       // las horas extra por atención ni en el dashboard del día.
-      .select("id, nombre, sede_id, sedes(nombre)")
+      .select("id, nombre, sede_id, sedes(nombre), saldo_horas_extra_anterior, saldo_horas_extra_anterior_fecha")
       .neq("rol", "laboratorio")
       .order("nombre")
-      .then(({ data }) => {
-        const filas = ((data as unknown as { id: string; nombre: string; sede_id: string | null; sedes: { nombre: string } | null }[]) ?? []).map(
-          (p) => ({ id: p.id, nombre: p.nombre, sede_id: p.sede_id, sedeNombre: p.sedes?.nombre ?? null }),
-        );
+      .then(async ({ data }) => {
+        const rows =
+          (data as unknown as {
+            id: string; nombre: string; sede_id: string | null; sedes: { nombre: string } | null;
+            saldo_horas_extra_anterior: number; saldo_horas_extra_anterior_fecha: string | null;
+          }[]) ?? [];
+        const filas = rows.map((p) => ({
+          id: p.id,
+          nombre: p.nombre,
+          sede_id: p.sede_id,
+          sedeNombre: p.sedes?.nombre ?? null,
+          saldoAnterior: Number(p.saldo_horas_extra_anterior),
+          saldoAnteriorFecha: p.saldo_horas_extra_anterior_fecha,
+        }));
         setPersonas(filas);
         // Solo admin usa "Registro administrativo" (más abajo) — a operación
         // no le hace falta preseleccionar a nadie ahí.
         if (perfil?.rol === "admin" && filas.length > 0) setPersonaAdminId((prev) => prev || filas[0].id);
+
+        // Cuánto se ha compensado desde que se puso el saldo anterior de cada
+        // quien lo tenga — todo el historial, no solo el período del reporte,
+        // porque el saldo es un balance que se va agotando con el tiempo, no
+        // algo atado a un período específico.
+        const conBaseline = filas.filter((p) => p.saldoAnteriorFecha);
+        if (conBaseline.length === 0) return;
+        const { data: compensadosData } = await supabase
+          .from("asistencia_notas_dia")
+          .select("perfil_id, fecha, minutos_compensados")
+          .in("perfil_id", conBaseline.map((p) => p.id))
+          .gt("minutos_compensados", 0);
+        const totales: Record<string, number> = {};
+        for (const c of (compensadosData as { perfil_id: string; fecha: string; minutos_compensados: number }[]) ?? []) {
+          const persona = conBaseline.find((p) => p.id === c.perfil_id);
+          if (!persona?.saldoAnteriorFecha || c.fecha < persona.saldoAnteriorFecha) continue;
+          totales[c.perfil_id] = (totales[c.perfil_id] ?? 0) + c.minutos_compensados / 60;
+        }
+        setCompensadoDesdeBaselinePorPersona(totales);
       });
   }, [perfil?.rol]);
+
+  async function guardarSaldoAnterior(perfilId: string, valor: number) {
+    setGuardandoSaldoAnterior(perfilId);
+    const hoy = fechaBogota(new Date().toISOString());
+    const { error } = await supabase
+      .from("perfiles")
+      .update({ saldo_horas_extra_anterior: valor, saldo_horas_extra_anterior_fecha: hoy })
+      .eq("id", perfilId);
+    setGuardandoSaldoAnterior(null);
+    if (error) return;
+    setPersonas((prev) =>
+      prev.map((p) => (p.id === perfilId ? { ...p, saldoAnterior: valor, saldoAnteriorFecha: hoy } : p)),
+    );
+    // Arranca de nuevo desde hoy — lo compensado antes de este cambio ya
+    // quedó reflejado en el número que se acaba de guardar.
+    setCompensadoDesdeBaselinePorPersona((prev) => ({ ...prev, [perfilId]: 0 }));
+  }
 
   async function cargarMarcasPersona() {
     if (!personaAdminId) return;
@@ -2284,16 +2346,52 @@ export function Asistencia() {
           <p className="text-sm text-gray-400">Sin marcas completas (llegada + salida) en este período.</p>
         ) : (
           <div className="space-y-4">
-            {reporte.map((fila) => (
+            {reporte.map((fila) => {
+              const persona = personas.find((p) => p.id === fila.perfilId);
+              const compensadoDesdeBaseline = compensadoDesdeBaselinePorPersona[fila.perfilId] ?? 0;
+              const saldoRestante = persona ? persona.saldoAnterior - compensadoDesdeBaseline : 0;
+              return (
               <div key={fila.perfilId} className="border border-gray-100 rounded-lg p-3">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                   <p className="font-medium text-sm">{fila.nombre}</p>
-                  <p className="text-sm">
-                    <span className="text-gray-500">Horas extra del período: </span>
-                    <span className={`font-semibold ${fila.totalHorasExtra > 0 ? "text-emerald-700" : "text-gray-400"}`}>
-                      {fila.totalHorasExtra.toFixed(1)} h
-                    </span>
-                  </p>
+                  <div className="text-sm text-right space-y-0.5">
+                    <p>
+                      <span className="text-gray-500">Horas extra del período: </span>
+                      <span className={`font-semibold ${fila.totalHorasExtra > 0 ? "text-emerald-700" : "text-gray-400"}`}>
+                        {fila.totalHorasExtra.toFixed(1)} h
+                      </span>
+                    </p>
+                    {persona && (
+                      <p className="flex items-center justify-end gap-1.5">
+                        <span className="text-gray-500">Horas extra período anterior:</span>
+                        {perfil?.rol === "admin" ? (
+                          <input
+                            type="number"
+                            step="0.1"
+                            defaultValue={persona.saldoAnterior}
+                            disabled={guardandoSaldoAnterior === persona.id}
+                            onBlur={(e) => {
+                              const v = Number(e.target.value);
+                              if (!Number.isNaN(v) && v !== persona.saldoAnterior) guardarSaldoAnterior(persona.id, v);
+                            }}
+                            title="Saldo de horas extra acumuladas antes de que el sistema llevara el detalle — se descuenta solo con cada Compensado que se marque de aquí en adelante"
+                            className="w-16 rounded border border-gray-300 px-1 py-0.5 text-right text-violet-700 font-semibold"
+                          />
+                        ) : (
+                          <span className="text-violet-700 font-semibold">{persona.saldoAnterior.toFixed(1)}</span>
+                        )}
+                        <span className="text-violet-700 font-semibold">h</span>
+                      </p>
+                    )}
+                    {persona?.saldoAnteriorFecha && (
+                      <p>
+                        <span className="text-gray-500">Saldo restante: </span>
+                        <span className={`font-semibold ${saldoRestante >= 0 ? "text-violet-700" : "text-red-600"}`}>
+                          {saldoRestante.toFixed(1)} h
+                        </span>
+                      </p>
+                    )}
+                  </div>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -2378,7 +2476,8 @@ export function Asistencia() {
                   );
                 })()}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
