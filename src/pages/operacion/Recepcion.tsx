@@ -799,6 +799,19 @@ function PanelInterconsultas({ sedeId }: { sedeId: string }) {
   const [filas, setFilas] = useState<InterconsultaFila[]>([]);
   const [soloPendientes, setSoloPendientes] = useState(true);
   const [guardandoId, setGuardandoId] = useState<string | null>(null);
+  // Se carga siempre (no solo con el panel abierto) para que se vea en el
+  // botón aunque esté colapsado — así recepción no tiene que abrirlo para
+  // saber si tiene pendientes.
+  const [pendientes, setPendientes] = useState(0);
+
+  useEffect(() => {
+    supabase
+      .from("interconsultas")
+      .select("id", { count: "exact", head: true })
+      .eq("sede_id", sedeId)
+      .eq("fin_interconsulta", false)
+      .then(({ count }) => setPendientes(count ?? 0));
+  }, [sedeId, filas]);
 
   useEffect(() => {
     if (!abierto) return;
@@ -863,6 +876,11 @@ function PanelInterconsultas({ sedeId }: { sedeId: string }) {
         style={{ background: "var(--acento)" }}
       >
         {abierto ? "Ocultar interconsultas" : "Ver interconsultas"}
+        {pendientes > 0 && (
+          <span className="bg-white text-[var(--acento)] rounded-full min-w-[1.25rem] px-1.5 py-0.5 text-xs font-bold leading-none">
+            {pendientes}
+          </span>
+        )}
       </button>
       {abierto && (
         <div className="mt-3 space-y-3">
@@ -939,6 +957,19 @@ function PanelRemisiones({ sedeId }: { sedeId: string }) {
   const [filas, setFilas] = useState<RemisionFila[]>([]);
   const [soloPendientes, setSoloPendientes] = useState(true);
   const [guardandoId, setGuardandoId] = useState<string | null>(null);
+  // Se carga siempre (no solo con el panel abierto) para que se vea en el
+  // botón aunque esté colapsado — así recepción no tiene que abrirlo para
+  // saber si tiene pendientes.
+  const [pendientes, setPendientes] = useState(0);
+
+  useEffect(() => {
+    supabase
+      .from("remisiones")
+      .select("id", { count: "exact", head: true })
+      .eq("sede_id", sedeId)
+      .eq("cerrada", false)
+      .then(({ count }) => setPendientes(count ?? 0));
+  }, [sedeId, filas]);
 
   useEffect(() => {
     if (!abierto) return;
@@ -996,6 +1027,11 @@ function PanelRemisiones({ sedeId }: { sedeId: string }) {
         style={{ background: "var(--acento)" }}
       >
         {abierto ? "Ocultar remisiones" : "Ver remisiones"}
+        {pendientes > 0 && (
+          <span className="bg-white text-[var(--acento)] rounded-full min-w-[1.25rem] px-1.5 py-0.5 text-xs font-bold leading-none">
+            {pendientes}
+          </span>
+        )}
       </button>
       {abierto && (
         <div className="mt-3 space-y-3">
