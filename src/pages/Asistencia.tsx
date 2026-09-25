@@ -2483,6 +2483,18 @@ export function Asistencia() {
                     </tbody>
                   </table>
                 </div>
+                {persona?.saldoAnteriorFecha && (
+                  <p className="text-sm text-right mt-1.5 pt-1.5 border-t border-gray-100">
+                    <span className="text-gray-500">Liquidación (pasa como saldo al próximo período): </span>
+                    <span
+                      className={`font-semibold ${
+                        saldoRestante + fila.totalHorasExtra >= 0 ? "text-violet-700" : "text-red-600"
+                      }`}
+                    >
+                      {(saldoRestante + fila.totalHorasExtra).toFixed(1)} h
+                    </span>
+                  </p>
+                )}
                 {(() => {
                   const observaciones = [
                     ...(ausenciasPorPersona[fila.perfilId] ?? []).map((a) => ({
