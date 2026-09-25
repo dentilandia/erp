@@ -632,7 +632,6 @@ export function Asistencia() {
   const [compensadoDesdeBaselinePorPersona, setCompensadoDesdeBaselinePorPersona] = useState<Record<string, number>>(
     {},
   );
-  const [guardandoSaldoAnterior, setGuardandoSaldoAnterior] = useState<string | null>(null);
   const [personaAdminId, setPersonaAdminId] = useState("");
   const [fechaAdmin, setFechaAdmin] = useState(() => fechaBogota(new Date().toISOString()));
   const [marcasPersona, setMarcasPersona] = useState<AsistenciaRegistro[]>([]);
@@ -713,76 +712,62 @@ export function Asistencia() {
   const [extraAtencionPorPersonaYDia, setExtraAtencionPorPersonaYDia] = useState<Record<string, number>>({});
   const [extraAtencionMotivoPorPersonaYDia, setExtraAtencionMotivoPorPersonaYDia] = useState<Record<string, string>>({});
 
-  useEffect(() => {
+  async function cargarPersonas() {
     // Operación también necesita esta lista para elegir colaboradores en
     // "Horas extra por atención de paciente" — el resto de usos de `personas`
     // (correcciones manuales, dashboard del día) siguen ocultos para ellos
     // porque esas secciones de abajo se quedan admin-only.
     if (perfil?.rol !== "admin" && perfil?.rol !== "operacion") return;
-    supabase
+    const { data } = await supabase
       .from("perfiles")
       // El laboratorio externo (ej. Ruby) no marca asistencia por sede — se
       // excluye acá para que no aparezca en las correcciones manuales, en
       // las horas extra por atención ni en el dashboard del día.
       .select("id, nombre, sede_id, sedes(nombre), saldo_horas_extra_anterior, saldo_horas_extra_anterior_fecha")
       .neq("rol", "laboratorio")
-      .order("nombre")
-      .then(async ({ data }) => {
-        const rows =
-          (data as unknown as {
-            id: string; nombre: string; sede_id: string | null; sedes: { nombre: string } | null;
-            saldo_horas_extra_anterior: number; saldo_horas_extra_anterior_fecha: string | null;
-          }[]) ?? [];
-        const filas = rows.map((p) => ({
-          id: p.id,
-          nombre: p.nombre,
-          sede_id: p.sede_id,
-          sedeNombre: p.sedes?.nombre ?? null,
-          saldoAnterior: Number(p.saldo_horas_extra_anterior),
-          saldoAnteriorFecha: p.saldo_horas_extra_anterior_fecha,
-        }));
-        setPersonas(filas);
-        // Solo admin usa "Registro administrativo" (más abajo) — a operación
-        // no le hace falta preseleccionar a nadie ahí.
-        if (perfil?.rol === "admin" && filas.length > 0) setPersonaAdminId((prev) => prev || filas[0].id);
+      .order("nombre");
+    const rows =
+      (data as unknown as {
+        id: string; nombre: string; sede_id: string | null; sedes: { nombre: string } | null;
+        saldo_horas_extra_anterior: number; saldo_horas_extra_anterior_fecha: string | null;
+      }[]) ?? [];
+    const filas = rows.map((p) => ({
+      id: p.id,
+      nombre: p.nombre,
+      sede_id: p.sede_id,
+      sedeNombre: p.sedes?.nombre ?? null,
+      saldoAnterior: Number(p.saldo_horas_extra_anterior),
+      saldoAnteriorFecha: p.saldo_horas_extra_anterior_fecha,
+    }));
+    setPersonas(filas);
+    // Solo admin usa "Registro administrativo" (más abajo) — a operación no
+    // le hace falta preseleccionar a nadie ahí.
+    if (perfil?.rol === "admin" && filas.length > 0) setPersonaAdminId((prev) => prev || filas[0].id);
 
-        // Cuánto se ha compensado desde que se puso el saldo anterior de cada
-        // quien lo tenga — todo el historial, no solo el período del reporte,
-        // porque el saldo es un balance que se va agotando con el tiempo, no
-        // algo atado a un período específico.
-        const conBaseline = filas.filter((p) => p.saldoAnteriorFecha);
-        if (conBaseline.length === 0) return;
-        const { data: compensadosData } = await supabase
-          .from("asistencia_notas_dia")
-          .select("perfil_id, fecha, minutos_compensados")
-          .in("perfil_id", conBaseline.map((p) => p.id))
-          .gt("minutos_compensados", 0);
-        const totales: Record<string, number> = {};
-        for (const c of (compensadosData as { perfil_id: string; fecha: string; minutos_compensados: number }[]) ?? []) {
-          const persona = conBaseline.find((p) => p.id === c.perfil_id);
-          if (!persona?.saldoAnteriorFecha || c.fecha < persona.saldoAnteriorFecha) continue;
-          totales[c.perfil_id] = (totales[c.perfil_id] ?? 0) + c.minutos_compensados / 60;
-        }
-        setCompensadoDesdeBaselinePorPersona(totales);
-      });
-  }, [perfil?.rol]);
-
-  async function guardarSaldoAnterior(perfilId: string, valor: number) {
-    setGuardandoSaldoAnterior(perfilId);
-    const hoy = fechaBogota(new Date().toISOString());
-    const { error } = await supabase
-      .from("perfiles")
-      .update({ saldo_horas_extra_anterior: valor, saldo_horas_extra_anterior_fecha: hoy })
-      .eq("id", perfilId);
-    setGuardandoSaldoAnterior(null);
-    if (error) return;
-    setPersonas((prev) =>
-      prev.map((p) => (p.id === perfilId ? { ...p, saldoAnterior: valor, saldoAnteriorFecha: hoy } : p)),
-    );
-    // Arranca de nuevo desde hoy — lo compensado antes de este cambio ya
-    // quedó reflejado en el número que se acaba de guardar.
-    setCompensadoDesdeBaselinePorPersona((prev) => ({ ...prev, [perfilId]: 0 }));
+    // Cuánto se ha compensado desde que se puso el saldo anterior de cada
+    // quien lo tenga — todo el historial, no solo el período del reporte,
+    // porque el saldo es un balance que se va agotando con el tiempo, no
+    // algo atado a un período específico.
+    const conBaseline = filas.filter((p) => p.saldoAnteriorFecha);
+    if (conBaseline.length === 0) return;
+    const { data: compensadosData } = await supabase
+      .from("asistencia_notas_dia")
+      .select("perfil_id, fecha, minutos_compensados")
+      .in("perfil_id", conBaseline.map((p) => p.id))
+      .gt("minutos_compensados", 0);
+    const totales: Record<string, number> = {};
+    for (const c of (compensadosData as { perfil_id: string; fecha: string; minutos_compensados: number }[]) ?? []) {
+      const persona = conBaseline.find((p) => p.id === c.perfil_id);
+      if (!persona?.saldoAnteriorFecha || c.fecha < persona.saldoAnteriorFecha) continue;
+      totales[c.perfil_id] = (totales[c.perfil_id] ?? 0) + c.minutos_compensados / 60;
+    }
+    setCompensadoDesdeBaselinePorPersona(totales);
   }
+
+  useEffect(() => {
+    cargarPersonas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perfil?.rol]);
 
   async function cargarMarcasPersona() {
     if (!personaAdminId) return;
@@ -1313,10 +1298,102 @@ export function Asistencia() {
     cargarPeriodosLiquidacion();
   }, []);
 
+  // Al cerrarse un período (porque ya se creó el siguiente), lo que ese
+  // período generó de horas extra ("Horas extra del período", la misma
+  // cuenta que ya se ve en el reporte) se suma al saldo de cada persona, y
+  // lo que se haya compensado desde su fecha base hasta el fin de este
+  // período se resta — así "Horas extra período anterior" del próximo
+  // período queda al día solo, sin que nadie tenga que escribir un número.
+  async function trasladarSaldoDePeriodo(periodo: PeriodoLiquidacion) {
+    const inicio = periodo.fecha_inicio;
+    const finExclusivo = sumarDias(periodo.fecha_fin, 1);
+    const desde = sumarDias(inicio, -8);
+    const hasta = sumarDias(finExclusivo, 8);
+    const { data } = await supabase
+      .from("asistencia_registros")
+      .select("perfil_id, tipo, marcado_en, perfiles(nombre)")
+      .gte("marcado_en", `${desde}T00:00:00-05:00`)
+      .lt("marcado_en", `${hasta}T00:00:00-05:00`)
+      .order("marcado_en");
+    const filas = (
+      (data as unknown as { perfil_id: string; tipo: TipoAsistencia; marcado_en: string; perfiles: { nombre: string } | null }[]) ?? []
+    ).map((r) => ({ perfil_id: r.perfil_id, tipo: r.tipo, marcado_en: r.marcado_en, nombre: r.perfiles?.nombre ?? "—" }));
+
+    const { data: ausenciasData } = await supabase
+      .from("asistencia_ausencias")
+      .select("perfil_id, fecha, tipo, perfiles!asistencia_vacaciones_perfil_id_fkey(nombre)")
+      .gte("fecha", desde)
+      .lt("fecha", hasta);
+    const ausencias: AusenciaReporte[] = (
+      (ausenciasData as unknown as {
+        perfil_id: string; fecha: string; tipo: "vacaciones" | "incapacidad" | "descanso"; perfiles: { nombre: string } | null;
+      }[]) ?? []
+    ).map((a) => ({ perfil_id: a.perfil_id, fecha: a.fecha, nombre: a.perfiles?.nombre ?? "—", tipo: a.tipo }));
+
+    const { data: notas } = await supabase
+      .from("asistencia_notas_dia")
+      .select("perfil_id, fecha, minutos_compensados, hora_entrada_autorizada")
+      .gte("fecha", desde)
+      .lt("fecha", hasta);
+    const notasRows =
+      (notas as { perfil_id: string; fecha: string; minutos_compensados: number; hora_entrada_autorizada: string | null }[]) ?? [];
+    const compensaciones: CompensacionReporte[] = notasRows
+      .filter((n) => n.minutos_compensados)
+      .map((n) => ({ perfil_id: n.perfil_id, fecha: n.fecha, minutos: n.minutos_compensados }));
+    const autorizaciones: AutorizacionReporte[] = notasRows
+      .filter((n) => n.hora_entrada_autorizada)
+      .map((n) => ({ perfil_id: n.perfil_id, fecha: n.fecha, hora: n.hora_entrada_autorizada as string }));
+
+    const { data: festivosData } = await supabase.from("festivos_colombia").select("fecha").gte("fecha", desde).lt("fecha", hasta);
+    const festivosSet = new Set((festivosData ?? []).map((f) => f.fecha as string));
+
+    const filasReporte = armarReporteHoras(filas, ausencias, compensaciones, autorizaciones, festivosSet, inicio, finExclusivo, metaSemanal);
+
+    for (const fp of filasReporte) {
+      // Se lee directo de la base (no del estado de React) por si se están
+      // trasladando varios períodos pendientes seguidos en la misma
+      // llamada — así el segundo ya ve el saldo que dejó el primero.
+      const { data: perfilData } = await supabase
+        .from("perfiles")
+        .select("saldo_horas_extra_anterior, saldo_horas_extra_anterior_fecha")
+        .eq("id", fp.perfilId)
+        .single();
+      const saldoActual = Number(perfilData?.saldo_horas_extra_anterior ?? 0);
+      const fechaBase = perfilData?.saldo_horas_extra_anterior_fecha as string | null;
+      const { data: compensadosData } = await supabase
+        .from("asistencia_notas_dia")
+        .select("minutos_compensados")
+        .eq("perfil_id", fp.perfilId)
+        .gt("minutos_compensados", 0)
+        .gte("fecha", fechaBase ?? "1900-01-01")
+        .lt("fecha", finExclusivo);
+      const compensadoHoras =
+        ((compensadosData as { minutos_compensados: number }[]) ?? []).reduce((a, c) => a + c.minutos_compensados, 0) / 60;
+      const nuevoSaldo = saldoActual - compensadoHoras + fp.totalHorasExtra;
+      await supabase
+        .from("perfiles")
+        .update({ saldo_horas_extra_anterior: nuevoSaldo, saldo_horas_extra_anterior_fecha: finExclusivo })
+        .eq("id", fp.perfilId);
+    }
+    await supabase.from("periodos_liquidacion").update({ saldo_trasladado: true }).eq("id", periodo.id);
+  }
+
   async function crearPeriodoLiquidacion() {
     if (!etiquetaPeriodoNueva.trim() || !inicioPeriodoNuevo || !finPeriodoNuevo) return;
     setGuardandoPeriodo(true);
     setErrorPeriodoLiq(null);
+    // Cualquier período anterior que ya haya terminado y todavía no haya
+    // trasladado su saldo, se cierra primero — así el saldo de todos queda
+    // al día antes de que se pueda ver el período nuevo.
+    const { data: pendientes } = await supabase
+      .from("periodos_liquidacion")
+      .select("*")
+      .eq("saldo_trasladado", false)
+      .lt("fecha_fin", inicioPeriodoNuevo)
+      .order("fecha_fin");
+    for (const periodo of (pendientes as PeriodoLiquidacion[]) ?? []) {
+      await trasladarSaldoDePeriodo(periodo);
+    }
     const { data, error } = await supabase
       .from("periodos_liquidacion")
       .insert({
@@ -1336,6 +1413,7 @@ export function Asistencia() {
     setInicioPeriodoNuevo("");
     setFinPeriodoNuevo("");
     await cargarPeriodosLiquidacion();
+    await cargarPersonas();
     if (data) setPeriodoReporteId(data.id);
   }
 
@@ -2352,8 +2430,16 @@ export function Asistencia() {
               const saldoRestante = persona ? persona.saldoAnterior - compensadoDesdeBaseline : 0;
               return (
               <div key={fila.perfilId} className="border border-gray-100 rounded-lg p-3">
-                <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                  <p className="font-medium text-sm">{fila.nombre}</p>
+                <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
+                  <div>
+                    <p className="font-medium text-sm">{fila.nombre}</p>
+                    {persona && (
+                      <p className="text-xs text-gray-500">
+                        Horas extra período anterior:{" "}
+                        <span className="text-violet-700 font-semibold">{persona.saldoAnterior.toFixed(1)} h</span>
+                      </p>
+                    )}
+                  </div>
                   <div className="text-sm text-right space-y-0.5">
                     <p>
                       <span className="text-gray-500">Horas extra del período: </span>
@@ -2361,28 +2447,6 @@ export function Asistencia() {
                         {fila.totalHorasExtra.toFixed(1)} h
                       </span>
                     </p>
-                    {persona && (
-                      <p className="flex items-center justify-end gap-1.5">
-                        <span className="text-gray-500">Horas extra período anterior:</span>
-                        {perfil?.rol === "admin" ? (
-                          <input
-                            type="number"
-                            step="0.1"
-                            defaultValue={persona.saldoAnterior}
-                            disabled={guardandoSaldoAnterior === persona.id}
-                            onBlur={(e) => {
-                              const v = Number(e.target.value);
-                              if (!Number.isNaN(v) && v !== persona.saldoAnterior) guardarSaldoAnterior(persona.id, v);
-                            }}
-                            title="Saldo de horas extra acumuladas antes de que el sistema llevara el detalle — se descuenta solo con cada Compensado que se marque de aquí en adelante"
-                            className="w-16 rounded border border-gray-300 px-1 py-0.5 text-right text-violet-700 font-semibold"
-                          />
-                        ) : (
-                          <span className="text-violet-700 font-semibold">{persona.saldoAnterior.toFixed(1)}</span>
-                        )}
-                        <span className="text-violet-700 font-semibold">h</span>
-                      </p>
-                    )}
                     {persona?.saldoAnteriorFecha && (
                       <p>
                         <span className="text-gray-500">Saldo restante: </span>

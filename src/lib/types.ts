@@ -83,6 +83,7 @@ export interface PeriodoLiquidacion {
   fecha_fin: string;
   created_by: string | null;
   created_at: string;
+  saldo_trasladado: boolean;
 }
 
 /** Solicitud de horas extra por atención de un paciente fuera de la
