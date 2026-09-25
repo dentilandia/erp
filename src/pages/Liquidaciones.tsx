@@ -105,6 +105,13 @@ interface DetalleLab {
   nota: string | null;
 }
 
+// Aparato instalado en un período de liquidación anterior que nunca se le
+// cobró a la doctora — se guarda el id para poder marcarlo
+// (liquidado_atrasado_en) apenas se guarde esta liquidación.
+interface DetalleLabAtrasado extends DetalleLab {
+  id: string;
+}
+
 interface DetalleInsumo {
   fecha: string;
   sedeNombre: string;
@@ -118,9 +125,11 @@ interface FilaDoctora {
   totalVentas: number;
   totalLaboratorios: number;
   totalInsumos: number;
+  totalAtrasados: number;
   porSede: FilaDoctoraSede[];
   detalleLabs: DetalleLab[];
   detalleInsumos: DetalleInsumo[];
+  detalleAtrasados: DetalleLabAtrasado[];
   retencionValor: string;
   retencionDepuracionValor: string;
   guardando: boolean;
@@ -144,8 +153,63 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-/** Abre una ventana de impresión con el respaldo — la doctora/admin le da "Guardar como PDF" desde el diálogo de impresión. */
-function exportarDetalleDoctora(periodo: { inicio: string; fin: string }, f: FilaDoctora) {
+/** Página 1: el estado de cuenta en sí (para enviarle a la doctora) — refleja la misma ficha que se ve en pantalla. */
+function paginaLiquidacion(periodo: { inicio: string; fin: string }, pctHonorario: number, f: FilaDoctora): string {
+  const bruto = f.totalVentas * (pctHonorario / 100);
+  const totalLaboratoriosInsumos = f.totalLaboratorios + f.totalInsumos;
+  const deduccion = totalLaboratoriosInsumos * (pctHonorario / 100);
+  const deduccionAtrasados = f.totalAtrasados * (pctHonorario / 100);
+  const retencionVoluntaria = Number(f.retencionValor) || 0;
+  const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
+  const subtotal = bruto - deduccion - deduccionAtrasados;
+  const totalPago = subtotal - retencionVoluntaria - retencionDepuracion;
+  const ibc = totalPago * 0.4;
+
+  const filasPorSede = f.porSede
+    .map(
+      (s) =>
+        `<tr><td>${esc(s.sedeNombre)}</td><td class="num">${esc(fmtCOP(s.ventas))}</td><td class="num">${esc(fmtCOP(s.labs))}</td><td class="num">${esc(fmtCOP(s.insumos))}</td></tr>`,
+    )
+    .join("");
+
+  return `
+  <h1>Liquidación — ${esc(f.doctora.nombre)}</h1>
+  <p class="periodo">Período ${periodo.inicio} a ${periodo.fin}</p>
+
+  <table>
+    <thead><tr><th>Sede</th><th class="num">Ventas</th><th class="num">Laboratorios</th><th class="num">Otros aparatología</th></tr></thead>
+    <tbody>
+      ${filasPorSede}
+      <tr class="total"><td>Total</td><td class="num">${esc(fmtCOP(f.totalVentas))}</td><td class="num">${esc(fmtCOP(f.totalLaboratorios))}</td><td class="num">${esc(fmtCOP(f.totalInsumos))}</td></tr>
+    </tbody>
+  </table>
+
+  <div class="caja">
+    <div class="fila"><span>Honorarios — ${pctHonorario}% de ${esc(fmtCOP(f.totalVentas))} en ventas</span><span class="mas">+${esc(fmtCOP(bruto))}</span></div>
+    <div class="fila"><span>Laboratorios + otros aparatología — ${pctHonorario}% de ${esc(fmtCOP(totalLaboratoriosInsumos))}</span><span class="menos">-${esc(fmtCOP(deduccion))}</span></div>
+    ${
+      f.totalAtrasados > 0
+        ? `<div class="fila"><span>Aparatos de períodos anteriores — ${pctHonorario}% de ${esc(fmtCOP(f.totalAtrasados))}</span><span class="menos">-${esc(fmtCOP(deduccionAtrasados))}</span></div>`
+        : ""
+    }
+    <div class="fila subtotal"><span>Subtotal (antes de retenciones)</span><span>${esc(fmtCOP(subtotal))}</span></div>
+  </div>
+
+  <div class="retenciones">
+    <div class="fila"><span>Retención voluntaria</span><span>${esc(fmtCOP(retencionVoluntaria))}</span></div>
+    <div class="fila"><span>Retención depuración de renta</span><span>${esc(fmtCOP(retencionDepuracion))}</span></div>
+  </div>
+
+  <div class="total-pagar">
+    <span>Total a pagar</span>
+    <span class="valor">${esc(fmtCOP(totalPago))}</span>
+  </div>
+
+  <p class="ibc">IBC seguridad social (informativo, 40% del total a pagar): ${esc(fmtCOP(ibc))}</p>`;
+}
+
+/** Página 2: detalle de laboratorios (aparatos) y otros aparatología de ESTE período. */
+function paginaDetalleMes(periodo: { inicio: string; fin: string }, f: FilaDoctora): string {
   const totalLabs = f.detalleLabs.reduce((a, d) => a + d.valor, 0);
   const totalOtros = f.detalleInsumos.reduce((a, d) => a + d.valor, 0);
   const filasLabs = f.detalleLabs
@@ -162,33 +226,11 @@ function exportarDetalleDoctora(periodo: { inicio: string; fin: string }, f: Fil
         `<tr><td>${esc(d.fecha)}</td><td>${esc(d.sedeNombre)}</td><td>${esc(d.paciente)}</td><td>${esc(d.tipo)}</td><td class="num">${esc(fmtCOP(d.valor))}</td></tr>`,
     )
     .join("");
-  const html = `<!doctype html>
-<html><head><meta charset="utf-8" />
-<title>Respaldo liquidación - ${esc(f.doctora.nombre)}</title>
-<style>
-  body { font-family: Arial, Helvetica, sans-serif; color: #2E253A; padding: 24px; }
-  h1 { font-size: 18px; margin: 0 0 2px; }
-  p.periodo { color: #666; font-size: 12px; margin: 0 0 22px; }
-  h2 { font-size: 14px; margin: 22px 0 6px; }
-  table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  th, td { border: 1px solid #ddd; padding: 5px 7px; text-align: left; }
-  th { background: #f5f5f5; }
-  .num { text-align: right; }
-  .nota { color: #888; }
-  tfoot td { font-weight: 600; background: #fafafa; }
-  .btn-imprimir {
-    position: fixed; top: 14px; right: 14px; background: #2E253A; color: #fff; border: none;
-    border-radius: 8px; padding: 8px 14px; font-size: 13px; font-family: inherit; cursor: pointer;
-  }
-  @media print { body { padding: 0; } .btn-imprimir { display: none; } }
-</style>
-</head>
-<body>
-  <button class="btn-imprimir" onclick="window.print()">Imprimir / Guardar como PDF</button>
-  <h1>Respaldo de liquidación — ${esc(f.doctora.nombre)}</h1>
+  return `
+  <h1>Detalle de laboratorios y aparatología — ${esc(f.doctora.nombre)}</h1>
   <p class="periodo">Período ${periodo.inicio} a ${periodo.fin}</p>
 
-  <h2>Laboratorios (aparatos)</h2>
+  <h2>Laboratorios (aparatos) instalados este período</h2>
   <table>
     <thead><tr><th>Fecha</th><th>Sede</th><th>Paciente</th><th>Laboratorio</th><th>Factura</th><th class="num">Valor</th></tr></thead>
     <tbody>${filasLabs || `<tr><td colspan="6">Sin laboratorios en este período.</td></tr>`}</tbody>
@@ -200,48 +242,47 @@ function exportarDetalleDoctora(periodo: { inicio: string; fin: string }, f: Fil
     <thead><tr><th>Fecha</th><th>Sede</th><th>Paciente</th><th>Insumo</th><th class="num">Valor</th></tr></thead>
     <tbody>${filasOtros || `<tr><td colspan="5">Sin otros aparatología en este período.</td></tr>`}</tbody>
     <tfoot><tr><td colspan="4">Total otros aparatología</td><td class="num">${esc(fmtCOP(totalOtros))}</td></tr></tfoot>
-  </table>
-</body></html>`;
-  const ventana = window.open("", "_blank");
-  if (!ventana) {
-    window.alert("El navegador bloqueó la ventana de impresión — permite ventanas emergentes para este sitio e inténtalo de nuevo.");
-    return;
-  }
-  ventana.document.write(html);
-  ventana.document.close();
-  ventana.focus();
+  </table>`;
 }
 
-/** El estado de cuenta en sí (para enviarle a la doctora) — refleja la misma ficha que se ve en pantalla. */
-function generarLiquidacionPDF(periodo: { inicio: string; fin: string }, pctHonorario: number, f: FilaDoctora) {
-  const bruto = f.totalVentas * (pctHonorario / 100);
-  const totalLaboratoriosInsumos = f.totalLaboratorios + f.totalInsumos;
-  const deduccion = totalLaboratoriosInsumos * (pctHonorario / 100);
-  const retencionVoluntaria = Number(f.retencionValor) || 0;
-  const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
-  const subtotal = bruto - deduccion;
-  const totalPago = subtotal - retencionVoluntaria - retencionDepuracion;
-  const ibc = totalPago * 0.4;
-
-  const filasPorSede = f.porSede
+/** Página 3: aparatos instalados en un período anterior que nunca se le habían cobrado a la doctora. */
+function paginaAtrasados(periodo: { inicio: string; fin: string }, f: FilaDoctora): string {
+  const totalAtrasados = f.detalleAtrasados.reduce((a, d) => a + d.valor, 0);
+  const filas = f.detalleAtrasados
     .map(
-      (s) =>
-        `<tr><td>${esc(s.sedeNombre)}</td><td class="num">${esc(fmtCOP(s.ventas))}</td><td class="num">${esc(fmtCOP(s.labs))}</td><td class="num">${esc(fmtCOP(s.insumos))}</td></tr>`,
+      (d) =>
+        `<tr><td>${esc(d.fecha ?? "—")}</td><td>${esc(d.sedeNombre)}</td><td>${esc(d.paciente)}</td><td>${esc(d.laboratorio)}</td><td>${esc(d.facturaNumero ?? "—")}</td><td class="num">${esc(fmtCOP(d.valor))}</td></tr>`,
     )
     .join("");
+  return `
+  <h1>Aparatos de períodos anteriores por liquidar — ${esc(f.doctora.nombre)}</h1>
+  <p class="periodo">Instalados antes del ${periodo.inicio}, cobrados en este período.</p>
 
+  <table>
+    <thead><tr><th>Fecha instalación</th><th>Sede</th><th>Paciente</th><th>Laboratorio</th><th>Factura</th><th class="num">Valor</th></tr></thead>
+    <tbody>${filas || `<tr><td colspan="6">Sin aparatos atrasados en este período.</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="5">Total aparatos de períodos anteriores</td><td class="num">${esc(fmtCOP(totalAtrasados))}</td></tr></tfoot>
+  </table>`;
+}
+
+/** Une las 3 páginas en un solo documento imprimible — la doctora/admin le da "Guardar como PDF" desde el diálogo de impresión. */
+function generarLiquidacionCompletaPDF(periodo: { inicio: string; fin: string }, pctHonorario: number, f: FilaDoctora) {
+  const paginas = [paginaLiquidacion(periodo, pctHonorario, f), paginaDetalleMes(periodo, f)];
+  if (f.detalleAtrasados.length > 0) paginas.push(paginaAtrasados(periodo, f));
   const html = `<!doctype html>
 <html><head><meta charset="utf-8" />
 <title>Liquidación - ${esc(f.doctora.nombre)}</title>
 <style>
   body { font-family: Arial, Helvetica, sans-serif; color: #2E253A; padding: 24px; }
   h1 { font-size: 18px; margin: 0 0 2px; }
+  h2 { font-size: 14px; margin: 22px 0 6px; }
   p.periodo { color: #666; font-size: 12px; margin: 0 0 20px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 16px; }
   th, td { border: 1px solid #ddd; padding: 7px 10px; text-align: left; }
   th { background: #f5f5f5; font-size: 12px; color: #666; }
   .num { text-align: right; }
-  tr.total td { font-weight: 700; background: #faf8fc; }
+  .nota { color: #888; }
+  tr.total td, tfoot td { font-weight: 700; background: #faf8fc; }
   .caja { border: 1px solid #ddd; border-radius: 8px; padding: 12px 14px; background: #faf8fc; margin-bottom: 16px; }
   .fila { display: flex; justify-content: space-between; padding: 3px 0; }
   .fila.subtotal { border-top: 1px solid #ddd; margin-top: 6px; padding-top: 8px; font-weight: 700; }
@@ -252,6 +293,7 @@ function generarLiquidacionPDF(periodo: { inicio: string; fin: string }, pctHono
     background: #efe9f6; border-radius: 8px; margin: 10px 0; }
   .total-pagar .valor { font-size: 20px; font-weight: 700; }
   .ibc { color: #888; font-size: 12px; margin-top: 18px; }
+  .pagina:not(:last-child) { page-break-after: always; }
   .btn-imprimir {
     position: fixed; top: 14px; right: 14px; background: #2E253A; color: #fff; border: none;
     border-radius: 8px; padding: 8px 14px; font-size: 13px; font-family: inherit; cursor: pointer;
@@ -261,34 +303,7 @@ function generarLiquidacionPDF(periodo: { inicio: string; fin: string }, pctHono
 </head>
 <body>
   <button class="btn-imprimir" onclick="window.print()">Imprimir / Guardar como PDF</button>
-  <h1>Liquidación — ${esc(f.doctora.nombre)}</h1>
-  <p class="periodo">Período ${periodo.inicio} a ${periodo.fin}</p>
-
-  <table>
-    <thead><tr><th>Sede</th><th class="num">Ventas</th><th class="num">Laboratorios</th><th class="num">Otros aparatología</th></tr></thead>
-    <tbody>
-      ${filasPorSede}
-      <tr class="total"><td>Total</td><td class="num">${esc(fmtCOP(f.totalVentas))}</td><td class="num">${esc(fmtCOP(f.totalLaboratorios))}</td><td class="num">${esc(fmtCOP(f.totalInsumos))}</td></tr>
-    </tbody>
-  </table>
-
-  <div class="caja">
-    <div class="fila"><span>Honorarios — ${pctHonorario}% de ${esc(fmtCOP(f.totalVentas))} en ventas</span><span class="mas">+${esc(fmtCOP(bruto))}</span></div>
-    <div class="fila"><span>Laboratorios + otros aparatología — ${pctHonorario}% de ${esc(fmtCOP(totalLaboratoriosInsumos))}</span><span class="menos">-${esc(fmtCOP(deduccion))}</span></div>
-    <div class="fila subtotal"><span>Subtotal (antes de retenciones)</span><span>${esc(fmtCOP(subtotal))}</span></div>
-  </div>
-
-  <div class="retenciones">
-    <div class="fila"><span>Retención voluntaria</span><span>${esc(fmtCOP(retencionVoluntaria))}</span></div>
-    <div class="fila"><span>Retención depuración de renta</span><span>${esc(fmtCOP(retencionDepuracion))}</span></div>
-  </div>
-
-  <div class="total-pagar">
-    <span>Total a pagar</span>
-    <span class="valor">${esc(fmtCOP(totalPago))}</span>
-  </div>
-
-  <p class="ibc">IBC seguridad social (informativo, 40% del total a pagar): ${esc(fmtCOP(ibc))}</p>
+  ${paginas.map((p) => `<div class="pagina">${p}</div>`).join("\n")}
 </body></html>`;
   const ventana = window.open("", "_blank");
   if (!ventana) {
@@ -408,6 +423,62 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         }
       }
 
+      // Aparatos instalados en un período ANTERIOR que nunca se le cobraron a
+      // la doctora en su momento (liquidado_atrasado_en todavía null). Van en
+      // un bloque aparte, siempre en el período que se esté viendo ahora mismo
+      // — no importa en qué período se instalaron originalmente.
+      type LabRowAtrasado = LabRowLiq & { id: string };
+      const atrasadosData = await fetchTodasLasFilas<LabRowAtrasado>((desde, hasta) => {
+        let q = supabase
+          .from("lab_ordenes")
+          .select(
+            "id, doctora_id, doctora_instala_id, tipo_servicio, sede_id, valor_factura, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, factura_numero, pacientes(nombre), laboratorios(nombre)",
+          )
+          .not("valor_factura", "is", null)
+          .is("liquidado_atrasado_en", null)
+          .lt("fecha_instalado", periodo.inicio)
+          .order("fecha_instalado", { ascending: true })
+          .range(desde, hasta);
+        if (sedeId) q = q.eq("sede_id", sedeId);
+        return q as unknown as PromiseLike<{ data: LabRowAtrasado[] | null }>;
+      });
+      const labsAtrasadosPorDoctora: Record<string, number> = {};
+      const detalleAtrasadosPorDoctora: Record<string, DetalleLabAtrasado[]> = {};
+      const agregarAtrasado = (doctoraId: string, det: DetalleLabAtrasado) => {
+        detalleAtrasadosPorDoctora[doctoraId] = detalleAtrasadosPorDoctora[doctoraId] ?? [];
+        detalleAtrasadosPorDoctora[doctoraId].push(det);
+      };
+      for (const l of atrasadosData) {
+        const fechaComparar = l.mes_liquidacion ?? l.fecha_instalado;
+        // Si mes_liquidacion ya lo movió a este período o a uno futuro, ya
+        // entra por el camino normal de arriba — no lo dupliquemos aquí.
+        if (!fechaComparar || fechaComparar >= periodo.inicio) continue;
+        const valor = Number(l.valor_factura);
+        const sedeNom = sedeNombre[l.sede_id] ?? "—";
+        const paciente = l.pacientes?.nombre ?? "—";
+        const laboratorio = l.laboratorios?.nombre ?? "—";
+        if (l.tipo_servicio === "fabricacion" && l.doctora_instala_id && l.doctora_instala_id !== l.doctora_id) {
+          const nombreImpresion = doctoraNombrePorId[l.doctora_id] ?? "—";
+          const nombreInstala = doctoraNombrePorId[l.doctora_instala_id] ?? "—";
+          labsAtrasadosPorDoctora[l.doctora_id] = (labsAtrasadosPorDoctora[l.doctora_id] ?? 0) + valor / 2;
+          labsAtrasadosPorDoctora[l.doctora_instala_id] = (labsAtrasadosPorDoctora[l.doctora_instala_id] ?? 0) + valor / 2;
+          agregarAtrasado(l.doctora_id, {
+            id: l.id, fecha: fechaComparar, sedeNombre: sedeNom, paciente, laboratorio, facturaNumero: l.factura_numero,
+            valor: valor / 2, nota: `50/50 con ${nombreInstala}, que instaló`,
+          });
+          agregarAtrasado(l.doctora_instala_id, {
+            id: l.id, fecha: fechaComparar, sedeNombre: sedeNom, paciente, laboratorio, facturaNumero: l.factura_numero,
+            valor: valor / 2, nota: `50/50 con ${nombreImpresion}, que tomó la impresión`,
+          });
+        } else {
+          labsAtrasadosPorDoctora[l.doctora_id] = (labsAtrasadosPorDoctora[l.doctora_id] ?? 0) + valor;
+          agregarAtrasado(l.doctora_id, {
+            id: l.id, fecha: fechaComparar, sedeNombre: sedeNom, paciente, laboratorio, facturaNumero: l.factura_numero,
+            valor, nota: null,
+          });
+        }
+      }
+
       // Insumos de aparatología (elásticos intraoral, tracción extra oral, máscara
       // facial) también los paga la doctora al mismo % que su honorario, igual que
       // los laboratorios — se suman a la misma base antes de aplicar el %.
@@ -461,11 +532,18 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
       }
 
       const nuevasFilas: FilaDoctora[] = ((doctoras as Doctora[]) ?? [])
-        .filter((d) => (ventasPorDoctora[d.id] ?? 0) > 0 || (labsPorDoctora[d.id] ?? 0) > 0 || (insumosPorDoctora[d.id] ?? 0) > 0)
+        .filter(
+          (d) =>
+            (ventasPorDoctora[d.id] ?? 0) > 0 ||
+            (labsPorDoctora[d.id] ?? 0) > 0 ||
+            (insumosPorDoctora[d.id] ?? 0) > 0 ||
+            (labsAtrasadosPorDoctora[d.id] ?? 0) > 0,
+        )
         .map((d) => {
           const totalVentas = ventasPorDoctora[d.id] ?? 0;
           const totalLaboratorios = labsPorDoctora[d.id] ?? 0;
           const totalInsumos = insumosPorDoctora[d.id] ?? 0;
+          const totalAtrasados = labsAtrasadosPorDoctora[d.id] ?? 0;
           const bruto = totalVentas * (pct / 100);
           const retencionAuto = d.retencion_voluntaria_activa ? bruto * (Number(d.retencion_voluntaria_pct) / 100) : 0;
           const guardada = guardadaPorDoctora[d.id];
@@ -487,9 +565,11 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
             totalVentas,
             totalLaboratorios,
             totalInsumos,
+            totalAtrasados,
             porSede,
             detalleLabs: detalleLabsPorDoctora[d.id] ?? [],
             detalleInsumos: detalleInsumosPorDoctora[d.id] ?? [],
+            detalleAtrasados: detalleAtrasadosPorDoctora[d.id] ?? [],
             retencionValor: retencionVoluntariaValor ? String(Math.round(retencionVoluntariaValor)) : "",
             retencionDepuracionValor: guardada?.retencionDepuracion ? String(Math.round(guardada.retencionDepuracion)) : "",
             guardando: false,
@@ -540,9 +620,10 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
     const f = filas[idx];
     const bruto = f.totalVentas * (pctHonorario / 100);
     const deduccion = (f.totalLaboratorios + f.totalInsumos) * (pctHonorario / 100);
+    const deduccionAtrasados = f.totalAtrasados * (pctHonorario / 100);
     const retencionVoluntaria = Number(f.retencionValor) || 0;
     const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
-    const totalPago = bruto - deduccion - retencionVoluntaria - retencionDepuracion;
+    const totalPago = bruto - deduccion - deduccionAtrasados - retencionVoluntaria - retencionDepuracion;
     // IBC (Ingreso Base de Cotización) para seguridad social de independientes:
     // 40% del valor total a pagar, por ley.
     const ibc = totalPago * 0.4;
@@ -559,7 +640,8 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
           valor_bruto: bruto,
           total_laboratorios: f.totalLaboratorios,
           total_insumos: f.totalInsumos,
-          deduccion_labs_insumos: deduccion,
+          total_aparatos_atrasados: f.totalAtrasados,
+          deduccion_labs_insumos: deduccion + deduccionAtrasados,
           total_pago: totalPago,
           retencion_valor: retencionVoluntaria || null,
           retencion_tipo: retencionVoluntaria > 0 ? "voluntaria" : null,
@@ -586,6 +668,15 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
           tipo: "depuracion",
         });
       }
+      if (f.detalleAtrasados.length > 0) {
+        // Quedan resueltos: no vuelven a aparecer como pendientes ni se
+        // pueden liquidar dos veces (ver lab_ordenes.liquidado_atrasado_en).
+        await supabase
+          .from("lab_ordenes")
+          .update({ liquidado_atrasado_en: periodo.fin })
+          .in("id", [...new Set(f.detalleAtrasados.map((d) => d.id))]);
+        actualizarFila(idx, { detalleAtrasados: [], totalAtrasados: 0 });
+      }
     }
     actualizarFila(idx, { guardando: false, guardado: true });
     setTimeout(() => actualizarFila(idx, { guardado: false }), 1500);
@@ -603,9 +694,10 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         const bruto = f.totalVentas * (pctHonorario / 100);
         const totalLaboratoriosInsumos = f.totalLaboratorios + f.totalInsumos;
         const deduccion = totalLaboratoriosInsumos * (pctHonorario / 100);
+        const deduccionAtrasados = f.totalAtrasados * (pctHonorario / 100);
         const retencionVoluntaria = Number(f.retencionValor) || 0;
         const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
-        const totalPago = bruto - deduccion - retencionVoluntaria - retencionDepuracion;
+        const totalPago = bruto - deduccion - deduccionAtrasados - retencionVoluntaria - retencionDepuracion;
         const ibc = totalPago * 0.4;
         return (
           <div key={f.doctora.id} className="bg-white rounded-xl border border-gray-200 p-4">
@@ -658,9 +750,17 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                 </span>
                 <span className="font-medium text-red-600">-{fmtCOP(deduccion)}</span>
               </div>
+              {f.totalAtrasados > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">
+                    Aparatos de períodos anteriores — {pctHonorario}% de {fmtCOP(f.totalAtrasados)}
+                  </span>
+                  <span className="font-medium text-red-600">-{fmtCOP(deduccionAtrasados)}</span>
+                </div>
+              )}
               <div className="flex items-center justify-between pt-1.5 border-t border-gray-200 font-semibold">
                 <span>Subtotal (antes de retenciones)</span>
-                <span>{fmtCOP(bruto - deduccion)}</span>
+                <span>{fmtCOP(bruto - deduccion - deduccionAtrasados)}</span>
               </div>
             </div>
             <div className="flex items-end gap-4 flex-wrap mb-3">
@@ -695,6 +795,47 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
               </div>
             </div>
 
+            {f.detalleAtrasados.length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 overflow-x-auto mb-3">
+                <p className="text-xs font-semibold text-amber-800 px-3 pt-2">
+                  Aparatos de períodos anteriores por liquidar ({f.detalleAtrasados.length})
+                </p>
+                <table className="w-full text-xs mt-1">
+                  <thead>
+                    <tr className="text-left text-amber-700">
+                      <th className="px-3 py-1.5">Fecha instalación</th>
+                      <th className="px-3 py-1.5">Sede</th>
+                      <th className="px-3 py-1.5">Paciente</th>
+                      <th className="px-3 py-1.5">Laboratorio</th>
+                      <th className="px-3 py-1.5">Factura</th>
+                      <th className="px-3 py-1.5 text-right">Valor</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {f.detalleAtrasados.map((d, i) => (
+                      <tr key={i} className="border-t border-amber-100">
+                        <td className="px-3 py-1.5">{d.fecha}</td>
+                        <td className="px-3 py-1.5">{d.sedeNombre}</td>
+                        <td className="px-3 py-1.5">{d.paciente}</td>
+                        <td className="px-3 py-1.5">
+                          {d.laboratorio}
+                          {d.nota && <span className="text-amber-600"> ({d.nota})</span>}
+                        </td>
+                        <td className="px-3 py-1.5">{d.facturaNumero ?? "—"}</td>
+                        <td className="px-3 py-1.5 text-right">{fmtCOP(d.valor)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t border-amber-200 font-semibold">
+                      <td className="px-3 py-1.5" colSpan={5}>Total aparatos de períodos anteriores</td>
+                      <td className="px-3 py-1.5 text-right">{fmtCOP(f.totalAtrasados)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+
             {!sedeId && f.porSede.length >= 1 && f.totalVentas > 0 && (
               <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-3">
                 <p className="text-xs font-medium text-gray-400 mb-1.5">
@@ -718,10 +859,10 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
 
             <div className="flex items-center gap-3 mb-3 flex-wrap">
               <button
-                onClick={() => generarLiquidacionPDF(periodo, pctHonorario, f)}
+                onClick={() => generarLiquidacionCompletaPDF(periodo, pctHonorario, f)}
                 className="flex items-center gap-1 text-xs font-medium text-white bg-[var(--acento)] px-3 py-1.5 rounded-md"
               >
-                <Download size={13} /> Generar liquidación (PDF)
+                <Download size={13} /> Generar liquidación completa (PDF)
               </button>
               <button
                 onClick={() => actualizarFila(idx, { detalleAbierto: !f.detalleAbierto })}
@@ -729,14 +870,6 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
               >
                 {f.detalleAbierto ? "Ocultar detalle" : "Ver detalle (laboratorios e insumos)"}
               </button>
-              {(f.detalleLabs.length > 0 || f.detalleInsumos.length > 0) && (
-                <button
-                  onClick={() => exportarDetalleDoctora(periodo, f)}
-                  className="flex items-center gap-1 text-xs font-medium text-gray-500"
-                >
-                  <Download size={13} /> Exportar respaldo en PDF
-                </button>
-              )}
               <button onClick={() => alternarHistorial(idx)} className="text-xs font-medium text-gray-500">
                 {f.historialAbierto ? "Ocultar historial" : "Ver historial de liquidaciones guardadas"}
               </button>
@@ -926,6 +1059,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
       setCargando(true);
       type LabRowLab = {
         id: string; mes_liquidacion: string | null; fecha_emision_factura: string | null; fecha_recibido: string | null; fecha_instalado: string | null;
+        liquidado_atrasado_en: string | null;
         valor_factura: number; factura_numero: string | null; tipo_servicio: string; doctora_id: string; laboratorio_id: string;
         pacientes: { nombre: string } | null; doctoras: { nombre: string } | null; doctora_instala: { nombre: string } | null; laboratorios: { nombre: string } | null;
       };
@@ -933,7 +1067,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
         let q = supabase
           .from("lab_ordenes")
           .select(
-            "id, sede_id, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, valor_factura, factura_numero, tipo_servicio, doctora_id, laboratorio_id, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), doctora_instala:doctoras!lab_ordenes_doctora_instala_id_fkey(nombre), laboratorios(nombre)",
+            "id, sede_id, mes_liquidacion, fecha_emision_factura, fecha_recibido, fecha_instalado, liquidado_atrasado_en, valor_factura, factura_numero, tipo_servicio, doctora_id, laboratorio_id, pacientes(nombre), doctoras!lab_ordenes_doctora_id_fkey(nombre), doctora_instala:doctoras!lab_ordenes_doctora_instala_id_fkey(nombre), laboratorios(nombre)",
           )
           .not("valor_factura", "is", null)
           // Sin esto no había orden garantizado — la lista salía revuelta en
@@ -946,8 +1080,15 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
         return q as unknown as PromiseLike<{ data: LabRowLab[] | null }>;
       });
       const filtradas = data.filter((r) => {
-        const f = r.mes_liquidacion ?? r.fecha_instalado;
-        return f && f >= periodo.inicio && f <= periodo.fin;
+        // Instalado (o reubicado con mes_liquidacion) en este período, o
+        // aparato de un período anterior que se acaba de liquidar a la
+        // doctora en este período (ver lab_ordenes.liquidado_atrasado_en) —
+        // a Ruby/Ortokit les entra igual, sin ninguna nota de que es atrasado.
+        const fNormal = r.mes_liquidacion ?? r.fecha_instalado;
+        const enPeriodoNormal = !!fNormal && fNormal >= periodo.inicio && fNormal <= periodo.fin;
+        const enPeriodoAtrasado =
+          !!r.liquidado_atrasado_en && r.liquidado_atrasado_en >= periodo.inicio && r.liquidado_atrasado_en <= periodo.fin;
+        return enPeriodoNormal || enPeriodoAtrasado;
       });
       setFilas(
         filtradas.map((r) => ({
