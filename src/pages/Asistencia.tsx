@@ -39,12 +39,19 @@ function llegadaEfectivaISO(marcadoEnLlegada: string, fechaYMD: string, horaAuto
   return marcadoEnLlegada < inicioISO ? inicioISO : marcadoEnLlegada;
 }
 
-/** Horas realmente trabajadas ese día según sus marcas (mismo cálculo que
- *  usa el reporte mensual: llegada→salida, descontando almuerzo si hay).
- *  Si es entre semana y no marcó las dos horas de almuerzo, se asume 1h fija
- *  en vez de contarla como trabajada (el sábado no tiene almuerzo, no
- *  aplica). Llegar antes de la hora esperada de ese día no suma horas de
- *  más — se cuenta desde ahí, no desde la marca real. */
+/** Horas realmente trabajadas ese día según sus marcas, para efectos de
+ *  calcular el faltante del día (Compensado) — no el mismo total que se ve
+ *  en el reporte semanal. Llegar antes de la hora esperada de ese día no
+ *  suma horas de más — se cuenta desde ahí, no desde la marca real. Salir
+ *  DESPUÉS del cierre normal tampoco rellena el faltante — esa cola es
+ *  horas extra (otro concepto, en el reporte de horas extra), no
+ *  "recuperación" de una entrada tarde autorizada. Si es entre semana y no
+ *  marcó las dos horas de almuerzo, se asume 1h fija en vez de contarla
+ *  como trabajada — pero solo si el turno de verdad cruza la ventana de
+ *  almuerzo normal (si ya entró después de que el almuerzo hubiera
+ *  terminado, ej. autorizada a entrar la 1pm, nunca tuvo un almuerzo que
+ *  perderse, y descontarle una hora de todos modos le restaría de más). El
+ *  sábado no tiene almuerzo, no aplica. */
 function horasTrabajadasDeMarcas(
   marcas: { tipo: TipoAsistencia; marcado_en: string }[],
   fecha: string,
@@ -54,11 +61,18 @@ function horasTrabajadasDeMarcas(
   for (const m of marcas) if (!porTipo[m.tipo]) porTipo[m.tipo] = m.marcado_en;
   if (!porTipo.llegada || !porTipo.salida) return 0;
   const llegadaEfectiva = llegadaEfectivaISO(porTipo.llegada, fecha, horaEntradaAutorizada);
-  let horas = (new Date(porTipo.salida).getTime() - new Date(llegadaEfectiva).getTime()) / 3_600_000;
+  const horario = horasPorDefecto(fecha);
+  const finNormalISO = new Date(`${fecha}T${horario.salida}:00-05:00`).toISOString();
+  const salidaEfectiva = porTipo.salida > finNormalISO ? finNormalISO : porTipo.salida;
+  let horas = (new Date(salidaEfectiva).getTime() - new Date(llegadaEfectiva).getTime()) / 3_600_000;
   if (porTipo.salida_almuerzo && porTipo.entrada_almuerzo) {
     horas -= (new Date(porTipo.entrada_almuerzo).getTime() - new Date(porTipo.salida_almuerzo).getTime()) / 3_600_000;
   } else if (diaDeSemana(fecha) !== 6) {
-    horas -= 1;
+    const almuerzoInicioISO = new Date(`${fecha}T${horario.salida_almuerzo}:00-05:00`).toISOString();
+    const almuerzoFinISO = new Date(`${fecha}T${horario.entrada_almuerzo}:00-05:00`).toISOString();
+    if (llegadaEfectiva < almuerzoFinISO && salidaEfectiva > almuerzoInicioISO) {
+      horas -= 1;
+    }
   }
   return Math.max(0, horas);
 }
@@ -2411,32 +2425,14 @@ export function Asistencia() {
               const saldoRestante = persona ? persona.saldoAnterior - compensadoEstePeriodo : 0;
               return (
               <div key={fila.perfilId} className="border border-gray-100 rounded-lg p-3">
-                <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                  <div>
-                    <p className="font-medium text-sm">{fila.nombre}</p>
-                    {persona && (
-                      <p className="text-xs text-gray-500">
-                        Horas extra período anterior:{" "}
-                        <span className="text-violet-700 font-semibold">{persona.saldoAnterior.toFixed(1)} h</span>
-                      </p>
-                    )}
-                  </div>
-                  <div className="text-sm text-right space-y-0.5">
-                    <p>
-                      <span className="text-gray-500">Horas extra del período: </span>
-                      <span className={`font-semibold ${fila.totalHorasExtra > 0 ? "text-emerald-700" : "text-gray-400"}`}>
-                        {fila.totalHorasExtra.toFixed(1)} h
-                      </span>
+                <div className="mb-2">
+                  <p className="font-medium text-sm">{fila.nombre}</p>
+                  {persona && (
+                    <p className="text-xs text-gray-500">
+                      Horas extra período anterior:{" "}
+                      <span className="text-violet-700 font-semibold">{persona.saldoAnterior.toFixed(1)} h</span>
                     </p>
-                    {persona?.saldoAnteriorFecha && (
-                      <p>
-                        <span className="text-gray-500">Saldo restante: </span>
-                        <span className={`font-semibold ${saldoRestante >= 0 ? "text-violet-700" : "text-red-600"}`}>
-                          {saldoRestante.toFixed(1)} h
-                        </span>
-                      </p>
-                    )}
-                  </div>
+                  )}
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -2481,20 +2477,46 @@ export function Asistencia() {
                         </tr>
                       ))}
                     </tbody>
+                    <tfoot>
+                      <tr className="border-t border-gray-200 font-medium">
+                        <td className="py-1">Total</td>
+                        <td className="py-1 text-right"></td>
+                        <td className="py-1 text-right text-violet-700">
+                          {compensadoEstePeriodo > 0 ? compensadoEstePeriodo.toFixed(1) : "—"}
+                        </td>
+                        <td className="py-1 text-right" colSpan={6}></td>
+                      </tr>
+                    </tfoot>
                   </table>
                 </div>
-                {persona?.saldoAnteriorFecha && (
-                  <p className="text-sm text-right mt-1.5 pt-1.5 border-t border-gray-100">
-                    <span className="text-gray-500">Liquidación (pasa como saldo al próximo período): </span>
-                    <span
-                      className={`font-semibold ${
-                        saldoRestante + fila.totalHorasExtra >= 0 ? "text-violet-700" : "text-red-600"
-                      }`}
-                    >
-                      {(saldoRestante + fila.totalHorasExtra).toFixed(1)} h
+                <div className="text-sm text-right mt-1.5 pt-1.5 border-t border-gray-100 space-y-0.5">
+                  <p>
+                    <span className="text-gray-500">Horas extra del período: </span>
+                    <span className={`font-semibold ${fila.totalHorasExtra > 0 ? "text-emerald-700" : "text-gray-400"}`}>
+                      {fila.totalHorasExtra.toFixed(1)} h
                     </span>
                   </p>
-                )}
+                  {persona?.saldoAnteriorFecha && (
+                    <>
+                      <p>
+                        <span className="text-gray-500">Saldo restante: </span>
+                        <span className={`font-semibold ${saldoRestante >= 0 ? "text-violet-700" : "text-red-600"}`}>
+                          {saldoRestante.toFixed(1)} h
+                        </span>
+                      </p>
+                      <p>
+                        <span className="text-gray-500">Liquidación (pasa como saldo al próximo período): </span>
+                        <span
+                          className={`font-semibold ${
+                            saldoRestante + fila.totalHorasExtra >= 0 ? "text-violet-700" : "text-red-600"
+                          }`}
+                        >
+                          {(saldoRestante + fila.totalHorasExtra).toFixed(1)} h
+                        </span>
+                      </p>
+                    </>
+                  )}
+                </div>
                 {(() => {
                   const observaciones = [
                     ...(ausenciasPorPersona[fila.perfilId] ?? []).map((a) => ({
