@@ -537,7 +537,13 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
           const totalLaboratorios = labsPorDoctora[d.id] ?? 0;
           const totalInsumos = insumosPorDoctora[d.id] ?? 0;
           const bruto = totalVentas * (pct / 100);
-          const retencionAuto = d.retencion_voluntaria_activa ? bruto * (Number(d.retencion_voluntaria_pct) / 100) : 0;
+          // La retención voluntaria se calcula sobre el subtotal YA
+          // descontados laboratorios/insumos (lo que realmente se le va a
+          // pagar), no sobre el bruto de honorarios antes de esa deducción.
+          const subtotalAntesDeRetenciones = bruto - (totalLaboratorios + totalInsumos) * (pct / 100);
+          const retencionAuto = d.retencion_voluntaria_activa
+            ? subtotalAntesDeRetenciones * (Number(d.retencion_voluntaria_pct) / 100)
+            : 0;
           const guardada = guardadaPorDoctora[d.id];
           const retencionVoluntariaValor = guardada?.retencionValor != null ? Number(guardada.retencionValor) : retencionAuto;
           const sedeIds = new Set([
