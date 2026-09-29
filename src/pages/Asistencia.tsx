@@ -77,6 +77,50 @@ function horasTrabajadasDeMarcas(
   return Math.max(0, horas);
 }
 
+/** Separa el faltante de un día compensado en dos partes: lo que viene de
+ *  llegar tarde (siempre sin autorizar — hora_entrada_autorizada solo MUEVE
+ *  la hora esperada, nunca "perdona" llegar después de ella) y lo que viene
+ *  de salir antes del cierre normal (autorizado solo el tramo desde la hora
+ *  de salida autorizada en adelante — si salió incluso antes de esa hora,
+ *  ese tramo de más también es sin autorizar). Las dos partes suman lo
+ *  mismo que ya daba jornadaOrdinariaHoras - horasTrabajadasDeMarcas
+ *  combinado — esto solo reparte ese mismo número, no cambia cuánto se le
+ *  devuelve a la semana. */
+function descomponerCompensadoDia(
+  marcas: { tipo: TipoAsistencia; marcado_en: string }[],
+  fecha: string,
+  horaEntradaAutorizada?: string | null,
+  horaSalidaAutorizada?: string | null,
+): { minutosCompensadas: number; minutosIngreso: number } {
+  const porTipo: Partial<Record<TipoAsistencia, string>> = {};
+  for (const m of marcas) if (!porTipo[m.tipo]) porTipo[m.tipo] = m.marcado_en;
+  if (!porTipo.llegada || !porTipo.salida) return { minutosCompensadas: 0, minutosIngreso: 0 };
+  const horario = horasPorDefecto(fecha);
+  const inicioNormalISO = new Date(`${fecha}T${horario.llegada}:00-05:00`).toISOString();
+  const finNormalISO = new Date(`${fecha}T${horario.salida}:00-05:00`).toISOString();
+  const llegadaEfectiva = llegadaEfectivaISO(porTipo.llegada, fecha, horaEntradaAutorizada);
+  const minutosTardeEntrada = Math.max(
+    0,
+    (new Date(llegadaEfectiva).getTime() - new Date(inicioNormalISO).getTime()) / 60_000,
+  );
+  const salidaEfectiva = porTipo.salida > finNormalISO ? finNormalISO : porTipo.salida;
+  const minutosFaltanteSalida = Math.max(
+    0,
+    (new Date(finNormalISO).getTime() - new Date(salidaEfectiva).getTime()) / 60_000,
+  );
+  let minutosSalidaAutorizada = 0;
+  if (horaSalidaAutorizada) {
+    const autorizadaISO = new Date(`${fecha}T${horaSalidaAutorizada.slice(0, 5)}:00-05:00`).toISOString();
+    const piso = salidaEfectiva > autorizadaISO ? salidaEfectiva : autorizadaISO;
+    minutosSalidaAutorizada = Math.max(0, (new Date(finNormalISO).getTime() - new Date(piso).getTime()) / 60_000);
+  }
+  const minutosSalidaSinAutorizar = minutosFaltanteSalida - minutosSalidaAutorizada;
+  return {
+    minutosCompensadas: Math.round(minutosSalidaAutorizada),
+    minutosIngreso: Math.round(minutosTardeEntrada + minutosSalidaSinAutorizar),
+  };
+}
+
 /** Escapa texto libre (nombres, notas) antes de interpolarlo en el HTML del
  *  PDF, para no romper el documento si alguien escribió comillas o símbolos. */
 function escPdf(texto: string): string {
@@ -275,13 +319,12 @@ interface AusenciaReporte {
 interface CompensacionReporte {
   perfil_id: string;
   fecha: string;
-  minutos: number;
-  // true si ese día admin autorizó una entrada tardía o salida temprana
-  // puntual (hora_entrada_autorizada/hora_salida_autorizada) — ese
-  // faltante es "Compensadas" (una excepción que la empresa concedió).
-  // Si no hubo autorización, es tardanza sin permiso — "Ingreso" — y no
-  // se resta del saldo de la misma forma (ver armarReporteHoras).
-  autorizado: boolean;
+  // Ya separados por descomponerCompensadoDia: minutos de ese día que caen
+  // dentro de una autorización de admin (Compensadas) vs por fuera de
+  // cualquier autorización (Ingreso). Un mismo día puede tener de los dos
+  // (ej. llegó 8 min tarde sin permiso Y salió temprano con permiso).
+  minutosCompensadas: number;
+  minutosIngreso: number;
 }
 
 interface AutorizacionReporte {
@@ -373,12 +416,12 @@ function armarReporteHoras(
   const horaAutorizadaPorDia = new Map<string, string>();
   for (const a of autorizaciones) horaAutorizadaPorDia.set(`${a.perfil_id}|${a.fecha}`, a.hora);
 
-  const compensadosPorDia = new Map<string, number>();
-  const autorizadoPorDia = new Set<string>();
+  const compensadasPorDia = new Map<string, number>();
+  const ingresoPorDia = new Map<string, number>();
   for (const c of compensaciones) {
     const clave = `${c.perfil_id}|${c.fecha}`;
-    compensadosPorDia.set(clave, (compensadosPorDia.get(clave) ?? 0) + c.minutos);
-    if (c.autorizado) autorizadoPorDia.add(clave);
+    compensadasPorDia.set(clave, (compensadasPorDia.get(clave) ?? 0) + c.minutosCompensadas);
+    ingresoPorDia.set(clave, (ingresoPorDia.get(clave) ?? 0) + c.minutosIngreso);
   }
 
   const porPersonaYDia = new Map<string, { nombre: string; marcas: Record<string, string> }>();
@@ -439,18 +482,17 @@ function armarReporteHoras(
       // en vez de contarla como trabajada (el sábado no aplica).
       horas -= 1;
     }
-    const minutosDia = compensadosPorDia.get(clave) ?? 0;
-    horas += minutosDia / 60;
+    const minutosCompensadasDia = compensadasPorDia.get(clave) ?? 0;
+    const minutosIngresoDia = ingresoPorDia.get(clave) ?? 0;
+    horas += (minutosCompensadasDia + minutosIngresoDia) / 60;
     if (horas <= 0) continue;
     const lunes = lunesDeSemana(dia);
     const claveSemana = `${perfilId}|${lunes}`;
     const acumulado = porPersonaYSemana.get(claveSemana);
-    // El mismo faltante del día se reparte en dos cajas: si hubo
-    // autorización puntual de admin ese día, es "Compensadas" (excepción
-    // que la empresa concedió); si no, es "Ingreso" (tardanza sin
-    // permiso) — ambas ya están sumadas de vuelta en "horas" arriba, solo
-    // se reparten distinto para el desglose.
-    const esAutorizado = autorizadoPorDia.has(clave);
+    // El faltante del día ya viene repartido en dos cajas desde
+    // descomponerCompensadoDia (Compensadas = dentro de una autorización de
+    // admin, Ingreso = por fuera) — las dos ya están sumadas de vuelta en
+    // "horas" arriba, solo se reparten distinto para el desglose.
     porPersonaYSemana.set(claveSemana, {
       nombre,
       horas: (acumulado?.horas ?? 0) + horas,
@@ -459,8 +501,8 @@ function armarReporteHoras(
       // Extra lo sume completo en vez de dejar que "rellene" un faltante
       // entre semana (ver uso más abajo).
       horasSabado: (acumulado?.horasSabado ?? 0) + (diaDeSemana(dia) === 6 ? horas : 0),
-      minutosCompensados: (acumulado?.minutosCompensados ?? 0) + (esAutorizado ? minutosDia : 0),
-      minutosIngreso: (acumulado?.minutosIngreso ?? 0) + (esAutorizado ? 0 : minutosDia),
+      minutosCompensados: (acumulado?.minutosCompensados ?? 0) + minutosCompensadasDia,
+      minutosIngreso: (acumulado?.minutosIngreso ?? 0) + minutosIngresoDia,
       horasFestivo: acumulado?.horasFestivo ?? 0,
     });
   }
@@ -1162,13 +1204,28 @@ export function Asistencia() {
       }
     }
     setNotasPorPersona(notasAgrupadas);
+    // Para separar cada día compensado en Compensadas/Ingreso hace falta la
+    // llegada y salida reales de ese día — ya están en "filas" (marcas del
+    // rango completo, con colchón), así que se agrupan por persona+día en
+    // vez de volver a consultarlas.
+    const marcasPorPersonaYDia: Record<string, { tipo: TipoAsistencia; marcado_en: string }[]> = {};
+    for (const r of filas) {
+      (marcasPorPersonaYDia[`${r.perfil_id}|${fechaBogota(r.marcado_en)}`] ??= []).push({
+        tipo: r.tipo,
+        marcado_en: r.marcado_en,
+      });
+    }
     const compensaciones: CompensacionReporte[] = notasRows
       .filter((n) => n.minutos_compensados)
       .map((n) => ({
         perfil_id: n.perfil_id,
         fecha: n.fecha,
-        minutos: n.minutos_compensados,
-        autorizado: !!(n.hora_entrada_autorizada || n.hora_salida_autorizada),
+        ...descomponerCompensadoDia(
+          marcasPorPersonaYDia[`${n.perfil_id}|${n.fecha}`] ?? [],
+          n.fecha,
+          n.hora_entrada_autorizada,
+          n.hora_salida_autorizada,
+        ),
       }));
     const autorizaciones: AutorizacionReporte[] = notasRows
       .filter((n) => n.hora_entrada_autorizada)
@@ -1418,13 +1475,24 @@ export function Asistencia() {
         perfil_id: string; fecha: string; minutos_compensados: number;
         hora_entrada_autorizada: string | null; hora_salida_autorizada: string | null;
       }[]) ?? [];
+    const marcasPorPersonaYDia: Record<string, { tipo: TipoAsistencia; marcado_en: string }[]> = {};
+    for (const r of filas) {
+      (marcasPorPersonaYDia[`${r.perfil_id}|${fechaBogota(r.marcado_en)}`] ??= []).push({
+        tipo: r.tipo,
+        marcado_en: r.marcado_en,
+      });
+    }
     const compensaciones: CompensacionReporte[] = notasRows
       .filter((n) => n.minutos_compensados)
       .map((n) => ({
         perfil_id: n.perfil_id,
         fecha: n.fecha,
-        minutos: n.minutos_compensados,
-        autorizado: !!(n.hora_entrada_autorizada || n.hora_salida_autorizada),
+        ...descomponerCompensadoDia(
+          marcasPorPersonaYDia[`${n.perfil_id}|${n.fecha}`] ?? [],
+          n.fecha,
+          n.hora_entrada_autorizada,
+          n.hora_salida_autorizada,
+        ),
       }));
     const autorizaciones: AutorizacionReporte[] = notasRows
       .filter((n) => n.hora_entrada_autorizada)
@@ -1455,26 +1523,15 @@ export function Asistencia() {
         .single();
       const saldoActual = Number(perfilData?.saldo_horas_extra_anterior ?? 0);
       // Lo compensado (con autorización) e Ingreso (sin autorización) DE
-      // ESTE PERÍODO — mismo rango y misma división que "Saldo restante" y
-      // "Liquidación" en pantalla, para que el número que queda al cerrar
-      // sea el mismo que se veía justo antes de cerrarlo.
-      const { data: compensadosData } = await supabase
-        .from("asistencia_notas_dia")
-        .select("minutos_compensados, hora_entrada_autorizada, hora_salida_autorizada")
-        .eq("perfil_id", fp.perfilId)
-        .gt("minutos_compensados", 0)
-        .gte("fecha", inicio)
-        .lt("fecha", finExclusivo);
-      const filasCompensado =
-        (compensadosData as {
-          minutos_compensados: number; hora_entrada_autorizada: string | null; hora_salida_autorizada: string | null;
-        }[]) ?? [];
-      const compensadoHoras = filasCompensado
-        .filter((c) => c.hora_entrada_autorizada || c.hora_salida_autorizada)
-        .reduce((a, c) => a + c.minutos_compensados, 0) / 60;
-      const ingresoHoras = filasCompensado
-        .filter((c) => !c.hora_entrada_autorizada && !c.hora_salida_autorizada)
-        .reduce((a, c) => a + c.minutos_compensados, 0) / 60;
+      // ESTE PERÍODO — mismo rango y misma división (ya descompuesta por
+      // descomponerCompensadoDia) que "Saldo restante" y "Liquidación" en
+      // pantalla, para que el número que queda al cerrar sea el mismo que
+      // se veía justo antes de cerrarlo.
+      const delPeriodo = compensaciones.filter(
+        (c) => c.perfil_id === fp.perfilId && c.fecha >= inicio && c.fecha < finExclusivo,
+      );
+      const compensadoHoras = delPeriodo.reduce((a, c) => a + c.minutosCompensadas, 0) / 60;
+      const ingresoHoras = delPeriodo.reduce((a, c) => a + c.minutosIngreso, 0) / 60;
       const nuevoSaldo = saldoActual - compensadoHoras - ingresoHoras + fp.totalHorasExtra;
       await supabase
         .from("perfiles")
