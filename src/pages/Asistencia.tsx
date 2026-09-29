@@ -488,7 +488,15 @@ function armarReporteHoras(
     // "Atención pac." pero nunca cuentan para el total de horas extra ni
     // para el saldo/liquidación.
     const extraAtencion = extraAtencionSinMarca.get(claveSemana) ?? 0;
-    const horasExtra = Math.max(0, horas - metaAjustada) + extraAtencion;
+    // Ojo: Extra usa metaSemanal completa (SIN el descuento por
+    // ausencia), no metaAjustada — si no, alguien con incapacidad/vacaciones
+    // que trabajó normal los días que sí estuvo mostraría "horas extra" solo
+    // porque la meta se achicó, sin haber trabajado de más de verdad (la
+    // hora extra real se consolida el viernes en la tarde, cuando ya se
+    // llevan las 42h de la semana completa — quien no llegó hasta ahí por
+    // estar incapacitado no pudo haber generado extra). metaAjustada sigue
+    // usándose para Déficit, que sí debe perdonar el día no trabajado.
+    const horasExtra = Math.max(0, horas - metaSemanal) + extraAtencion;
     const horasDeficit = Math.max(0, metaAjustada - horas);
     const horasTrabajadas = horas - minutosCompensados / 60 - horasFestivo;
     fila.semanas.push({
