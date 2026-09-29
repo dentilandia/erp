@@ -400,7 +400,7 @@ function armarReporteHoras(
 
   const porPersonaYSemana = new Map<
     string,
-    { nombre: string; horas: number; minutosCompensados: number; horasFestivo: number }
+    { nombre: string; horas: number; horasSabado: number; minutosCompensados: number; horasFestivo: number }
   >();
   for (const [clave, { nombre, marcas }] of porPersonaYDia) {
     const [perfilId, dia] = clave.split("|");
@@ -425,6 +425,11 @@ function armarReporteHoras(
     porPersonaYSemana.set(claveSemana, {
       nombre,
       horas: (acumulado?.horas ?? 0) + horas,
+      // El sábado siempre fue tiempo extra por encima de la jornada entre
+      // semana, nunca parte de la meta de 42h — se guarda aparte para que
+      // Extra lo sume completo en vez de dejar que "rellene" un faltante
+      // entre semana (ver uso más abajo).
+      horasSabado: (acumulado?.horasSabado ?? 0) + (diaDeSemana(dia) === 6 ? horas : 0),
       minutosCompensados: (acumulado?.minutosCompensados ?? 0) + minutosDia,
       horasFestivo: acumulado?.horasFestivo ?? 0,
     });
@@ -437,6 +442,7 @@ function armarReporteHoras(
     porPersonaYSemana.set(claveSemana, {
       nombre: acumulado?.nombre ?? nombre,
       horas: (acumulado?.horas ?? 0) + credito,
+      horasSabado: acumulado?.horasSabado ?? 0,
       minutosCompensados: acumulado?.minutosCompensados ?? 0,
       horasFestivo: (acumulado?.horasFestivo ?? 0) + credito,
     });
@@ -472,6 +478,7 @@ function armarReporteHoras(
     if (domingo < rangoInicio || lunes >= rangoFin) continue;
     const cuentaParaEsteMes = lunes >= rangoInicio && lunes < rangoFin;
     const horas = porPersonaYSemana.get(claveSemana)?.horas ?? 0;
+    const horasSabado = porPersonaYSemana.get(claveSemana)?.horasSabado ?? 0;
     const minutosCompensados = porPersonaYSemana.get(claveSemana)?.minutosCompensados ?? 0;
     const horasFestivo = porPersonaYSemana.get(claveSemana)?.horasFestivo ?? 0;
     const diasAusencia = ausenciasPorSemana.get(claveSemana)?.dias ?? 0;
@@ -496,7 +503,11 @@ function armarReporteHoras(
     // llevan las 42h de la semana completa — quien no llegó hasta ahí por
     // estar incapacitado no pudo haber generado extra). metaAjustada sigue
     // usándose para Déficit, que sí debe perdonar el día no trabajado.
-    const horasExtra = Math.max(0, horas - metaSemanal) + extraAtencion;
+    // El sábado se suma COMPLETO aparte (nunca neteado contra la meta de
+    // 42h junto con el resto de la semana) — si no, un sábado trabajado con
+    // una semana floja entre semana no generaba ninguna hora extra, aunque
+    // el sábado en sí siempre fue tiempo extra por definición.
+    const horasExtra = Math.max(0, horas - horasSabado - metaSemanal) + horasSabado + extraAtencion;
     const horasDeficit = Math.max(0, metaAjustada - horas);
     const horasTrabajadas = horas - minutosCompensados / 60 - horasFestivo;
     fila.semanas.push({
