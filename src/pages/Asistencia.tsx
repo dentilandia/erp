@@ -270,6 +270,64 @@ interface AutorizacionReporte {
   hora: string;
 }
 
+type HeColabRow = {
+  perfil_id: string;
+  hora_salida: string;
+  asistencia_horas_extra: {
+    fecha: string;
+    hora_ingreso_consultorio: string | null;
+    paciente_nombre: string | null;
+    motivo: string;
+  } | null;
+};
+
+/** De las horas extra por atención de paciente/otro motivo (finalizadas),
+ *  separa cuánto ya quedó reflejado en la marca real de salida (fin de
+ *  jornada — esa cola ya suma dentro de "horas" en armarReporteHoras, vía
+ *  asistencia_registros) de cuánto NO (interrupción de mediodía — nunca
+ *  tocó asistencia_registros, así que si no se suma aparte desaparece del
+ *  total de horas extra, aunque sí se vea en la columna "Atención pac."). */
+function separarExtraAtencion(rows: HeColabRow[], desde: string, hasta: string) {
+  const total = new Map<string, number>();
+  const sinMarca = new Map<string, number>();
+  const porDia = new Map<string, number>();
+  const motivoPorDia = new Map<string, string>();
+  for (const row of rows) {
+    const fechaHE = row.asistencia_horas_extra?.fecha;
+    if (!fechaHE || fechaHE < desde || fechaHE >= hasta) continue;
+    const finNormal = horasPorDefecto(fechaHE).salida;
+    const finNormalMs = new Date(`${fechaHE}T${finNormal}:00-05:00`).getTime();
+    const salidaMs = new Date(row.hora_salida).getTime();
+    let extra: number;
+    let reflejadoEnMarca: boolean;
+    if (salidaMs > finNormalMs) {
+      extra = (salidaMs - finNormalMs) / 3_600_000;
+      reflejadoEnMarca = true;
+    } else {
+      const horaIngreso = row.asistencia_horas_extra?.hora_ingreso_consultorio;
+      if (!horaIngreso) continue;
+      const ingresoMs = new Date(`${fechaHE}T${horaIngreso.slice(0, 5)}:00-05:00`).getTime();
+      extra = Math.max(0, (salidaMs - ingresoMs) / 3_600_000);
+      reflejadoEnMarca = false;
+    }
+    if (extra <= 0) continue;
+    const claveSemana = `${row.perfil_id}|${lunesDeSemana(fechaHE)}`;
+    total.set(claveSemana, (total.get(claveSemana) ?? 0) + extra);
+    if (!reflejadoEnMarca) sinMarca.set(claveSemana, (sinMarca.get(claveSemana) ?? 0) + extra);
+    const claveDia = `${row.perfil_id}|${fechaHE}`;
+    porDia.set(claveDia, (porDia.get(claveDia) ?? 0) + extra);
+    // El paciente es el motivo real solo cuando sí hay uno — para "otro
+    // motivo" (paciente_nombre null) se usa el motivo tal cual escrito.
+    motivoPorDia.set(
+      claveDia,
+      row.asistencia_horas_extra?.paciente_nombre
+        ? `atención de paciente (${row.asistencia_horas_extra.paciente_nombre})`
+        : (row.asistencia_horas_extra?.motivo ?? "otro motivo"),
+    );
+  }
+  return { total, sinMarca, porDia, motivoPorDia };
+}
+
 /** Arma el reporte de horas del rango (mes calendario o período de
  *  liquidación): agrupa las marcas por persona y día calendario, calcula
  *  horas trabajadas (llegada→salida, descontando el almuerzo si hay
@@ -290,6 +348,7 @@ function armarReporteHoras(
   rangoInicio: string,
   rangoFin: string,
   metaSemanal: number,
+  extraAtencionSinMarca: Map<string, number> = new Map(),
 ): FilaPersona[] {
   const horaAutorizadaPorDia = new Map<string, string>();
   for (const a of autorizaciones) horaAutorizadaPorDia.set(`${a.perfil_id}|${a.fecha}`, a.hora);
@@ -423,7 +482,13 @@ function armarReporteHoras(
     const metaAjustada = Math.max(0, metaSemanal - horasDescuentoAusencia);
     if (!porPersona.has(perfilId)) porPersona.set(perfilId, { perfilId, nombre, semanas: [], totalHorasExtra: 0 });
     const fila = porPersona.get(perfilId)!;
-    const horasExtra = Math.max(0, horas - metaAjustada);
+    // La parte de horas extra por atención de paciente/otro motivo que NO
+    // quedó reflejada en la marca real de salida (interrupción de mediodía)
+    // se suma aparte — si no, esas horas quedan documentadas y visibles en
+    // "Atención pac." pero nunca cuentan para el total de horas extra ni
+    // para el saldo/liquidación.
+    const extraAtencion = extraAtencionSinMarca.get(claveSemana) ?? 0;
+    const horasExtra = Math.max(0, horas - metaAjustada) + extraAtencion;
     const horasDeficit = Math.max(0, metaAjustada - horas);
     const horasTrabajadas = horas - minutosCompensados / 60 - horasFestivo;
     fila.semanas.push({
@@ -1052,62 +1117,24 @@ export function Asistencia() {
     const festivosSet = new Set((festivosData ?? []).map((f) => f.fecha as string));
 
     // Horas extra por atención de paciente ya cargadas (ver sección de
-    // solicitudes arriba) — se calculan aparte de "horas" porque ya están
-    // incluidas ahí a través de la marca de salida real; esto solo separa
-    // cuánto de esa hora extra vino de una atención documentada. Cuando la
-    // salida registrada cae DESPUÉS del cierre normal (se quedaron hasta
-    // tarde), lo extra es solo esa cola. Cuando cae ANTES del cierre normal
-    // (ej. una interrupción del almuerzo — "otro motivo"), no hubo ninguna
-    // cola después del cierre para medir, así que se cuenta toda la
-    // duración del incidente (ingreso→salida) en su lugar.
+    // solicitudes arriba) — ver separarExtraAtencion para la distinción
+    // entre lo que ya quedó reflejado en la marca real de salida (fin de
+    // jornada) y lo que no (interrupción de mediodía, "otro motivo").
     const { data: heData } = await supabase
       .from("asistencia_horas_extra_colaboradores")
       .select("perfil_id, hora_salida, asistencia_horas_extra(fecha, hora_ingreso_consultorio, paciente_nombre, motivo)")
       .not("hora_salida", "is", null);
-    const extraAtencion: Record<string, number> = {};
-    const extraAtencionDia: Record<string, number> = {};
-    const extraAtencionMotivoDia: Record<string, string> = {};
-    for (const row of (heData as unknown as {
-      perfil_id: string;
-      hora_salida: string;
-      asistencia_horas_extra: {
-        fecha: string;
-        hora_ingreso_consultorio: string | null;
-        paciente_nombre: string | null;
-        motivo: string;
-      } | null;
-    }[]) ?? []) {
-      const fechaHE = row.asistencia_horas_extra?.fecha;
-      if (!fechaHE || fechaHE < desde || fechaHE >= hasta) continue;
-      const finNormal = horasPorDefecto(fechaHE).salida;
-      const finNormalMs = new Date(`${fechaHE}T${finNormal}:00-05:00`).getTime();
-      const salidaMs = new Date(row.hora_salida).getTime();
-      let extra: number;
-      if (salidaMs > finNormalMs) {
-        extra = (salidaMs - finNormalMs) / 3_600_000;
-      } else {
-        const horaIngreso = row.asistencia_horas_extra?.hora_ingreso_consultorio;
-        if (!horaIngreso) continue;
-        const ingresoMs = new Date(`${fechaHE}T${horaIngreso.slice(0, 5)}:00-05:00`).getTime();
-        extra = Math.max(0, (salidaMs - ingresoMs) / 3_600_000);
-      }
-      if (extra <= 0) continue;
-      const claveSemana = `${row.perfil_id}|${lunesDeSemana(fechaHE)}`;
-      extraAtencion[claveSemana] = (extraAtencion[claveSemana] ?? 0) + extra;
-      const claveDia = `${row.perfil_id}|${fechaHE}`;
-      extraAtencionDia[claveDia] = (extraAtencionDia[claveDia] ?? 0) + extra;
-      // El paciente es el motivo real solo cuando sí hay uno — para "otro
-      // motivo" (paciente_nombre null) se usa el motivo tal cual escrito.
-      extraAtencionMotivoDia[claveDia] = row.asistencia_horas_extra?.paciente_nombre
-        ? `atención de paciente (${row.asistencia_horas_extra.paciente_nombre})`
-        : (row.asistencia_horas_extra?.motivo ?? "otro motivo");
-    }
-    setExtraAtencionPorPersonaYSemana(extraAtencion);
-    setExtraAtencionPorPersonaYDia(extraAtencionDia);
-    setExtraAtencionMotivoPorPersonaYDia(extraAtencionMotivoDia);
+    const { total: extraAtencion, sinMarca: extraAtencionSinMarca, porDia: extraAtencionDia, motivoPorDia: extraAtencionMotivoDia } =
+      separarExtraAtencion((heData as unknown as HeColabRow[]) ?? [], desde, hasta);
+    setExtraAtencionPorPersonaYSemana(Object.fromEntries(extraAtencion));
+    setExtraAtencionPorPersonaYDia(Object.fromEntries(extraAtencionDia));
+    setExtraAtencionMotivoPorPersonaYDia(Object.fromEntries(extraAtencionMotivoDia));
 
     setReporte(
-      armarReporteHoras(filas, ausencias, compensaciones, autorizaciones, festivosSet, rango.inicio, rango.fin, metaSemanal),
+      armarReporteHoras(
+        filas, ausencias, compensaciones, autorizaciones, festivosSet, rango.inicio, rango.fin, metaSemanal,
+        extraAtencionSinMarca,
+      ),
     );
     setCargandoReporte(false);
   }
@@ -1334,7 +1361,16 @@ export function Asistencia() {
     const { data: festivosData } = await supabase.from("festivos_colombia").select("fecha").gte("fecha", desde).lt("fecha", hasta);
     const festivosSet = new Set((festivosData ?? []).map((f) => f.fecha as string));
 
-    const filasReporte = armarReporteHoras(filas, ausencias, compensaciones, autorizaciones, festivosSet, inicio, finExclusivo, metaSemanal);
+    const { data: heData } = await supabase
+      .from("asistencia_horas_extra_colaboradores")
+      .select("perfil_id, hora_salida, asistencia_horas_extra(fecha, hora_ingreso_consultorio, paciente_nombre, motivo)")
+      .not("hora_salida", "is", null);
+    const { sinMarca: extraAtencionSinMarca } = separarExtraAtencion((heData as unknown as HeColabRow[]) ?? [], desde, hasta);
+
+    const filasReporte = armarReporteHoras(
+      filas, ausencias, compensaciones, autorizaciones, festivosSet, inicio, finExclusivo, metaSemanal,
+      extraAtencionSinMarca,
+    );
 
     for (const fp of filasReporte) {
       // Se lee directo de la base (no del estado de React) por si se están
