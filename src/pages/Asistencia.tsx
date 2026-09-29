@@ -94,12 +94,11 @@ function escPdf(texto: string): string {
 async function recalcularCompensadoDia(perfilId: string, fecha: string): Promise<number> {
   const { data: nota } = await supabase
     .from("asistencia_notas_dia")
-    .select("minutos_compensados, hora_entrada_autorizada")
+    .select("nota, minutos_compensados, hora_entrada_autorizada, hora_salida_autorizada")
     .eq("perfil_id", perfilId)
     .eq("fecha", fecha)
     .maybeSingle();
   const minutosGuardados = nota?.minutos_compensados ?? 0;
-  if (minutosGuardados <= 0) return minutosGuardados;
   const desde = `${fecha}T00:00:00-05:00`;
   const hasta = `${sumarDias(fecha, 1)}T00:00:00-05:00`;
   const { data: marcas } = await supabase
@@ -125,11 +124,21 @@ async function recalcularCompensadoDia(perfilId: string, fecha: string): Promise
     ) * 60,
   );
   if (recalculado !== minutosGuardados) {
-    await supabase
-      .from("asistencia_notas_dia")
-      .update({ minutos_compensados: recalculado })
-      .eq("perfil_id", perfilId)
-      .eq("fecha", fecha);
+    // upsert (no update): si el día nunca se había abierto en Registro
+    // administrativo, tampoco existía la fila — antes esto se quedaba sin
+    // guardar para siempre porque un update sobre una fila inexistente no
+    // hace nada. Se preservan nota/horas autorizadas ya guardadas.
+    await supabase.from("asistencia_notas_dia").upsert(
+      {
+        perfil_id: perfilId,
+        fecha,
+        nota: nota?.nota ?? "",
+        minutos_compensados: recalculado,
+        hora_entrada_autorizada: nota?.hora_entrada_autorizada ?? null,
+        hora_salida_autorizada: nota?.hora_salida_autorizada ?? null,
+      },
+      { onConflict: "perfil_id,fecha" },
+    );
   }
   return recalculado;
 }
