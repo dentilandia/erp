@@ -782,6 +782,12 @@ export function Asistencia() {
   const [extraAtencionPorPersonaYSemana, setExtraAtencionPorPersonaYSemana] = useState<Record<string, number>>({});
   const [extraAtencionPorPersonaYDia, setExtraAtencionPorPersonaYDia] = useState<Record<string, number>>({});
   const [extraAtencionMotivoPorPersonaYDia, setExtraAtencionMotivoPorPersonaYDia] = useState<Record<string, string>>({});
+  // Solo la parte de extraAtencionPorPersonaYSemana que NO quedó reflejada en
+  // la marca real de salida (interrupción de mediodía) — la misma que se le
+  // suma a horasExtra en armarReporteHoras. Se usa para que "Totales" cuadre
+  // con Trabajadas + Compensadas + Atención pac., sin sumar dos veces el caso
+  // de fin de jornada (ese ya está dentro de "Trabajadas" vía la marca real).
+  const [extraAtencionSinMarcaPorPersonaYSemana, setExtraAtencionSinMarcaPorPersonaYSemana] = useState<Record<string, number>>({});
 
   async function cargarPersonas() {
     // Operación también necesita esta lista para elegir colaboradores en
@@ -1129,6 +1135,7 @@ export function Asistencia() {
     setExtraAtencionPorPersonaYSemana(Object.fromEntries(extraAtencion));
     setExtraAtencionPorPersonaYDia(Object.fromEntries(extraAtencionDia));
     setExtraAtencionMotivoPorPersonaYDia(Object.fromEntries(extraAtencionMotivoDia));
+    setExtraAtencionSinMarcaPorPersonaYSemana(Object.fromEntries(extraAtencionSinMarca));
 
     setReporte(
       armarReporteHoras(
@@ -1166,7 +1173,9 @@ export function Asistencia() {
                   : "—"
               }</td>
               <td class="num">${s.horasDescuentoAusencia > 0 ? "+" + s.horasDescuentoAusencia.toFixed(1) : "—"}</td>
-              <td class="num tot">${(s.horas + s.horasDescuentoAusencia).toFixed(1)}</td>
+              <td class="num tot">${(
+                s.horas + s.horasDescuentoAusencia + (extraAtencionSinMarcaPorPersonaYSemana[`${fila.perfilId}|${s.lunes}`] ?? 0)
+              ).toFixed(1)}</td>
               <td class="num">${s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
               <td class="num">${s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>
             </tr>`,
@@ -2507,7 +2516,13 @@ export function Asistencia() {
                           <td className="py-1 text-right text-sky-600">
                             {s.horasDescuentoAusencia > 0 ? `+${s.horasDescuentoAusencia.toFixed(1)}` : "—"}
                           </td>
-                          <td className="py-1 text-right font-medium">{(s.horas + s.horasDescuentoAusencia).toFixed(1)}</td>
+                          <td className="py-1 text-right font-medium">
+                            {(
+                              s.horas +
+                              s.horasDescuentoAusencia +
+                              (extraAtencionSinMarcaPorPersonaYSemana[`${fila.perfilId}|${s.lunes}`] ?? 0)
+                            ).toFixed(1)}
+                          </td>
                           <td className="py-1 text-right text-emerald-700">{s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
                           <td className="py-1 text-right text-amber-600">{s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>
                         </tr>
