@@ -77,6 +77,72 @@ function horasTrabajadasDeMarcas(
   return Math.max(0, horas);
 }
 
+/** Separa el faltante YA CALCULADO de un día compensado (minutosGuardado —
+ *  jornadaOrdinariaHoras - horasTrabajadasDeMarcas, la fuente de verdad) en
+ *  Compensadas (dentro de una autorización de admin) vs Ingreso (por
+ *  fuera). Ojo con la entrada: si hay una hora de entrada autorizada MÁS
+ *  TARDE que la normal (ej. "autorizada a entrar a la 1pm"), la tardanza se
+ *  mide contra ESA hora, nunca contra la normal — compararla contra la
+ *  normal fija fue el bug original: un día 100% autorizado (llegó justo a
+ *  la hora autorizada) aparecía con cientos de minutos de "Ingreso" solo
+ *  por ser más tarde que las 8:30 de siempre.
+ *  Se calculan por separado cuánto de la entrada tardía y cuánto de la
+ *  salida temprana caen dentro de lo autorizado, y el resultado se recorta
+ *  para nunca superar minutosGuardado — un turno autorizado que cruza el
+ *  almuerzo puede hacer que la ventana autorizada, sumada aparte, no
+ *  encaje exacto contra ese número; lo que sobra cae en Ingreso, nunca al
+ *  revés (nunca se le atribuye a Compensadas más de lo que el faltante
+ *  real vale). */
+function descomponerCompensadoDia(
+  marcas: { tipo: TipoAsistencia; marcado_en: string }[],
+  fecha: string,
+  horaEntradaAutorizada: string | null | undefined,
+  horaSalidaAutorizada: string | null | undefined,
+  minutosGuardado: number,
+): { minutosCompensadas: number; minutosIngreso: number } {
+  const porTipo: Partial<Record<TipoAsistencia, string>> = {};
+  for (const m of marcas) if (!porTipo[m.tipo]) porTipo[m.tipo] = m.marcado_en;
+  if (!porTipo.llegada || !porTipo.salida) {
+    // Sin marcas todavía (día programado de un día para otro, antes de que
+    // la persona marque) — no hay de dónde separar, se usa el booleano
+    // simple como mejor estimado hasta que haya marcas reales.
+    return horaEntradaAutorizada || horaSalidaAutorizada
+      ? { minutosCompensadas: minutosGuardado, minutosIngreso: 0 }
+      : { minutosCompensadas: 0, minutosIngreso: minutosGuardado };
+  }
+  const horario = horasPorDefecto(fecha);
+  const inicioNormalMs = new Date(`${fecha}T${horario.llegada}:00-05:00`).getTime();
+  const finNormalMs = new Date(`${fecha}T${horario.salida}:00-05:00`).getTime();
+
+  // Entrada: el tramo completo [normal, entrada autorizada] es tiempo que
+  // admin ya decidió que no cuenta en contra — sin importar a qué hora
+  // llegó realmente dentro de (o antes de) ese tramo. Si la hora autorizada
+  // es más TEMPRANO que la normal (ej. "reunión desde las 8am"), no hay
+  // ningún tramo que perdonar (no es un permiso para llegar tarde).
+  let minutosEntradaAutorizada = 0;
+  if (horaEntradaAutorizada) {
+    const autorizadaMs = new Date(`${fecha}T${horaEntradaAutorizada.slice(0, 5)}:00-05:00`).getTime();
+    minutosEntradaAutorizada = Math.max(0, (autorizadaMs - inicioNormalMs) / 60_000);
+  }
+
+  // Salida: autorizado el tramo desde la hora de salida autorizada en
+  // adelante que de verdad se usó (si salió después de esa hora, usó menos
+  // del permiso; si salió antes, el resto es sin autorizar).
+  let minutosSalidaAutorizada = 0;
+  if (horaSalidaAutorizada) {
+    const autorizadaMs = new Date(`${fecha}T${horaSalidaAutorizada.slice(0, 5)}:00-05:00`).getTime();
+    const salidaEfectivaMs = Math.min(new Date(porTipo.salida).getTime(), finNormalMs);
+    const pisoMs = Math.max(salidaEfectivaMs, autorizadaMs);
+    minutosSalidaAutorizada = Math.max(0, (finNormalMs - pisoMs) / 60_000);
+  }
+
+  const minutosCompensadas = Math.min(
+    Math.round(minutosEntradaAutorizada + minutosSalidaAutorizada),
+    minutosGuardado,
+  );
+  return { minutosCompensadas, minutosIngreso: minutosGuardado - minutosCompensadas };
+}
+
 /** Escapa texto libre (nombres, notas) antes de interpolarlo en el HTML del
  *  PDF, para no romper el documento si alguien escribió comillas o símbolos. */
 function escPdf(texto: string): string {
@@ -245,11 +311,16 @@ interface SemanaReporte {
   horasTrabajadas: number;
   horas: number;
   horasExtra: number;
-  horasDeficit: number;
   diasAusencia: number;
   horasDescuentoAusencia: number;
   horasFestivo: number;
+  // Minutos de faltante en días CON autorización puntual (admin dejó
+  // entrar tarde/salir temprano ese día) — es lo que se resta del saldo
+  // anterior para dar "Saldo restante".
   minutosCompensados: number;
+  // Minutos de faltante en días SIN autorización — tardanza normal que
+  // marcaron tarde sin permiso. Se resta aparte en la Liquidación.
+  minutosIngreso: number;
   cuentaParaEsteMes: boolean;
 }
 
@@ -270,7 +341,12 @@ interface AusenciaReporte {
 interface CompensacionReporte {
   perfil_id: string;
   fecha: string;
-  minutos: number;
+  // Ya separados por descomponerCompensadoDia: minutos de ese día que caen
+  // dentro de una autorización de admin (Compensadas) vs por fuera de
+  // cualquier autorización (Ingreso). Un mismo día puede tener de los dos
+  // (ej. llegó 8 min tarde sin permiso Y salió temprano con permiso).
+  minutosCompensadas: number;
+  minutosIngreso: number;
 }
 
 interface AutorizacionReporte {
@@ -362,9 +438,12 @@ function armarReporteHoras(
   const horaAutorizadaPorDia = new Map<string, string>();
   for (const a of autorizaciones) horaAutorizadaPorDia.set(`${a.perfil_id}|${a.fecha}`, a.hora);
 
-  const compensadosPorDia = new Map<string, number>();
+  const compensadasPorDia = new Map<string, number>();
+  const ingresoPorDia = new Map<string, number>();
   for (const c of compensaciones) {
-    compensadosPorDia.set(`${c.perfil_id}|${c.fecha}`, (compensadosPorDia.get(`${c.perfil_id}|${c.fecha}`) ?? 0) + c.minutos);
+    const clave = `${c.perfil_id}|${c.fecha}`;
+    compensadasPorDia.set(clave, (compensadasPorDia.get(clave) ?? 0) + c.minutosCompensadas);
+    ingresoPorDia.set(clave, (ingresoPorDia.get(clave) ?? 0) + c.minutosIngreso);
   }
 
   const porPersonaYDia = new Map<string, { nombre: string; marcas: Record<string, string> }>();
@@ -409,7 +488,7 @@ function armarReporteHoras(
 
   const porPersonaYSemana = new Map<
     string,
-    { nombre: string; horas: number; horasSabado: number; minutosCompensados: number; horasFestivo: number }
+    { nombre: string; horas: number; horasSabado: number; minutosCompensados: number; minutosIngreso: number; horasFestivo: number }
   >();
   for (const [clave, { nombre, marcas }] of porPersonaYDia) {
     const [perfilId, dia] = clave.split("|");
@@ -425,12 +504,17 @@ function armarReporteHoras(
       // en vez de contarla como trabajada (el sábado no aplica).
       horas -= 1;
     }
-    const minutosDia = compensadosPorDia.get(clave) ?? 0;
-    horas += minutosDia / 60;
+    const minutosCompensadasDia = compensadasPorDia.get(clave) ?? 0;
+    const minutosIngresoDia = ingresoPorDia.get(clave) ?? 0;
+    horas += (minutosCompensadasDia + minutosIngresoDia) / 60;
     if (horas <= 0) continue;
     const lunes = lunesDeSemana(dia);
     const claveSemana = `${perfilId}|${lunes}`;
     const acumulado = porPersonaYSemana.get(claveSemana);
+    // El faltante del día ya viene repartido en dos cajas desde
+    // descomponerCompensadoDia (Compensadas = dentro de una autorización de
+    // admin, Ingreso = por fuera) — las dos ya están sumadas de vuelta en
+    // "horas" arriba, solo se reparten distinto para el desglose.
     porPersonaYSemana.set(claveSemana, {
       nombre,
       horas: (acumulado?.horas ?? 0) + horas,
@@ -439,7 +523,8 @@ function armarReporteHoras(
       // Extra lo sume completo en vez de dejar que "rellene" un faltante
       // entre semana (ver uso más abajo).
       horasSabado: (acumulado?.horasSabado ?? 0) + (diaDeSemana(dia) === 6 ? horas : 0),
-      minutosCompensados: (acumulado?.minutosCompensados ?? 0) + minutosDia,
+      minutosCompensados: (acumulado?.minutosCompensados ?? 0) + minutosCompensadasDia,
+      minutosIngreso: (acumulado?.minutosIngreso ?? 0) + minutosIngresoDia,
       horasFestivo: acumulado?.horasFestivo ?? 0,
     });
   }
@@ -453,6 +538,7 @@ function armarReporteHoras(
       horas: (acumulado?.horas ?? 0) + credito,
       horasSabado: acumulado?.horasSabado ?? 0,
       minutosCompensados: acumulado?.minutosCompensados ?? 0,
+      minutosIngreso: acumulado?.minutosIngreso ?? 0,
       horasFestivo: (acumulado?.horasFestivo ?? 0) + credito,
     });
   }
@@ -489,13 +575,11 @@ function armarReporteHoras(
     const horas = porPersonaYSemana.get(claveSemana)?.horas ?? 0;
     const horasSabado = porPersonaYSemana.get(claveSemana)?.horasSabado ?? 0;
     const minutosCompensados = porPersonaYSemana.get(claveSemana)?.minutosCompensados ?? 0;
+    const minutosIngreso = porPersonaYSemana.get(claveSemana)?.minutosIngreso ?? 0;
     const horasFestivo = porPersonaYSemana.get(claveSemana)?.horasFestivo ?? 0;
     const diasAusencia = ausenciasPorSemana.get(claveSemana)?.dias ?? 0;
     const nombre = porPersonaYSemana.get(claveSemana)?.nombre ?? ausenciasPorSemana.get(claveSemana)?.nombre ?? "—";
     const horasDescuentoAusencia = ausenciasPorSemana.get(claveSemana)?.horasDescuento ?? 0;
-    // El festivo no se resta de la meta (por ley no se le puede descontar a
-    // nadie) — ya viene sumado dentro de "horas" como si se hubiera trabajado.
-    const metaAjustada = Math.max(0, metaSemanal - horasDescuentoAusencia);
     if (!porPersona.has(perfilId)) porPersona.set(perfilId, { perfilId, nombre, semanas: [], totalHorasExtra: 0 });
     const fila = porPersona.get(perfilId)!;
     // La parte de horas extra por atención de paciente/otro motivo que NO
@@ -504,31 +588,32 @@ function armarReporteHoras(
     // "Atención pac." pero nunca cuentan para el total de horas extra ni
     // para el saldo/liquidación.
     const extraAtencion = extraAtencionSinMarca.get(claveSemana) ?? 0;
-    // Ojo: Extra usa metaSemanal completa (SIN el descuento por
-    // ausencia), no metaAjustada — si no, alguien con incapacidad/vacaciones
-    // que trabajó normal los días que sí estuvo mostraría "horas extra" solo
-    // porque la meta se achicó, sin haber trabajado de más de verdad (la
-    // hora extra real se consolida el viernes en la tarde, cuando ya se
-    // llevan las 42h de la semana completa — quien no llegó hasta ahí por
-    // estar incapacitado no pudo haber generado extra). metaAjustada sigue
-    // usándose para Déficit, que sí debe perdonar el día no trabajado.
+    // Ojo: Extra usa metaSemanal completa (SIN el descuento por ausencia) —
+    // si no, alguien con incapacidad/vacaciones que trabajó normal los días
+    // que sí estuvo mostraría "horas extra" solo porque la meta se achicó,
+    // sin haber trabajado de más de verdad (la hora extra real se consolida
+    // el viernes en la tarde, cuando ya se llevan las 42h de la semana
+    // completa — quien no llegó hasta ahí por estar incapacitado no pudo
+    // haber generado extra).
     // El sábado se suma COMPLETO aparte (nunca neteado contra la meta de
     // 42h junto con el resto de la semana) — si no, un sábado trabajado con
     // una semana floja entre semana no generaba ninguna hora extra, aunque
     // el sábado en sí siempre fue tiempo extra por definición.
     const horasExtra = Math.max(0, horas - horasSabado - metaSemanal) + horasSabado + extraAtencion;
-    const horasDeficit = Math.max(0, metaAjustada - horas);
-    const horasTrabajadas = horas - minutosCompensados / 60 - horasFestivo;
+    // "Trabajadas" resta el faltante TOTAL del día (autorizado + sin
+    // autorizar) — ya está sumado de vuelta en "horas", así que hay que
+    // quitarlo completo, sin importar en cuál de las dos cajas cayó.
+    const horasTrabajadas = horas - (minutosCompensados + minutosIngreso) / 60 - horasFestivo;
     fila.semanas.push({
       lunes,
       horasTrabajadas,
       horas,
       horasExtra,
-      horasDeficit,
       diasAusencia,
       horasDescuentoAusencia,
       horasFestivo,
       minutosCompensados,
+      minutosIngreso,
       cuentaParaEsteMes,
     });
     if (cuentaParaEsteMes) fila.totalHorasExtra += horasExtra;
@@ -1126,12 +1211,13 @@ export function Asistencia() {
 
     const { data: notas } = await supabase
       .from("asistencia_notas_dia")
-      .select("perfil_id, fecha, nota, minutos_compensados, hora_entrada_autorizada")
+      .select("perfil_id, fecha, nota, minutos_compensados, hora_entrada_autorizada, hora_salida_autorizada")
       .gte("fecha", desde)
       .lt("fecha", hasta);
     const notasRows =
       (notas as {
-        perfil_id: string; fecha: string; nota: string; minutos_compensados: number; hora_entrada_autorizada: string | null;
+        perfil_id: string; fecha: string; nota: string; minutos_compensados: number;
+        hora_entrada_autorizada: string | null; hora_salida_autorizada: string | null;
       }[]) ?? [];
     const notasAgrupadas: Record<string, { fecha: string; nota: string; minutosCompensados: number }[]> = {};
     for (const n of notasRows) {
@@ -1140,9 +1226,30 @@ export function Asistencia() {
       }
     }
     setNotasPorPersona(notasAgrupadas);
+    // Para separar cada día compensado en Compensadas/Ingreso hace falta la
+    // llegada y salida reales de ese día — ya están en "filas" (marcas del
+    // rango completo, con colchón), así que se agrupan por persona+día en
+    // vez de volver a consultarlas.
+    const marcasPorPersonaYDia: Record<string, { tipo: TipoAsistencia; marcado_en: string }[]> = {};
+    for (const r of filas) {
+      (marcasPorPersonaYDia[`${r.perfil_id}|${fechaBogota(r.marcado_en)}`] ??= []).push({
+        tipo: r.tipo,
+        marcado_en: r.marcado_en,
+      });
+    }
     const compensaciones: CompensacionReporte[] = notasRows
       .filter((n) => n.minutos_compensados)
-      .map((n) => ({ perfil_id: n.perfil_id, fecha: n.fecha, minutos: n.minutos_compensados }));
+      .map((n) => ({
+        perfil_id: n.perfil_id,
+        fecha: n.fecha,
+        ...descomponerCompensadoDia(
+          marcasPorPersonaYDia[`${n.perfil_id}|${n.fecha}`] ?? [],
+          n.fecha,
+          n.hora_entrada_autorizada,
+          n.hora_salida_autorizada,
+          n.minutos_compensados,
+        ),
+      }));
     const autorizaciones: AutorizacionReporte[] = notasRows
       .filter((n) => n.hora_entrada_autorizada)
       .map((n) => ({ perfil_id: n.perfil_id, fecha: n.fecha, hora: n.hora_entrada_autorizada as string }));
@@ -1205,7 +1312,7 @@ export function Asistencia() {
                 s.horas + s.horasDescuentoAusencia + (extraAtencionSinMarcaPorPersonaYSemana[`${fila.perfilId}|${s.lunes}`] ?? 0)
               ).toFixed(1)}</td>
               <td class="num">${s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
-              <td class="num">${s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>
+              <td class="num">${s.minutosIngreso > 0 ? (s.minutosIngreso / 60).toFixed(1) : "—"}</td>
             </tr>`,
           )
           .join("");
@@ -1246,7 +1353,7 @@ export function Asistencia() {
               <span>Horas extra: <strong>${fila.totalHorasExtra.toFixed(1)} h</strong></span>
             </div>
             <table>
-              <thead><tr><th>Semana</th><th>Trabaj.</th><th>Comp.</th><th>Festivo</th><th>Atención</th><th>Ausencia</th><th>Total</th><th>Extra</th><th>Déficit</th></tr></thead>
+              <thead><tr><th>Semana</th><th>Trabaj.</th><th>Comp.</th><th>Festivo</th><th>Atención</th><th>Ausencia</th><th>Total</th><th>Extra</th><th>Ingreso</th></tr></thead>
               <tbody>${filasSemana}</tbody>
             </table>
             ${observacionesHtml}
@@ -1383,14 +1490,34 @@ export function Asistencia() {
 
     const { data: notas } = await supabase
       .from("asistencia_notas_dia")
-      .select("perfil_id, fecha, minutos_compensados, hora_entrada_autorizada")
+      .select("perfil_id, fecha, minutos_compensados, hora_entrada_autorizada, hora_salida_autorizada")
       .gte("fecha", desde)
       .lt("fecha", hasta);
     const notasRows =
-      (notas as { perfil_id: string; fecha: string; minutos_compensados: number; hora_entrada_autorizada: string | null }[]) ?? [];
+      (notas as {
+        perfil_id: string; fecha: string; minutos_compensados: number;
+        hora_entrada_autorizada: string | null; hora_salida_autorizada: string | null;
+      }[]) ?? [];
+    const marcasPorPersonaYDia: Record<string, { tipo: TipoAsistencia; marcado_en: string }[]> = {};
+    for (const r of filas) {
+      (marcasPorPersonaYDia[`${r.perfil_id}|${fechaBogota(r.marcado_en)}`] ??= []).push({
+        tipo: r.tipo,
+        marcado_en: r.marcado_en,
+      });
+    }
     const compensaciones: CompensacionReporte[] = notasRows
       .filter((n) => n.minutos_compensados)
-      .map((n) => ({ perfil_id: n.perfil_id, fecha: n.fecha, minutos: n.minutos_compensados }));
+      .map((n) => ({
+        perfil_id: n.perfil_id,
+        fecha: n.fecha,
+        ...descomponerCompensadoDia(
+          marcasPorPersonaYDia[`${n.perfil_id}|${n.fecha}`] ?? [],
+          n.fecha,
+          n.hora_entrada_autorizada,
+          n.hora_salida_autorizada,
+          n.minutos_compensados,
+        ),
+      }));
     const autorizaciones: AutorizacionReporte[] = notasRows
       .filter((n) => n.hora_entrada_autorizada)
       .map((n) => ({ perfil_id: n.perfil_id, fecha: n.fecha, hora: n.hora_entrada_autorizada as string }));
@@ -1419,20 +1546,17 @@ export function Asistencia() {
         .eq("id", fp.perfilId)
         .single();
       const saldoActual = Number(perfilData?.saldo_horas_extra_anterior ?? 0);
-      // Lo compensado DE ESTE PERÍODO (mismo rango que se le calculó arriba
-      // el totalHorasExtra) — igual que "Saldo restante" en pantalla, para
-      // que el número que queda al cerrar sea el mismo que se veía justo
-      // antes de cerrarlo.
-      const { data: compensadosData } = await supabase
-        .from("asistencia_notas_dia")
-        .select("minutos_compensados")
-        .eq("perfil_id", fp.perfilId)
-        .gt("minutos_compensados", 0)
-        .gte("fecha", inicio)
-        .lt("fecha", finExclusivo);
-      const compensadoHoras =
-        ((compensadosData as { minutos_compensados: number }[]) ?? []).reduce((a, c) => a + c.minutos_compensados, 0) / 60;
-      const nuevoSaldo = saldoActual - compensadoHoras + fp.totalHorasExtra;
+      // Lo compensado (con autorización) e Ingreso (sin autorización) DE
+      // ESTE PERÍODO — mismo rango y misma división (ya descompuesta por
+      // descomponerCompensadoDia) que "Saldo restante" y "Liquidación" en
+      // pantalla, para que el número que queda al cerrar sea el mismo que
+      // se veía justo antes de cerrarlo.
+      const delPeriodo = compensaciones.filter(
+        (c) => c.perfil_id === fp.perfilId && c.fecha >= inicio && c.fecha < finExclusivo,
+      );
+      const compensadoHoras = delPeriodo.reduce((a, c) => a + c.minutosCompensadas, 0) / 60;
+      const ingresoHoras = delPeriodo.reduce((a, c) => a + c.minutosIngreso, 0) / 60;
+      const nuevoSaldo = saldoActual - compensadoHoras - ingresoHoras + fp.totalHorasExtra;
       await supabase
         .from("perfiles")
         .update({ saldo_horas_extra_anterior: nuevoSaldo, saldo_horas_extra_anterior_fecha: finExclusivo })
@@ -2496,6 +2620,12 @@ export function Asistencia() {
               // quedarse fijo hasta que se cierre el período.
               const compensadoEstePeriodo = fila.semanas.reduce((a, s) => a + s.minutosCompensados, 0) / 60;
               const saldoRestante = persona ? persona.saldoAnterior - compensadoEstePeriodo : 0;
+              // Ingreso: tardanzas SIN autorización puntual — se resta aparte,
+              // solo hasta la Liquidación (no baja el "Saldo restante" en
+              // vivo, que sigue siendo estrictamente saldo anterior menos lo
+              // compensado con autorización).
+              const ingresoEstePeriodo = fila.semanas.reduce((a, s) => a + s.minutosIngreso, 0) / 60;
+              const liquidacion = saldoRestante + fila.totalHorasExtra - ingresoEstePeriodo;
               return (
               <div key={fila.perfilId} className="border border-gray-100 rounded-lg p-3">
                 <div className="mb-2">
@@ -2519,7 +2649,7 @@ export function Asistencia() {
                         <th className="font-normal pb-1 text-right">Ausencia</th>
                         <th className="font-normal pb-1 text-right">Totales</th>
                         <th className="font-normal pb-1 text-right">Extra</th>
-                        <th className="font-normal pb-1 text-right">Déficit</th>
+                        <th className="font-normal pb-1 text-right">Ingreso</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
@@ -2552,7 +2682,9 @@ export function Asistencia() {
                             ).toFixed(1)}
                           </td>
                           <td className="py-1 text-right text-emerald-700">{s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
-                          <td className="py-1 text-right text-amber-600">{s.horasDeficit > 0 ? s.horasDeficit.toFixed(1) : "—"}</td>
+                          <td className="py-1 text-right text-amber-600">
+                            {s.minutosIngreso > 0 ? (s.minutosIngreso / 60).toFixed(1) : "—"}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -2563,7 +2695,10 @@ export function Asistencia() {
                         <td className="py-1 text-right text-violet-700">
                           {compensadoEstePeriodo > 0 ? compensadoEstePeriodo.toFixed(1) : "—"}
                         </td>
-                        <td className="py-1 text-right" colSpan={6}></td>
+                        <td className="py-1 text-right" colSpan={5}></td>
+                        <td className="py-1 text-right text-amber-600">
+                          {ingresoEstePeriodo > 0 ? ingresoEstePeriodo.toFixed(1) : "—"}
+                        </td>
                       </tr>
                     </tfoot>
                   </table>
@@ -2578,19 +2713,21 @@ export function Asistencia() {
                   {persona?.saldoAnteriorFecha && (
                     <>
                       <p>
-                        <span className="text-gray-500">Saldo restante: </span>
+                        <span className="text-gray-500">Ingreso del período (tardanzas sin autorizar): </span>
+                        <span className={`font-semibold ${ingresoEstePeriodo > 0 ? "text-amber-600" : "text-gray-400"}`}>
+                          {ingresoEstePeriodo.toFixed(1)} h
+                        </span>
+                      </p>
+                      <p>
+                        <span className="text-gray-500">Saldo anterior − Compensadas del período: </span>
                         <span className={`font-semibold ${saldoRestante >= 0 ? "text-violet-700" : "text-red-600"}`}>
                           {saldoRestante.toFixed(1)} h
                         </span>
                       </p>
                       <p>
                         <span className="text-gray-500">Liquidación (pasa como saldo al próximo período): </span>
-                        <span
-                          className={`font-semibold ${
-                            saldoRestante + fila.totalHorasExtra >= 0 ? "text-violet-700" : "text-red-600"
-                          }`}
-                        >
-                          {(saldoRestante + fila.totalHorasExtra).toFixed(1)} h
+                        <span className={`font-semibold ${liquidacion >= 0 ? "text-violet-700" : "text-red-600"}`}>
+                          {liquidacion.toFixed(1)} h
                         </span>
                       </p>
                     </>
