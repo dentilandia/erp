@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { LogIn, LogOut, Coffee, Utensils, Sunrise, PartyPopper, Eye, EyeOff } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthContext";
@@ -818,6 +818,10 @@ export function Asistencia() {
   >([]);
   const [personaAdminId, setPersonaAdminId] = useState("");
   const [fechaAdmin, setFechaAdmin] = useState(() => fechaBogota(new Date().toISOString()));
+  // Evita que una carga vieja (de un día/persona que ya se dejó de ver)
+  // pise en el formulario los datos del día que se está viendo ahora si
+  // llega tarde — ver cargarMarcasPersona.
+  const cargaAdminRef = useRef("");
   const [marcasPersona, setMarcasPersona] = useState<AsistenciaRegistro[]>([]);
   const [notaPersona, setNotaPersona] = useState("");
   const [notaOriginal, setNotaOriginal] = useState("");
@@ -942,6 +946,14 @@ export function Asistencia() {
 
   async function cargarMarcasPersona() {
     if (!personaAdminId) return;
+    // Si mientras estas consultas están en vuelo el admin ya cambió de día o
+    // de persona (ej. revisando varios días seguidos rápido), esta carga
+    // queda vieja — sin este freno, sus datos podían llegar DESPUÉS que los
+    // del día que sí se está viendo ahora y pisar el formulario con la
+    // información de un día distinto; si en ese momento se guarda sin
+    // notarlo, se graba en el día equivocado. Se descarta en silencio.
+    const clave = `${personaAdminId}|${fechaAdmin}`;
+    cargaAdminRef.current = clave;
     const desde = `${fechaAdmin}T00:00:00-05:00`;
     const hasta = `${sumarDias(fechaAdmin, 1)}T00:00:00-05:00`;
     const { data } = await supabase
@@ -952,7 +964,6 @@ export function Asistencia() {
       .lt("marcado_en", hasta)
       .order("marcado_en");
     const marcas = (data as AsistenciaRegistro[]) ?? [];
-    setMarcasPersona(marcas);
     const { data: nota } = await supabase
       .from("asistencia_notas_dia")
       .select("nota, hora_entrada_autorizada, hora_salida_autorizada")
@@ -960,6 +971,14 @@ export function Asistencia() {
       .eq("fecha", fechaAdmin)
       .maybeSingle();
     const minutosCompensados = await recalcularCompensadoDia(personaAdminId, fechaAdmin);
+    const { data: ausencia } = await supabase
+      .from("asistencia_ausencias")
+      .select("id, tipo")
+      .eq("perfil_id", personaAdminId)
+      .eq("fecha", fechaAdmin)
+      .maybeSingle();
+    if (cargaAdminRef.current !== clave) return;
+    setMarcasPersona(marcas);
     setNotaPersona(nota?.nota ?? "");
     setNotaOriginal(nota?.nota ?? "");
     setEsCompensado(minutosCompensados > 0);
@@ -976,12 +995,6 @@ export function Asistencia() {
     const horaSalidaAutorizadaValor = nota?.hora_salida_autorizada?.slice(0, 5) ?? "";
     setHoraSalidaAutorizada(horaSalidaAutorizadaValor);
     setHoraSalidaAutorizadaOriginal(horaSalidaAutorizadaValor);
-    const { data: ausencia } = await supabase
-      .from("asistencia_ausencias")
-      .select("id, tipo")
-      .eq("perfil_id", personaAdminId)
-      .eq("fecha", fechaAdmin)
-      .maybeSingle();
     setAusenciaPersona(ausencia ?? null);
   }
 
