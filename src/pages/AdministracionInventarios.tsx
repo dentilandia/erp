@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Check, Bell, ChevronDown, ChevronRight, Download } from "lucide-react";
+import { Plus, Check, Bell, Clock, ChevronDown, ChevronRight, Download } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
 import { useAuth } from "../auth/AuthContext";
@@ -301,6 +301,62 @@ export function AdministracionInventarios() {
     } else {
       setPedidosPendientes((prev) => prev.filter((x) => x.movimientoId !== p.movimientoId));
     }
+    if (sedeIdHistorial === "todas" || sedeIdHistorial === p.sedeId) cargarHistorial();
+  }
+
+  // Para cuando ya no se va a completar lo que falta de este pedido en esta
+  // vuelta (se cubre en el próximo pedido de bodega): si queda algo escrito
+  // en el campo de cantidad, se registra esa entrega igual que "Entregado";
+  // el resto NO se deja esperando indefinidamente en "Pedido" — se pone en 0
+  // (desaparece de pendientes acá y en la sede, que lee la misma columna) y
+  // se deja un aviso explícito para que la sede sepa que ese resto llega en
+  // el próximo pedido, en vez de pensar que se perdió.
+  async function marcarPedidoDiferido(p: PedidoPendiente) {
+    const cantidadEntregada = Number(cantidadesEntregaPedido[p.movimientoId]) || 0;
+    const resto = Math.max(0, p.pedido - cantidadEntregada);
+    setEntregandoPedidoId(p.movimientoId);
+    setErrorPedido(null);
+    if (cantidadEntregada > 0) {
+      const { error: errorEntregaPedido } = await supabase.from("insumos_generales_entregas").insert({
+        catalogo_id: p.catalogoId,
+        sede_id: p.sedeId,
+        periodo_id: p.periodoId,
+        cantidad: cantidadEntregada,
+        fecha: today(),
+        created_by: perfil?.id ?? null,
+      });
+      if (errorEntregaPedido) {
+        setEntregandoPedidoId(null);
+        setErrorPedido(errorEntregaPedido.message);
+        return;
+      }
+    }
+    const { error: errorPedidoUpd } = await supabase
+      .from("insumos_generales_movimientos")
+      .update({ pedido: 0 })
+      .eq("id", p.movimientoId);
+    if (errorPedidoUpd) {
+      setEntregandoPedidoId(null);
+      setErrorPedido(errorPedidoUpd.message);
+      return;
+    }
+    if (resto > 0) {
+      const { error: errorDiferido } = await supabase.from("insumos_generales_pedidos_diferidos").insert({
+        periodo_id: p.periodoId,
+        sede_id: p.sedeId,
+        catalogo_id: p.catalogoId,
+        cantidad: resto,
+        fecha: today(),
+        created_by: perfil?.id ?? null,
+      });
+      if (errorDiferido) {
+        setEntregandoPedidoId(null);
+        setErrorPedido(errorDiferido.message);
+        return;
+      }
+    }
+    setEntregandoPedidoId(null);
+    setPedidosPendientes((prev) => prev.filter((x) => x.movimientoId !== p.movimientoId));
     if (sedeIdHistorial === "todas" || sedeIdHistorial === p.sedeId) cargarHistorial();
   }
 
@@ -632,6 +688,14 @@ export function AdministracionInventarios() {
                                 className="flex items-center gap-1 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700 disabled:opacity-40"
                               >
                                 <Check size={14} /> {entregandoPedidoId === p.movimientoId ? "Entregando…" : "Entregado"}
+                              </button>
+                              <button
+                                onClick={() => marcarPedidoDiferido(p)}
+                                disabled={entregandoPedidoId === p.movimientoId}
+                                title="Lo que falte de esta cantidad ya no se entrega en este pedido — se avisa a la sede que llega en el próximo"
+                                className="flex items-center gap-1 rounded-lg border border-amber-400 text-amber-800 px-3 py-1.5 text-xs font-medium hover:bg-amber-100 disabled:opacity-40"
+                              >
+                                <Clock size={14} /> Resto en el próximo pedido
                               </button>
                             </div>
                           </div>

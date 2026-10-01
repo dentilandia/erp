@@ -10,9 +10,14 @@ import type {
   InsumoGeneralEntrega,
   InsumoGeneralSalida,
   InsumoGeneralSolicitud,
+  InsumoGeneralPedidoDiferido,
 } from "../lib/types";
 
 interface EntregaConCatalogo extends InsumoGeneralEntrega {
+  insumos_generales_catalogo: { nombre: string } | null;
+}
+
+interface DiferidoConCatalogo extends InsumoGeneralPedidoDiferido {
   insumos_generales_catalogo: { nombre: string } | null;
 }
 
@@ -47,6 +52,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   // Lo que la persona que recibe puede corregir antes de confirmar — arranca
   // igual a lo que administración dijo que envió, editable si no coincide.
   const [cantidadRecibidaEdit, setCantidadRecibidaEdit] = useState<Record<string, string>>({});
+  const [diferidos, setDiferidos] = useState<DiferidoConCatalogo[]>([]);
   const [salidasRegistradas, setSalidasRegistradas] = useState<SalidaConCatalogo[]>([]);
   const [cargando, setCargando] = useState(true);
   const [categoriasAbiertas, setCategoriasAbiertas] = useState<Record<string, boolean>>({});
@@ -109,6 +115,23 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     setEntregasRecibidas((data as unknown as EntregaConCatalogo[]) ?? []);
   }
 
+  async function cargarDiferidos() {
+    const { data } = await supabase
+      .from("insumos_generales_pedidos_diferidos")
+      .select("*, insumos_generales_catalogo(nombre)")
+      .eq("sede_id", sedeId)
+      .eq("visto", false)
+      .order("created_at", { ascending: false });
+    setDiferidos((data as unknown as DiferidoConCatalogo[]) ?? []);
+  }
+
+  // No suma a nada (a diferencia de confirmar una entrega) — solo quita el
+  // aviso una vez la sede ya lo leyó.
+  async function marcarDiferidoVisto(id: string) {
+    await supabase.from("insumos_generales_pedidos_diferidos").update({ visto: true }).eq("id", id);
+    setDiferidos((prev) => prev.filter((d) => d.id !== id));
+  }
+
   // Cada línea se confirma por separado — no un solo botón para todas — para
   // que la sede pueda decir exactamente cuál sí y cuál no le llegó, y en qué
   // cantidad (puede ser menos de lo que administración registró que envió).
@@ -152,6 +175,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     setCargando(true);
     cargarPeriodos();
     cargarEntregasRecibidas();
+    cargarDiferidos();
     cargarSalidas();
     cargarSolicitudes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -392,6 +416,28 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                 </div>
               );
             })}
+          </div>
+        </section>
+      )}
+
+      {diferidos.length > 0 && (
+        <section className="rounded-xl border-2 border-sky-300 bg-sky-50 p-4">
+          <p className="font-semibold text-sky-800 mb-2">🕒 Administración avisa</p>
+          <div className="space-y-1.5">
+            {diferidos.map((d) => (
+              <div key={d.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
+                <p className="text-sky-700">
+                  {d.insumos_generales_catalogo?.nombre ?? "—"}: el resto (
+                  <span className="font-semibold">{d.cantidad}</span>) se entrega en el próximo pedido
+                </p>
+                <button
+                  onClick={() => marcarDiferidoVisto(d.id)}
+                  className="shrink-0 rounded-lg bg-sky-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-sky-700"
+                >
+                  Entendido
+                </button>
+              </div>
+            ))}
           </div>
         </section>
       )}

@@ -369,6 +369,22 @@ export interface InsumoGeneralSolicitud {
   entregada_en: string | null;
 }
 
+/** Aviso de que el resto de un ítem pedido (lo que administración no entregó
+ *  esta vuelta) se cubre en el próximo pedido de bodega, en vez de quedar
+ *  indefinidamente en la columna "Pedido" sin explicación — la sede lo ve y
+ *  lo marca "Entendido" (visto) para que desaparezca. */
+export interface InsumoGeneralPedidoDiferido {
+  id: string;
+  periodo_id: string;
+  sede_id: string;
+  catalogo_id: string;
+  cantidad: number;
+  fecha: string;
+  created_by: string | null;
+  created_at: string;
+  visto: boolean;
+}
+
 /** Caja menor por sede — acceso restringido a admin y a quien tenga
  *  perfiles.puede_caja_menor en esa sede. */
 export interface CajaMenorPeriodo {
