@@ -222,11 +222,11 @@ function paginaLiquidacion(periodo: { inicio: string; fin: string }, pctHonorari
   </div>
 
   <div class="total-pagar">
-    <span>Total a pagar</span>
+    <span>Total a pagar (valor de la cuenta de cobro)</span>
     <span class="valor">${esc(fmtCOP(totalPago))}</span>
   </div>
 
-  <p class="ibc">IBC seguridad social (informativo, 40% del total a pagar): ${esc(fmtCOP(ibc))}</p>`;
+  <p class="ibc">IBC seguridad social: <span class="ibc-valor">${esc(fmtCOP(ibc))}</span> <span class="ibc-nota">(informativo, 40% del total a pagar)</span></p>`;
 }
 
 /** Texto combinado de nota (50/50 y/o instalado en período anterior) para una fila de laboratorio. */
@@ -322,7 +322,9 @@ function generarLiquidacionCompletaPDF(periodo: { inicio: string; fin: string },
   .total-pagar { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 14px;
     background: #efe9f6; border-radius: 8px; margin: 10px 0; }
   .total-pagar .valor { font-size: 20px; font-weight: 700; }
-  .ibc { color: #888; font-size: 12px; margin-top: 18px; }
+  .ibc { font-size: 17px; font-weight: 700; color: #2E253A; margin-top: 18px; }
+  .ibc-valor { font-size: 17px; }
+  .ibc-nota { font-size: 11px; font-weight: 400; color: #888; }
   .pagina:not(:last-child) { page-break-after: always; }
   .btn-imprimir {
     position: fixed; top: 14px; right: 14px; background: #2E253A; color: #fff; border: none;
@@ -837,7 +839,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                 />
               </div>
               <div className="ml-auto text-right">
-                <p className="text-xs text-gray-400">Total a pagar</p>
+                <p className="text-xs text-gray-400">Total a pagar (valor de la cuenta de cobro)</p>
                 <p className="font-semibold text-lg">{fmtCOP(totalPago)}</p>
               </div>
             </div>
@@ -1137,7 +1139,10 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
               {f.guardado ? <Check size={16} /> : null}
               {f.guardando ? "Guardando…" : f.guardado ? "Guardado" : "Guardar liquidación"}
             </button>
-            <p className="text-xs text-gray-400 mt-2">IBC seg. social (informativo, 40% del total a pagar): {fmtCOP(ibc)}</p>
+            <p className="text-base font-bold text-tinta mt-2">
+              IBC seg. social: {fmtCOP(ibc)}{" "}
+              <span className="text-xs font-normal text-gray-400">(informativo, 40% del total a pagar)</span>
+            </p>
           </div>
         );
       })}
