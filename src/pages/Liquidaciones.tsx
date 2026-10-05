@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Check } from "lucide-react";
+import { Download, Check, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { fmtCOP, mesActual, periodoCiclo2625, periodoMesCompleto } from "../lib/format";
 import { fetchTodasLasFilas } from "../lib/db";
@@ -125,6 +125,14 @@ interface DetalleInsumo {
   valor: number;
 }
 
+/** Ajuste administrativo libre (liquidaciones_doctora_conceptos) — monto
+ *  que Tomás agrega a mano y que se SUMA al subtotal, no una deducción. */
+interface DetalleConcepto {
+  id: string;
+  concepto: string;
+  valor: number;
+}
+
 interface FilaDoctora {
   doctora: Doctora;
   totalVentas: number;
@@ -133,6 +141,7 @@ interface FilaDoctora {
   porSede: FilaDoctoraSede[];
   detalleLabs: DetalleLab[];
   detalleInsumos: DetalleInsumo[];
+  detalleConceptos: DetalleConcepto[];
   retencionValor: string;
   retencionDepuracionValor: string;
   guardando: boolean;
@@ -153,6 +162,13 @@ interface FormAtrasado {
   // Fecha de emisión de la factura (fecha_emision_factura) — campo normal de
   // toda orden de laboratorio, distinto de la fecha de instalación.
   fechaFactura: string;
+  guardando: boolean;
+}
+
+interface FormConcepto {
+  abierto: boolean;
+  concepto: string;
+  valor: string;
   guardando: boolean;
 }
 
@@ -182,7 +198,8 @@ function paginaLiquidacion(periodo: { inicio: string; fin: string }, pctHonorari
   const deduccionAtrasados = totalLabsAtrasados * (pctHonorario / 100);
   const retencionVoluntaria = Number(f.retencionValor) || 0;
   const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
-  const subtotal = bruto - deduccion - deduccionAtrasados;
+  const totalConceptos = f.detalleConceptos.reduce((a, c) => a + c.valor, 0);
+  const subtotal = bruto - deduccion - deduccionAtrasados + totalConceptos;
   const totalPago = subtotal - retencionVoluntaria - retencionDepuracion;
   const ibc = totalPago * 0.4;
 
@@ -211,6 +228,16 @@ function paginaLiquidacion(periodo: { inicio: string; fin: string }, pctHonorari
     ${
       totalLabsAtrasados > 0
         ? `<div class="fila"><span>Laboratorios período anterior — ${pctHonorario}% de ${esc(fmtCOP(totalLabsAtrasados))}</span><span class="menos">-${esc(fmtCOP(deduccionAtrasados))}</span></div>`
+        : ""
+    }
+    ${
+      f.detalleConceptos.length > 0
+        ? f.detalleConceptos
+            .map(
+              (c) =>
+                `<div class="fila"><span>${esc(c.concepto)}</span><span class="${c.valor >= 0 ? "mas" : "menos"}">${c.valor >= 0 ? "+" : ""}${esc(fmtCOP(c.valor))}</span></div>`,
+            )
+            .join("")
         : ""
     }
     <div class="fila subtotal"><span>Subtotal (antes de retenciones)</span><span>${esc(fmtCOP(subtotal))}</span></div>
@@ -358,6 +385,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
   // una vez en el detalle y en los totales.
   const [recargar, setRecargar] = useState(0);
   const [formsAtrasado, setFormsAtrasado] = useState<Record<string, FormAtrasado>>({});
+  const [formsConcepto, setFormsConcepto] = useState<Record<string, FormConcepto>>({});
 
   useEffect(() => {
     supabase.from("laboratorios").select("*").order("nombre").then(({ data }) => setLaboratorios((data as Laboratorio[]) ?? []));
@@ -532,8 +560,27 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         });
       }
 
+      // Ajustes administrativos libres (ver agregarConceptoAdministrativo) —
+      // no están atados a una sede, se suman completos a la doctora sea cual
+      // sea la sede activa en este reporte.
+      const { data: conceptosData } = await supabase
+        .from("liquidaciones_doctora_conceptos")
+        .select("id, doctora_id, concepto, valor")
+        .eq("periodo_inicio", periodo.inicio)
+        .eq("periodo_fin", periodo.fin);
+      const detalleConceptosPorDoctora: Record<string, DetalleConcepto[]> = {};
+      for (const c of (conceptosData as { id: string; doctora_id: string; concepto: string; valor: number }[]) ?? []) {
+        (detalleConceptosPorDoctora[c.doctora_id] ??= []).push({ id: c.id, concepto: c.concepto, valor: Number(c.valor) });
+      }
+
       const nuevasFilas: FilaDoctora[] = ((doctoras as Doctora[]) ?? [])
-        .filter((d) => (ventasPorDoctora[d.id] ?? 0) > 0 || (labsPorDoctora[d.id] ?? 0) > 0 || (insumosPorDoctora[d.id] ?? 0) > 0)
+        .filter(
+          (d) =>
+            (ventasPorDoctora[d.id] ?? 0) > 0 ||
+            (labsPorDoctora[d.id] ?? 0) > 0 ||
+            (insumosPorDoctora[d.id] ?? 0) > 0 ||
+            (detalleConceptosPorDoctora[d.id]?.length ?? 0) > 0,
+        )
         .map((d) => {
           const totalVentas = ventasPorDoctora[d.id] ?? 0;
           const totalLaboratorios = labsPorDoctora[d.id] ?? 0;
@@ -568,6 +615,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
             porSede,
             detalleLabs: detalleLabsPorDoctora[d.id] ?? [],
             detalleInsumos: detalleInsumosPorDoctora[d.id] ?? [],
+            detalleConceptos: detalleConceptosPorDoctora[d.id] ?? [],
             retencionValor: retencionVoluntariaValor ? String(Math.round(retencionVoluntariaValor)) : "",
             retencionDepuracionValor: guardada?.retencionDepuracion ? String(Math.round(guardada.retencionDepuracion)) : "",
             guardando: false,
@@ -644,6 +692,48 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
     setRecargar((n) => n + 1);
   }
 
+  const formConceptoVacio: FormConcepto = { abierto: false, concepto: "", valor: "", guardando: false };
+  function formConceptoDe(doctoraId: string): FormConcepto {
+    return formsConcepto[doctoraId] ?? formConceptoVacio;
+  }
+  function actualizarFormConcepto(doctoraId: string, cambios: Partial<FormConcepto>) {
+    setFormsConcepto((prev) => ({ ...prev, [doctoraId]: { ...formConceptoDe(doctoraId), ...cambios } }));
+  }
+
+  // Ajuste administrativo libre: un monto que Tomás escribe a mano (ej.
+  // corregir que a esta doctora le faltaron días de otra, mal atribuidos
+  // en un período ya cerrado) — se suma al subtotal de esta liquidación,
+  // sin tocar ventas/laboratorios/insumos reales.
+  async function agregarConceptoAdministrativo(doctoraId: string) {
+    const form = formConceptoDe(doctoraId);
+    if (!form.concepto.trim() || !Number(form.valor)) return;
+    actualizarFormConcepto(doctoraId, { guardando: true });
+    const { error } = await supabase.from("liquidaciones_doctora_conceptos").insert({
+      doctora_id: doctoraId,
+      periodo_inicio: periodo.inicio,
+      periodo_fin: periodo.fin,
+      concepto: form.concepto.trim(),
+      valor: Number(form.valor),
+    });
+    if (error) {
+      window.alert(`No se pudo agregar: ${error.message}`);
+      actualizarFormConcepto(doctoraId, { guardando: false });
+      return;
+    }
+    setFormsConcepto((prev) => {
+      const next = { ...prev };
+      delete next[doctoraId];
+      return next;
+    });
+    setRecargar((n) => n + 1);
+  }
+
+  async function eliminarConcepto(id: string) {
+    if (!window.confirm("¿Quitar este concepto administrativo de la liquidación?")) return;
+    await supabase.from("liquidaciones_doctora_conceptos").delete().eq("id", id);
+    setRecargar((n) => n + 1);
+  }
+
   async function alternarHistorial(idx: number) {
     const f = filas[idx];
     if (f.historialAbierto) {
@@ -678,7 +768,8 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
     const deduccion = (f.totalLaboratorios + f.totalInsumos) * (pctHonorario / 100);
     const retencionVoluntaria = Number(f.retencionValor) || 0;
     const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
-    const totalPago = bruto - deduccion - retencionVoluntaria - retencionDepuracion;
+    const totalConceptos = f.detalleConceptos.reduce((a, c) => a + c.valor, 0);
+    const totalPago = bruto - deduccion + totalConceptos - retencionVoluntaria - retencionDepuracion;
     // IBC (Ingreso Base de Cotización) para seguridad social de independientes:
     // 40% del valor total a pagar, por ley.
     const ibc = totalPago * 0.4;
@@ -696,6 +787,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
           total_laboratorios: f.totalLaboratorios,
           total_insumos: f.totalInsumos,
           deduccion_labs_insumos: deduccion,
+          total_conceptos_administrativos: totalConceptos,
           total_pago: totalPago,
           retencion_valor: retencionVoluntaria || null,
           retencion_tipo: retencionVoluntaria > 0 ? "voluntaria" : null,
@@ -746,7 +838,8 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         const deduccionAtrasados = totalLabsAtrasados * (pctHonorario / 100);
         const retencionVoluntaria = Number(f.retencionValor) || 0;
         const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
-        const totalPago = bruto - deduccion - deduccionAtrasados - retencionVoluntaria - retencionDepuracion;
+        const totalConceptos = f.detalleConceptos.reduce((a, c) => a + c.valor, 0);
+        const totalPago = bruto - deduccion - deduccionAtrasados + totalConceptos - retencionVoluntaria - retencionDepuracion;
         const ibc = totalPago * 0.4;
         return (
           <div key={f.doctora.id} className="bg-white rounded-xl border border-gray-200 p-4">
@@ -807,9 +900,18 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                   <span className="font-medium text-red-600">-{fmtCOP(deduccionAtrasados)}</span>
                 </div>
               )}
+              {f.detalleConceptos.map((c) => (
+                <div key={c.id} className="flex items-center justify-between">
+                  <span className="text-gray-500">{c.concepto}</span>
+                  <span className={`font-medium ${c.valor >= 0 ? "text-emerald-700" : "text-red-600"}`}>
+                    {c.valor >= 0 ? "+" : ""}
+                    {fmtCOP(c.valor)}
+                  </span>
+                </div>
+              ))}
               <div className="flex items-center justify-between pt-1.5 border-t border-gray-200 font-semibold">
                 <span>Subtotal (antes de retenciones)</span>
-                <span>{fmtCOP(bruto - deduccion - deduccionAtrasados)}</span>
+                <span>{fmtCOP(bruto - deduccion - deduccionAtrasados + totalConceptos)}</span>
               </div>
             </div>
             <div className="flex items-end gap-4 flex-wrap mb-3">
@@ -896,7 +998,45 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
               >
                 {formAtrasadoDe(f.doctora.id).abierto ? "Cancelar" : "+ Agregar aparato de período anterior"}
               </button>
+              <button
+                onClick={() => actualizarFormConcepto(f.doctora.id, { abierto: !formConceptoDe(f.doctora.id).abierto })}
+                className="text-xs font-medium text-amber-700"
+              >
+                {formConceptoDe(f.doctora.id).abierto ? "Cancelar" : "+ Agregar concepto administrativo"}
+              </button>
             </div>
+
+            {formConceptoDe(f.doctora.id).abierto && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 mb-3 space-y-2">
+                <p className="text-xs font-semibold text-amber-800">
+                  Ajuste a mano que se suma al subtotal de esta liquidación (ej. corregir un valor que le faltó a esta
+                  doctora por un error en un período ya cerrado) — escribe un número negativo si en vez de sumar
+                  necesitas restar.
+                </p>
+                <div className="flex gap-2 flex-wrap">
+                  <input
+                    value={formConceptoDe(f.doctora.id).concepto}
+                    onChange={(e) => actualizarFormConcepto(f.doctora.id, { concepto: e.target.value })}
+                    placeholder="Concepto — ej. Ajuste días reasignados de Carolina Gómez"
+                    className="flex-1 min-w-[220px] rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+                  />
+                  <input
+                    type="number"
+                    value={formConceptoDe(f.doctora.id).valor}
+                    onChange={(e) => actualizarFormConcepto(f.doctora.id, { valor: e.target.value })}
+                    placeholder="Valor"
+                    className="w-36 rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+                  />
+                  <button
+                    onClick={() => agregarConceptoAdministrativo(f.doctora.id)}
+                    disabled={formConceptoDe(f.doctora.id).guardando}
+                    className="rounded-lg bg-amber-700 text-white px-4 py-1.5 text-sm font-medium disabled:opacity-40"
+                  >
+                    {formConceptoDe(f.doctora.id).guardando ? "Agregando…" : "Agregar"}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {formAtrasadoDe(f.doctora.id).abierto && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 mb-3 space-y-2">
@@ -1036,6 +1176,29 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
 
             {f.detalleAbierto && (
               <div className="space-y-3 mb-3">
+                {f.detalleConceptos.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold text-gray-500 mb-1">
+                      Conceptos administrativos agregados a mano ({f.detalleConceptos.length})
+                    </p>
+                    <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">
+                      {f.detalleConceptos.map((c) => (
+                        <div key={c.id} className="flex items-center justify-between px-2 py-1.5 text-xs">
+                          <span>{c.concepto}</span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className={`font-medium ${c.valor >= 0 ? "text-emerald-700" : "text-red-600"}`}>
+                              {c.valor >= 0 ? "+" : ""}
+                              {fmtCOP(c.valor)}
+                            </span>
+                            <button onClick={() => eliminarConcepto(c.id)} className="text-gray-300 hover:text-red-500">
+                              <X size={13} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div>
                   <p className="text-xs font-semibold text-gray-500 mb-1">
                     Aparatos instalados / enviados a laboratorio ({f.detalleLabs.length})
