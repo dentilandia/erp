@@ -56,6 +56,7 @@ export function AdministracionInventarios() {
   const [entregaOk, setEntregaOk] = useState(false);
   const [errorEntrega, setErrorEntrega] = useState<string | null>(null);
   const [solicitudesPendientes, setSolicitudesPendientes] = useState<SolicitudConDetalle[]>([]);
+  const [cantidadesEntregaSolicitud, setCantidadesEntregaSolicitud] = useState<Record<string, string>>({});
   const [entregandoSolicitudId, setEntregandoSolicitudId] = useState<string | null>(null);
 
   const [pedidosPendientes, setPedidosPendientes] = useState<PedidoPendiente[]>([]);
@@ -142,7 +143,9 @@ export function AdministracionInventarios() {
       .select("*, insumos_generales_catalogo(nombre), sedes(nombre)")
       .eq("estado", "pendiente")
       .order("created_at");
-    setSolicitudesPendientes((data as unknown as SolicitudConDetalle[]) ?? []);
+    const lista = (data as unknown as SolicitudConDetalle[]) ?? [];
+    setSolicitudesPendientes(lista);
+    setCantidadesEntregaSolicitud(Object.fromEntries(lista.map((s) => [s.id, String(s.cantidad)])));
   }
 
   useEffect(() => {
@@ -359,33 +362,46 @@ export function AdministracionInventarios() {
     if (sedeIdHistorial === "todas" || sedeIdHistorial === p.sedeId) cargarHistorial();
   }
 
+  // Busca el período más reciente de la sede, o crea uno — usado tanto para
+  // entregar una solicitud como para diferir el resto. La bodega
+  // administrativa es continua, no debe bloquearse porque la sede no haya
+  // abierto su período operativo a mano todavía.
+  async function obtenerOCrearPeriodoSede(sedeId: string): Promise<{ id: string } | null> {
+    const { data: periodo } = await supabase
+      .from("insumos_generales_periodos")
+      .select("id")
+      .eq("sede_id", sedeId)
+      .order("fecha_inicio", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (periodo) return periodo;
+    const { data: nuevo, error } = await supabase
+      .from("insumos_generales_periodos")
+      .insert({ sede_id: sedeId, etiqueta: etiquetaMesActual(), fecha_inicio: today() })
+      .select("id")
+      .single();
+    if (error || !nuevo) {
+      setErrorEntrega(error?.message ?? "No se pudo crear el período de esa sede.");
+      return null;
+    }
+    return nuevo;
+  }
+
   // Entrega directa de una solicitud de sede — antes esto solo llenaba el
   // formulario "Entregar a una sede" de arriba y hacía scroll hasta allá,
   // esperando un segundo clic en OTRO botón para que de verdad se
   // guardara; parecía que "Entregar" no hacía nada. Ahora entrega de una,
-  // mismo patrón que "Entregado" en pedidos pendientes.
+  // mismo patrón que "Entregado" en pedidos pendientes — incluida la
+  // cantidad editable, por si llega menos de lo solicitado.
   async function entregarSolicitud(s: SolicitudConDetalle) {
+    const cantidad = Number(cantidadesEntregaSolicitud[s.id]) || 0;
+    if (cantidad <= 0) return;
     setEntregandoSolicitudId(s.id);
     setErrorEntrega(null);
-    let { data: periodo } = await supabase
-      .from("insumos_generales_periodos")
-      .select("id")
-      .eq("sede_id", s.sede_id)
-      .order("fecha_inicio", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const periodo = await obtenerOCrearPeriodoSede(s.sede_id);
     if (!periodo) {
-      const { data: nuevo, error: errorPeriodo } = await supabase
-        .from("insumos_generales_periodos")
-        .insert({ sede_id: s.sede_id, etiqueta: etiquetaMesActual(), fecha_inicio: today() })
-        .select("id")
-        .single();
-      if (errorPeriodo || !nuevo) {
-        setEntregandoSolicitudId(null);
-        setErrorEntrega(errorPeriodo?.message ?? "No se pudo crear el período de esa sede.");
-        return;
-      }
-      periodo = nuevo;
+      setEntregandoSolicitudId(null);
+      return;
     }
     const { data: entrega, error } = await supabase
       .from("insumos_generales_entregas")
@@ -393,7 +409,7 @@ export function AdministracionInventarios() {
         catalogo_id: s.catalogo_id,
         sede_id: s.sede_id,
         periodo_id: periodo.id,
-        cantidad: s.cantidad,
+        cantidad,
         fecha: today(),
         created_by: perfil?.id ?? null,
       })
@@ -408,6 +424,66 @@ export function AdministracionInventarios() {
       .from("insumos_generales_solicitudes")
       .update({ estado: "entregada", entrega_id: entrega.id, entregada_en: new Date().toISOString() })
       .eq("id", s.id);
+    setEntregandoSolicitudId(null);
+    setSolicitudesPendientes((prev) => prev.filter((x) => x.id !== s.id));
+    if (sedeIdHistorial === "todas" || sedeIdHistorial === s.sede_id) cargarHistorial();
+  }
+
+  // Mismo concepto que "Resto en el próximo pedido" de pedidos pendientes,
+  // pero para una solicitud puntual: entrega lo que sí se escribió, y el
+  // resto no se deja la solicitud repitiéndose indefinidamente — se marca
+  // entregada (ya no aparece acá) y se deja un aviso a la sede de que ese
+  // resto llega en el próximo pedido.
+  async function diferirSolicitud(s: SolicitudConDetalle) {
+    const cantidadEntregada = Number(cantidadesEntregaSolicitud[s.id]) || 0;
+    const resto = Math.max(0, s.cantidad - cantidadEntregada);
+    setEntregandoSolicitudId(s.id);
+    setErrorEntrega(null);
+    const periodo = await obtenerOCrearPeriodoSede(s.sede_id);
+    if (!periodo) {
+      setEntregandoSolicitudId(null);
+      return;
+    }
+    let entregaId: string | null = null;
+    if (cantidadEntregada > 0) {
+      const { data: entrega, error } = await supabase
+        .from("insumos_generales_entregas")
+        .insert({
+          catalogo_id: s.catalogo_id,
+          sede_id: s.sede_id,
+          periodo_id: periodo.id,
+          cantidad: cantidadEntregada,
+          fecha: today(),
+          created_by: perfil?.id ?? null,
+        })
+        .select("id")
+        .single();
+      if (error) {
+        setEntregandoSolicitudId(null);
+        setErrorEntrega(error.message);
+        return;
+      }
+      entregaId = entrega.id;
+    }
+    await supabase
+      .from("insumos_generales_solicitudes")
+      .update({ estado: "entregada", entrega_id: entregaId, entregada_en: new Date().toISOString() })
+      .eq("id", s.id);
+    if (resto > 0) {
+      const { error: errorDiferido } = await supabase.from("insumos_generales_pedidos_diferidos").insert({
+        periodo_id: periodo.id,
+        sede_id: s.sede_id,
+        catalogo_id: s.catalogo_id,
+        cantidad: resto,
+        fecha: today(),
+        created_by: perfil?.id ?? null,
+      });
+      if (errorDiferido) {
+        setEntregandoSolicitudId(null);
+        setErrorEntrega(errorDiferido.message);
+        return;
+      }
+    }
     setEntregandoSolicitudId(null);
     setSolicitudesPendientes((prev) => prev.filter((x) => x.id !== s.id));
     if (sedeIdHistorial === "todas" || sedeIdHistorial === s.sede_id) cargarHistorial();
@@ -751,17 +827,33 @@ export function AdministracionInventarios() {
               <div key={s.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
                 <span className="text-amber-700 flex items-center gap-1.5">
                   <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorSede(s.sede_id) }} />
-                  <span className="font-medium">{s.sedes?.nombre ?? "—"}</span> · {s.insumos_generales_catalogo?.nombre ?? "—"} ·{" "}
-                  <span className="font-medium">{s.cantidad}</span>
+                  <span className="font-medium">{s.sedes?.nombre ?? "—"}</span> · {s.insumos_generales_catalogo?.nombre ?? "—"}:{" "}
+                  <span className="font-semibold">pedir {s.cantidad}</span>
                   {s.nota ? ` · ${s.nota}` : ""}
                 </span>
-                <button
-                  onClick={() => entregarSolicitud(s)}
-                  disabled={entregandoSolicitudId === s.id}
-                  className="shrink-0 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700 disabled:opacity-40"
-                >
-                  {entregandoSolicitudId === s.id ? "Entregando…" : "Entregar"}
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <input
+                    type="number"
+                    value={cantidadesEntregaSolicitud[s.id] ?? String(s.cantidad)}
+                    onChange={(e) => setCantidadesEntregaSolicitud((prev) => ({ ...prev, [s.id]: e.target.value }))}
+                    className="w-20 rounded-lg border border-amber-300 px-2 py-1.5 text-sm"
+                  />
+                  <button
+                    onClick={() => entregarSolicitud(s)}
+                    disabled={entregandoSolicitudId === s.id}
+                    className="flex items-center gap-1 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700 disabled:opacity-40"
+                  >
+                    <Check size={14} /> {entregandoSolicitudId === s.id ? "Entregando…" : "Entregado"}
+                  </button>
+                  <button
+                    onClick={() => diferirSolicitud(s)}
+                    disabled={entregandoSolicitudId === s.id}
+                    title="Lo que falte de esta cantidad ya no se entrega ahora — se avisa a la sede que llega en el próximo pedido"
+                    className="flex items-center gap-1 rounded-lg border border-amber-400 text-amber-800 px-3 py-1.5 text-xs font-medium hover:bg-amber-100 disabled:opacity-40"
+                  >
+                    <Clock size={14} /> Resto en el próximo pedido
+                  </button>
+                </div>
               </div>
             ))}
           </div>
