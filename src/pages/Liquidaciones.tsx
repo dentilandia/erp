@@ -240,7 +240,7 @@ function paginaLiquidacion(periodo: { inicio: string; fin: string }, pctHonorari
             .join("")
         : ""
     }
-    <div class="fila subtotal"><span>Subtotal (antes de retenciones)</span><span>${esc(fmtCOP(subtotal))}</span></div>
+    <div class="fila subtotal"><span>Total a pagar (valor de la cuenta de cobro)</span><span>${esc(fmtCOP(subtotal))}</span></div>
   </div>
 
   <div class="retenciones">
@@ -249,11 +249,11 @@ function paginaLiquidacion(periodo: { inicio: string; fin: string }, pctHonorari
   </div>
 
   <div class="total-pagar">
-    <span>Total a pagar (valor de la cuenta de cobro)</span>
+    <span>Valor neto a transferir (después de retenciones)</span>
     <span class="valor">${esc(fmtCOP(totalPago))}</span>
   </div>
 
-  <p class="ibc">IBC seguridad social: <span class="ibc-valor">${esc(fmtCOP(ibc))}</span> <span class="ibc-nota">(informativo, 40% del total a pagar)</span></p>`;
+  <p class="ibc">IBC seguridad social: <span class="ibc-valor">${esc(fmtCOP(ibc))}</span> <span class="ibc-nota">(informativo, 40% del valor neto a transferir)</span></p>`;
 }
 
 /** Texto combinado de nota (50/50 y/o instalado en período anterior) para una fila de laboratorio. */
@@ -909,8 +909,8 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                   </span>
                 </div>
               ))}
-              <div className="flex items-center justify-between pt-1.5 border-t border-gray-200 font-semibold">
-                <span>Subtotal (antes de retenciones)</span>
+              <div className="flex items-center justify-between pt-1.5 border-t border-gray-200 font-bold text-base text-tinta">
+                <span>Total a pagar (valor de la cuenta de cobro)</span>
                 <span>{fmtCOP(bruto - deduccion - deduccionAtrasados + totalConceptos)}</span>
               </div>
             </div>
@@ -941,7 +941,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                 />
               </div>
               <div className="ml-auto text-right">
-                <p className="text-xs text-gray-400">Total a pagar (valor de la cuenta de cobro)</p>
+                <p className="text-xs text-gray-400">Valor neto a transferir (después de retenciones)</p>
                 <p className="font-semibold text-lg">{fmtCOP(totalPago)}</p>
               </div>
             </div>
@@ -1304,7 +1304,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
             </button>
             <p className="text-base font-bold text-tinta mt-2">
               IBC seg. social: {fmtCOP(ibc)}{" "}
-              <span className="text-xs font-normal text-gray-400">(informativo, 40% del total a pagar)</span>
+              <span className="text-xs font-normal text-gray-400">(informativo, 40% del valor neto a transferir)</span>
             </p>
           </div>
         );
