@@ -440,7 +440,7 @@ export function CierreDiario() {
             <p>Gasto del día: ${fmtCOP(Number(gasto) || 0)}${gastoConcepto.trim() ? ` — ${gastoConcepto.trim()}` : ""}</p>
             <p><strong>Total efectivo (Cierre): ${fmtCOP(totalEfectivoCierre)}</strong></p>
             <p>Día consignado: ${cierre?.consignado ? "Sí" : "No"}</p>
-            <p>Tirilla datáfono: ${cierre?.tirilla_datafono ? "Sí" : "No"}</p>
+            ${!sedeActiva.nombre.includes("Fabricato") ? `<p>Tirilla datáfono: ${cierre?.tirilla_datafono ? "Sí" : "No"}</p>` : ""}
             <p>Entregado a la administración: ${cierre?.entregado_admin ? "Sí" : "No"}</p>
           </div>
           <div class="vouchers">Adjuntar aquí los vouchers del datafono y demás soportes físicos del día.</div>
@@ -667,35 +667,37 @@ export function CierreDiario() {
             </label>
           </div>
         </div>
-        <div className="flex items-center justify-between flex-wrap gap-2 pt-3 border-t border-gray-100">
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={cierre?.tirilla_datafono ?? false}
-              onChange={(e) => marcarTirillaDatafono(e.target.checked)}
-            />
-            Tirilla datáfono
-          </label>
-          <div className="flex items-center gap-3">
-            {cierre?.tirilla_datafono_url && (
-              <button
-                onClick={() => verComprobante(cierre.tirilla_datafono_url!)}
-                className="text-sm text-[var(--acento)] font-medium underline"
-              >
-                Ver comprobante
-              </button>
-            )}
-            <label className="flex items-center gap-2 text-sm text-[var(--acento)] font-medium cursor-pointer">
-              <Paperclip size={14} />
-              {subiendoTirilla ? "Subiendo…" : cierre?.tirilla_datafono_url ? "Reemplazar" : "Adjuntar comprobante"}
+        {!sedeActiva.nombre.includes("Fabricato") && (
+          <div className="flex items-center justify-between flex-wrap gap-2 pt-3 border-t border-gray-100">
+            <label className="flex items-center gap-2 text-sm">
               <input
-                type="file"
-                className="hidden"
-                onChange={(e) => e.target.files?.[0] && subirTirillaDatafono(e.target.files[0])}
+                type="checkbox"
+                checked={cierre?.tirilla_datafono ?? false}
+                onChange={(e) => marcarTirillaDatafono(e.target.checked)}
               />
+              Tirilla datáfono
             </label>
+            <div className="flex items-center gap-3">
+              {cierre?.tirilla_datafono_url && (
+                <button
+                  onClick={() => verComprobante(cierre.tirilla_datafono_url!)}
+                  className="text-sm text-[var(--acento)] font-medium underline"
+                >
+                  Ver comprobante
+                </button>
+              )}
+              <label className="flex items-center gap-2 text-sm text-[var(--acento)] font-medium cursor-pointer">
+                <Paperclip size={14} />
+                {subiendoTirilla ? "Subiendo…" : cierre?.tirilla_datafono_url ? "Reemplazar" : "Adjuntar comprobante"}
+                <input
+                  type="file"
+                  className="hidden"
+                  onChange={(e) => e.target.files?.[0] && subirTirillaDatafono(e.target.files[0])}
+                />
+              </label>
+            </div>
           </div>
-        </div>
+        )}
         <div className="flex items-center justify-between pt-3 border-t border-gray-100">
           <label className="flex items-center gap-2 text-sm">
             <input
