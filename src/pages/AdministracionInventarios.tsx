@@ -55,9 +55,8 @@ export function AdministracionInventarios() {
   const [guardandoEntrega, setGuardandoEntrega] = useState(false);
   const [entregaOk, setEntregaOk] = useState(false);
   const [errorEntrega, setErrorEntrega] = useState<string | null>(null);
-  const [solicitudIdEnCurso, setSolicitudIdEnCurso] = useState<string | null>(null);
-
   const [solicitudesPendientes, setSolicitudesPendientes] = useState<SolicitudConDetalle[]>([]);
+  const [entregandoSolicitudId, setEntregandoSolicitudId] = useState<string | null>(null);
 
   const [pedidosPendientes, setPedidosPendientes] = useState<PedidoPendiente[]>([]);
   const [cantidadesEntregaPedido, setCantidadesEntregaPedido] = useState<Record<string, string>>({});
@@ -360,12 +359,58 @@ export function AdministracionInventarios() {
     if (sedeIdHistorial === "todas" || sedeIdHistorial === p.sedeId) cargarHistorial();
   }
 
-  function prepararEntregaDesdeSolicitud(s: SolicitudConDetalle) {
-    setSedeIdEntrega(s.sede_id);
-    setCatalogoIdEntrega(s.catalogo_id);
-    setCantidadEntrega(String(s.cantidad));
-    setSolicitudIdEnCurso(s.id);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+  // Entrega directa de una solicitud de sede — antes esto solo llenaba el
+  // formulario "Entregar a una sede" de arriba y hacía scroll hasta allá,
+  // esperando un segundo clic en OTRO botón para que de verdad se
+  // guardara; parecía que "Entregar" no hacía nada. Ahora entrega de una,
+  // mismo patrón que "Entregado" en pedidos pendientes.
+  async function entregarSolicitud(s: SolicitudConDetalle) {
+    setEntregandoSolicitudId(s.id);
+    setErrorEntrega(null);
+    let { data: periodo } = await supabase
+      .from("insumos_generales_periodos")
+      .select("id")
+      .eq("sede_id", s.sede_id)
+      .order("fecha_inicio", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!periodo) {
+      const { data: nuevo, error: errorPeriodo } = await supabase
+        .from("insumos_generales_periodos")
+        .insert({ sede_id: s.sede_id, etiqueta: etiquetaMesActual(), fecha_inicio: today() })
+        .select("id")
+        .single();
+      if (errorPeriodo || !nuevo) {
+        setEntregandoSolicitudId(null);
+        setErrorEntrega(errorPeriodo?.message ?? "No se pudo crear el período de esa sede.");
+        return;
+      }
+      periodo = nuevo;
+    }
+    const { data: entrega, error } = await supabase
+      .from("insumos_generales_entregas")
+      .insert({
+        catalogo_id: s.catalogo_id,
+        sede_id: s.sede_id,
+        periodo_id: periodo.id,
+        cantidad: s.cantidad,
+        fecha: today(),
+        created_by: perfil?.id ?? null,
+      })
+      .select("id")
+      .single();
+    if (error) {
+      setEntregandoSolicitudId(null);
+      setErrorEntrega(error.message);
+      return;
+    }
+    await supabase
+      .from("insumos_generales_solicitudes")
+      .update({ estado: "entregada", entrega_id: entrega.id, entregada_en: new Date().toISOString() })
+      .eq("id", s.id);
+    setEntregandoSolicitudId(null);
+    setSolicitudesPendientes((prev) => prev.filter((x) => x.id !== s.id));
+    if (sedeIdHistorial === "todas" || sedeIdHistorial === s.sede_id) cargarHistorial();
   }
 
   async function registrarEntrega() {
@@ -395,30 +440,18 @@ export function AdministracionInventarios() {
       }
       periodo = nuevo;
     }
-    const { data: entrega, error } = await supabase
-      .from("insumos_generales_entregas")
-      .insert({
-        catalogo_id: catalogoIdEntrega,
-        sede_id: sedeIdEntrega,
-        periodo_id: periodo.id,
-        cantidad: Number(cantidadEntrega),
-        fecha: fechaEntrega,
-        created_by: perfil?.id ?? null,
-      })
-      .select("id")
-      .single();
+    const { error } = await supabase.from("insumos_generales_entregas").insert({
+      catalogo_id: catalogoIdEntrega,
+      sede_id: sedeIdEntrega,
+      periodo_id: periodo.id,
+      cantidad: Number(cantidadEntrega),
+      fecha: fechaEntrega,
+      created_by: perfil?.id ?? null,
+    });
     setGuardandoEntrega(false);
     if (error) {
       setErrorEntrega(error.message);
       return;
-    }
-    if (solicitudIdEnCurso) {
-      await supabase
-        .from("insumos_generales_solicitudes")
-        .update({ estado: "entregada", entrega_id: entrega.id, entregada_en: new Date().toISOString() })
-        .eq("id", solicitudIdEnCurso);
-      setSolicitudIdEnCurso(null);
-      cargarSolicitudesPendientes();
     }
     setCantidadEntrega("");
     setEntregaOk(true);
@@ -723,10 +756,11 @@ export function AdministracionInventarios() {
                   {s.nota ? ` · ${s.nota}` : ""}
                 </span>
                 <button
-                  onClick={() => prepararEntregaDesdeSolicitud(s)}
-                  className="shrink-0 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700"
+                  onClick={() => entregarSolicitud(s)}
+                  disabled={entregandoSolicitudId === s.id}
+                  className="shrink-0 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700 disabled:opacity-40"
                 >
-                  Entregar
+                  {entregandoSolicitudId === s.id ? "Entregando…" : "Entregar"}
                 </button>
               </div>
             ))}
@@ -740,14 +774,6 @@ export function AdministracionInventarios() {
           Resta de la bodega administrativa y le avisa a la sede — "Entradas" del período activo se suma cuando ellos
           confirmen recibido, no antes. Queda como histórico de entrega abajo.
         </p>
-        {solicitudIdEnCurso && (
-          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-2 flex items-center justify-between gap-2">
-            Completando una solicitud pendiente — al entregar, queda marcada como resuelta.
-            <button onClick={() => setSolicitudIdEnCurso(null)} className="underline shrink-0">
-              Cancelar
-            </button>
-          </p>
-        )}
         <div className="mb-2">
           <p className="text-xs font-medium text-gray-500 mb-1.5">Sede</p>
           <div className="flex flex-wrap gap-2">
