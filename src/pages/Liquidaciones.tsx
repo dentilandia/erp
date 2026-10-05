@@ -1409,8 +1409,13 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
   }, [periodo.inicio, periodo.fin, sedeId, doctoraId, laboratorioId]);
 
   function retencionDe(f: FilaLab): number {
-    if (!f.fecha) return 0;
-    return f.valor_factura >= umbralRetencionLab(f.fecha) ? f.valor_factura * PCT_RETENCION_LAB : 0;
+    // La cuantía mínima es una regla DIAN vigente en la fecha de EMISIÓN de
+    // la factura, no en la fecha en que se procesó/instaló — usar f.fecha
+    // (mes_liquidacion) acá hacía que facturas de mayo-junio, procesadas
+    // después, tomaran por error el umbral más bajo vigente hoy.
+    const fechaUmbral = f.fechaFactura ?? f.fecha;
+    if (!fechaUmbral) return 0;
+    return f.valor_factura >= umbralRetencionLab(fechaUmbral) ? f.valor_factura * PCT_RETENCION_LAB : 0;
   }
 
   const totalesPorLab = useMemo(() => {
