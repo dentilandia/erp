@@ -424,8 +424,22 @@ export function AdministracionInventarios() {
       .from("insumos_generales_solicitudes")
       .update({ estado: "entregada", entrega_id: entrega.id, entregada_en: new Date().toISOString() })
       .eq("id", s.id);
+    // Si se entregó menos de lo pedido, el resto no debe desaparecer sin
+    // dejar rastro — queda como una nueva solicitud pendiente para que no
+    // se pierda de la lista (antes se marcaba "entregada" completa y el
+    // faltante no quedaba visible en ningún lado).
+    const resto = s.cantidad - cantidad;
+    if (resto > 0) {
+      await supabase.from("insumos_generales_solicitudes").insert({
+        sede_id: s.sede_id,
+        catalogo_id: s.catalogo_id,
+        cantidad: resto,
+        nota: `Resto de la entrega parcial del ${today()} (pedían ${s.cantidad}, se entreg${cantidad === 1 ? "ó" : "aron"} ${cantidad})`,
+        created_by: perfil?.id ?? null,
+      });
+    }
     setEntregandoSolicitudId(null);
-    setSolicitudesPendientes((prev) => prev.filter((x) => x.id !== s.id));
+    cargarSolicitudesPendientes();
     if (sedeIdHistorial === "todas" || sedeIdHistorial === s.sede_id) cargarHistorial();
   }
 
