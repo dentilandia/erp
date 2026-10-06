@@ -136,29 +136,14 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   // que la sede pueda decir exactamente cuál sí y cuál no le llegó, y en qué
   // cantidad (puede ser menos de lo que administración registró que envió).
   async function marcarEntregaRecibida(entrega: EntregaConCatalogo, cantidadRecibida: number) {
+    // "Entradas" no se toca al registrar el envío — solo se suma acá, al
+    // confirmar (trigger trg_bodega_entrega_confirmada en la base de
+    // datos), usando cantidad_recibida si se corrigió o si no la cantidad
+    // original. No hay que ajustarlo también desde el cliente.
     await supabase
       .from("insumos_generales_entregas")
       .update({ visto: true, cantidad_recibida: cantidadRecibida })
       .eq("id", entrega.id);
-    // El trigger de la entrega ya sumó "cantidad" (lo que administración
-    // dijo que envió) a "Entradas" cuando se registró el envío — si lo
-    // recibido es distinto, aquí se corrige por la diferencia.
-    const delta = cantidadRecibida - entrega.cantidad;
-    if (delta !== 0) {
-      const { data: mov } = await supabase
-        .from("insumos_generales_movimientos")
-        .select("entradas")
-        .eq("periodo_id", entrega.periodo_id)
-        .eq("catalogo_id", entrega.catalogo_id)
-        .maybeSingle();
-      if (mov) {
-        await supabase
-          .from("insumos_generales_movimientos")
-          .update({ entradas: mov.entradas + delta })
-          .eq("periodo_id", entrega.periodo_id)
-          .eq("catalogo_id", entrega.catalogo_id);
-      }
-    }
     cargarEntregasRecibidas();
     cargarMovimientos();
   }
