@@ -135,10 +135,30 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   // Cada línea se confirma por separado — no un solo botón para todas — para
   // que la sede pueda decir exactamente cuál sí y cuál no le llegó, y en qué
   // cantidad (puede ser menos de lo que administración registró que envió).
-  async function marcarEntregaRecibida(id: string, cantidadRecibida: number) {
-    // Al confirmar es cuando de verdad se suma a "Entradas" del período —
-    // no antes, para no contarlo hasta que la sede confirme que llegó.
-    await supabase.from("insumos_generales_entregas").update({ visto: true, cantidad_recibida: cantidadRecibida }).eq("id", id);
+  async function marcarEntregaRecibida(entrega: EntregaConCatalogo, cantidadRecibida: number) {
+    await supabase
+      .from("insumos_generales_entregas")
+      .update({ visto: true, cantidad_recibida: cantidadRecibida })
+      .eq("id", entrega.id);
+    // El trigger de la entrega ya sumó "cantidad" (lo que administración
+    // dijo que envió) a "Entradas" cuando se registró el envío — si lo
+    // recibido es distinto, aquí se corrige por la diferencia.
+    const delta = cantidadRecibida - entrega.cantidad;
+    if (delta !== 0) {
+      const { data: mov } = await supabase
+        .from("insumos_generales_movimientos")
+        .select("entradas")
+        .eq("periodo_id", entrega.periodo_id)
+        .eq("catalogo_id", entrega.catalogo_id)
+        .maybeSingle();
+      if (mov) {
+        await supabase
+          .from("insumos_generales_movimientos")
+          .update({ entradas: mov.entradas + delta })
+          .eq("periodo_id", entrega.periodo_id)
+          .eq("catalogo_id", entrega.catalogo_id);
+      }
+    }
     cargarEntregasRecibidas();
     cargarMovimientos();
   }
@@ -401,7 +421,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                       />
                     </label>
                     <button
-                      onClick={() => marcarEntregaRecibida(e.id, Number(valorEdit) || 0)}
+                      onClick={() => marcarEntregaRecibida(e, Number(valorEdit) || 0)}
                       className="rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-emerald-700"
                     >
                       Confirmar
