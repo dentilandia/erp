@@ -258,12 +258,13 @@ export const TIPOS_INSUMO_CONSULTA: { value: string; label: string }[] = [
   { value: "traccion_extraoral", label: "Tracción extra oral" },
 ];
 
-/** Los 4 insumos con inventario propio (con alerta de stock bajo). */
+/** Los insumos con inventario propio (con alerta de stock bajo). */
 export const TIPOS_INVENTARIO: { value: string; label: string }[] = [
   { value: "mascara_facial", label: "Máscara facial" },
   { value: "elasticos_intraoral", label: "Elásticos intraoral" },
   { value: "gum", label: "GUM" },
   { value: "boton_traccion", label: "Botón de tracción" },
+  { value: "llave_aparato", label: "Llave de aparato" },
 ];
 
 export interface InventarioStock {
