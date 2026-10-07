@@ -265,6 +265,7 @@ export const TIPOS_INVENTARIO: { value: string; label: string }[] = [
   { value: "gum", label: "GUM" },
   { value: "boton_traccion", label: "Botón de tracción" },
   { value: "llave_aparato", label: "Llave de aparato" },
+  { value: "caja_aparato", label: "Caja de aparato" },
 ];
 
 export interface InventarioStock {
