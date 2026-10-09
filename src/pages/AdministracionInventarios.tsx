@@ -47,6 +47,11 @@ export function AdministracionInventarios() {
   const { perfil } = useAuth();
   const [sedes, setSedes] = useState<Sede[]>([]);
   const [catalogo, setCatalogo] = useState<InsumoGeneralCatalogo[]>([]);
+  // Se sube cada vez que algo resta de la bodega administrativa (entregar,
+  // entregar solicitud, diferir, pedido entregado) para que BodegaAdminTabla
+  // se refresque sola — si no, el número ahí se queda desactualizado hasta
+  // que alguien recargue la página a mano.
+  const [refreshBodega, setRefreshBodega] = useState(0);
 
   const [sedeIdEntrega, setSedeIdEntrega] = useState("");
   const [catalogoIdEntrega, setCatalogoIdEntrega] = useState("");
@@ -303,6 +308,7 @@ export function AdministracionInventarios() {
     } else {
       setPedidosPendientes((prev) => prev.filter((x) => x.movimientoId !== p.movimientoId));
     }
+    setRefreshBodega((n) => n + 1);
     if (sedeIdHistorial === "todas" || sedeIdHistorial === p.sedeId) cargarHistorial();
   }
 
@@ -439,6 +445,7 @@ export function AdministracionInventarios() {
       });
     }
     setEntregandoSolicitudId(null);
+    setRefreshBodega((n) => n + 1);
     cargarSolicitudesPendientes();
     if (sedeIdHistorial === "todas" || sedeIdHistorial === s.sede_id) cargarHistorial();
   }
@@ -500,6 +507,7 @@ export function AdministracionInventarios() {
     }
     setEntregandoSolicitudId(null);
     setSolicitudesPendientes((prev) => prev.filter((x) => x.id !== s.id));
+    if (cantidadEntregada > 0) setRefreshBodega((n) => n + 1);
     if (sedeIdHistorial === "todas" || sedeIdHistorial === s.sede_id) cargarHistorial();
   }
 
@@ -546,6 +554,7 @@ export function AdministracionInventarios() {
     setCantidadEntrega("");
     setEntregaOk(true);
     setTimeout(() => setEntregaOk(false), 2000);
+    setRefreshBodega((n) => n + 1);
     if (sedeIdHistorial === "todas" || sedeIdHistorial === sedeIdEntrega) cargarHistorial();
   }
 
@@ -689,7 +698,7 @@ export function AdministracionInventarios() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <BodegaAdminTabla editable />
+      <BodegaAdminTabla editable refreshKey={refreshBodega} />
 
       {entregasNoRecibidas.length > 0 && (
         <section className="rounded-xl border-2 border-rose-300 bg-rose-50 p-4">

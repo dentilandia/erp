@@ -11,7 +11,19 @@ const CONSOLIDADO = "consolidado";
  *  sedeId fijo (Operación) se muestra de solo lectura la de esa sede nada
  *  más; sin sedeId (Administración) trae selector con las dos sedes más una
  *  vista "Consolidado" (suma de ambas), y ahí además se puede editar. */
-export function BodegaAdminTabla({ editable, sedeId }: { editable: boolean; sedeId?: string }) {
+export function BodegaAdminTabla({
+  editable,
+  sedeId,
+  refreshKey,
+}: {
+  editable: boolean;
+  sedeId?: string;
+  /** Súbelo (ej. refreshKey + 1) desde quien use este componente cada vez que
+   *  algo por fuera de acá — una entrega a una sede, una solicitud — cambia
+   *  el stock de la bodega administrativa, para que esta tabla se refresque
+   *  sola en vez de quedar desactualizada hasta un F5. */
+  refreshKey?: number;
+}) {
   const { perfil } = useAuth();
   const [sedes, setSedes] = useState<Sede[]>([]);
   const [sedeIdVista, setSedeIdVista] = useState(sedeId ?? CONSOLIDADO);
@@ -61,7 +73,7 @@ export function BodegaAdminTabla({ editable, sedeId }: { editable: boolean; sede
     setCargando(true);
     cargar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sedeIdVista]);
+  }, [sedeIdVista, refreshKey]);
 
   const categorias = useMemo(() => Array.from(new Set(catalogo.map((c) => c.categoria))), [catalogo]);
   const cantidadPorCatalogo = useMemo(() => {
