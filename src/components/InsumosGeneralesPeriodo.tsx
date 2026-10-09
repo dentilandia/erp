@@ -49,6 +49,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   const [periodoId, setPeriodoId] = useState("");
   const [movimientos, setMovimientos] = useState<Record<string, InsumoGeneralMovimiento>>({});
   const [entregasRecibidas, setEntregasRecibidas] = useState<EntregaConCatalogo[]>([]);
+  const [entregasPendientes, setEntregasPendientes] = useState<EntregaConCatalogo[]>([]);
   // Lo que la persona que recibe puede corregir antes de confirmar — arranca
   // igual a lo que administración dijo que envió, editable si no coincide.
   const [cantidadRecibidaEdit, setCantidadRecibidaEdit] = useState<Record<string, string>>({});
@@ -105,14 +106,29 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   }
 
   async function cargarEntregasRecibidas() {
+    // Historial de las últimas entregas ya confirmadas — las pendientes
+    // (sin confirmar todavía) viven en cargarEntregasPendientes, sin límite,
+    // para que una entrega vieja nunca quede tapada por una más reciente.
     const { data } = await supabase
       .from("insumos_generales_entregas")
       .select("*, insumos_generales_catalogo(nombre)")
       .eq("sede_id", sedeId)
+      .eq("visto", true)
       .order("fecha", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(10);
     setEntregasRecibidas((data as unknown as EntregaConCatalogo[]) ?? []);
+  }
+
+  async function cargarEntregasPendientes() {
+    const { data } = await supabase
+      .from("insumos_generales_entregas")
+      .select("*, insumos_generales_catalogo(nombre)")
+      .eq("sede_id", sedeId)
+      .eq("visto", false)
+      .eq("reportado_no_recibido", false)
+      .order("created_at", { ascending: true });
+    setEntregasPendientes((data as unknown as EntregaConCatalogo[]) ?? []);
   }
 
   async function cargarDiferidos() {
@@ -145,6 +161,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
       .update({ visto: true, cantidad_recibida: cantidadRecibida })
       .eq("id", entrega.id);
     cargarEntregasRecibidas();
+    cargarEntregasPendientes();
     cargarMovimientos();
   }
 
@@ -152,7 +169,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     // No suma a "Entradas" — queda marcada para que administración la
     // revise y decida cómo resolverla.
     await supabase.from("insumos_generales_entregas").update({ reportado_no_recibido: true }).eq("id", id);
-    cargarEntregasRecibidas();
+    cargarEntregasPendientes();
   }
 
   async function cargarSalidas() {
@@ -180,6 +197,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     setCargando(true);
     cargarPeriodos();
     cargarEntregasRecibidas();
+    cargarEntregasPendientes();
     cargarDiferidos();
     cargarSalidas();
     cargarSolicitudes();
@@ -371,7 +389,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   }
 
   const periodoActivo = periodos.find((p) => p.id === periodoId);
-  const entregasNoVistas = entregasRecibidas.filter((e) => !e.visto && !e.reportado_no_recibido);
+  const entregasNoVistas = entregasPendientes;
 
   if (cargando) return <p className="text-sm text-gray-400">Cargando…</p>;
 
