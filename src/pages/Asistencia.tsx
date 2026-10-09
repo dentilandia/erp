@@ -1854,9 +1854,20 @@ export function Asistencia() {
   async function marcar(tipo: TipoAsistencia) {
     setMarcando(tipo);
     setMensaje(null);
-    const { data, error } = await supabase.functions.invoke("marcar-asistencia", {
+    let { data, error } = await supabase.functions.invoke("marcar-asistencia", {
       body: { tipo },
     });
+    // El celular/tablet se queda abierto horas entre una marca y la
+    // siguiente (llegada a las 8am, salida a almuerzo al mediodía...) — de
+    // fondo, el sistema operativo puede suspender la pestaña y el token de
+    // sesión vence sin que alcance a renovarse solo. Antes de mostrar el
+    // error, se intenta refrescar la sesión y reintentar una sola vez.
+    if (data?.error === "Sesión inválida.") {
+      const { error: errorRefresh } = await supabase.auth.refreshSession();
+      if (!errorRefresh) {
+        ({ data, error } = await supabase.functions.invoke("marcar-asistencia", { body: { tipo } }));
+      }
+    }
     setMarcando(null);
     if (error || data?.error) {
       // supabase-js no pone el body del error (ej. "Debes estar conectado a
