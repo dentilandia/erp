@@ -66,14 +66,24 @@ Deno.serve(async (req) => {
   let semanaId: string | undefined;
 
   try {
-    const authHeader = req.headers.get("Authorization") ?? "";
-    const callerClient = createClient(SUPABASE_URL, ANON_KEY, { global: { headers: { Authorization: authHeader } } });
-    const { data: userData } = await callerClient.auth.getUser();
-    if (!userData?.user) return json({ ok: false, error: "No autenticado." }, 401);
+    // Dos formas de llamar: un admin autenticado desde la pantalla (botón
+    // "Procesar con IA"), o el cron diario (sin usuario — manda un secreto
+    // compartido en vez de un JWT, guardado en Vault y en los secrets del
+    // edge function, nunca en el código).
+    const cronSecret = req.headers.get("x-cron-secret");
+    const cronSecretEsperado = Deno.env.get("CIERRE_CAJA_CRON_SECRET");
+    const esLlamadaCron = !!cronSecret && !!cronSecretEsperado && cronSecret === cronSecretEsperado;
 
-    const { data: perfil } = await admin.from("perfiles").select("rol").eq("id", userData.user.id).single();
-    if (perfil?.rol !== "admin") {
-      return json({ ok: false, error: "Solo un administrador puede procesar el cierre con IA." }, 403);
+    if (!esLlamadaCron) {
+      const authHeader = req.headers.get("Authorization") ?? "";
+      const callerClient = createClient(SUPABASE_URL, ANON_KEY, { global: { headers: { Authorization: authHeader } } });
+      const { data: userData } = await callerClient.auth.getUser();
+      if (!userData?.user) return json({ ok: false, error: "No autenticado." }, 401);
+
+      const { data: perfil } = await admin.from("perfiles").select("rol").eq("id", userData.user.id).single();
+      if (perfil?.rol !== "admin") {
+        return json({ ok: false, error: "Solo un administrador puede procesar el cierre con IA." }, 403);
+      }
     }
 
     const body = await req.json();
