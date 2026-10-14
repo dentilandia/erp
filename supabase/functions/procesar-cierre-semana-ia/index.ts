@@ -141,7 +141,17 @@ Deno.serve(async (req) => {
     if (errSemana || !semana) return json({ ok: false, error: "No se encontró la semana." }, 404);
 
     const documentosSemana: { label: string; path: string | null; sedes: ("Las Americas" | "Fabricato")[] }[] = [
-      { label: "Movimientos Bancolombia — ambas sedes", path: semana.url_bancolombia, sedes: ["Las Americas", "Fabricato"] },
+      {
+        label: "Movimientos Bancolombia — Las Américas (transferencias de pacientes + consignación de efectivo)",
+        path: semana.url_bancolombia,
+        sedes: ["Las Americas"],
+      },
+      {
+        label:
+          "Movimientos Bancolombia — Fabricato (SOLO para confirmar consignación de efectivo — las transferencias y la tarjeta de Fabricato van por Bold, no por esta cuenta)",
+        path: semana.url_bancolombia_fabricato,
+        sedes: ["Fabricato"],
+      },
       { label: "Movimientos Bold — Fabricato", path: semana.url_bold_fabricato, sedes: ["Fabricato"] },
       { label: "Excel recibos de caja del sistema — ambas sedes", path: semana.url_recibos_caja, sedes: ["Las Americas", "Fabricato"] },
     ].filter((d) => d.path);
@@ -161,7 +171,7 @@ Deno.serve(async (req) => {
 
     const { data: cierresDiariosData } = await admin
       .from("cierres_diarios")
-      .select("sede_id, fecha, totales_por_medio, gasto, tirilla_datafono_url, bold_cierre_turnos")
+      .select("sede_id, fecha, totales_por_medio, gasto, tirilla_datafono_url, bold_cierre_turnos, consignado, fecha_consignacion")
       .in("fecha", fechas);
     const facturadoPorDiaSede = new Map<
       string,
@@ -177,6 +187,10 @@ Deno.serve(async (req) => {
     // en texto plano — un bot lee Gmail y los va guardando acá, uno o varios
     // por día. Se suman para tener el total determinístico del día.
     const boldFabricatoPorFecha = new Map<string, number>();
+    // En Fabricato las transferencias/tarjeta van por Bold, pero el efectivo
+    // se sigue consignando en Bancolombia — esto le dice a la IA qué días
+    // buscar esa consignación en el extracto de esa cuenta.
+    const consignacionPorDiaSede = new Map<string, { consignado: boolean; fecha_consignacion: string | null }>();
     for (const c of (cierresDiariosData as {
       sede_id: string;
       fecha: string;
@@ -184,6 +198,8 @@ Deno.serve(async (req) => {
       gasto: number;
       tirilla_datafono_url: string | null;
       bold_cierre_turnos: { valor: number }[] | null;
+      consignado: boolean;
+      fecha_consignacion: string | null;
     }[]) ?? []) {
       let claveSede: "Las Americas" | "Fabricato" | null = null;
       for (const [k, v] of sedesPorClave) if (v === c.sede_id) claveSede = k;
@@ -209,6 +225,7 @@ Deno.serve(async (req) => {
         const suma = c.bold_cierre_turnos.reduce((a, turno) => a + Number(turno.valor ?? 0), 0);
         boldFabricatoPorFecha.set(c.fecha, suma);
       }
+      consignacionPorDiaSede.set(`${c.fecha}|${claveSede}`, { consignado: c.consignado, fecha_consignacion: c.fecha_consignacion });
     }
 
     if (documentosSemana.length === 0 && tirillaLasAmericasPorFecha.size === 0 && boldFabricatoPorFecha.size === 0) {
@@ -236,7 +253,11 @@ Deno.serve(async (req) => {
           sede === "Fabricato" && boldFabricatoPorFecha.has(fecha)
             ? ` [tarjeta ya verificada contra Bold: $${boldFabricatoPorFecha.get(fecha)}, no hace falta que la verifiques tú]`
             : "";
-        return `- ${fecha} · ${sede}: efectivo ${f.efvo_fact} (ya con el gasto de ${f.gasto} restado), tarjeta ${f.tarjeta_fact}, transferencia ${f.transf_fact}, addi/sistecrédito ${f.addi}, total ${f.total}.${notaTarjeta}`;
+        const consig = consignacionPorDiaSede.get(`${fecha}|${sede}`);
+        const notaConsig = consig?.consignado
+          ? ` [efectivo marcado como CONSIGNADO en el ERP (fecha de consignación: ${consig.fecha_consignacion ?? "sin especificar"}) — búscalo en el extracto de Bancolombia de esta sede, puede venir repartido en varias consignaciones que sumen el total; dilo en tu nota: encontrado o no]`
+          : "";
+        return `- ${fecha} · ${sede}: efectivo ${f.efvo_fact} (ya con el gasto de ${f.gasto} restado), tarjeta ${f.tarjeta_fact}, transferencia ${f.transf_fact}, addi/sistecrédito ${f.addi}, total ${f.total}.${notaTarjeta}${notaConsig}`;
       }),
     );
     const facturadoTexto = `Período del ${semana.semana_inicio} al ${finPeriodo} (${fechas.length} días) — facturado según el ERP (Cierre diario de Operación) por día y sede:\n${facturadoLineas.join("\n")}`;
@@ -250,14 +271,20 @@ leas de ningún documento): para Las Américas te llega una imagen/PDF de la tir
 tenga (la etiqueta ya trae su fecha exacta), y para Fabricato el valor ya viene anotado junto al facturado de cada
 día cuando aplica — en ambos casos, para "tarjeta_real" de esos día×sede usa ese mismo valor (o el de la tirilla
 que leas) tal cual, sin necesidad de más verificación.
-- Movimientos Bancolombia: ambas sedes, transferencia/banco.
+- Movimientos Bancolombia — Las Américas: transferencias de pacientes (compáralas contra "transferencia_real") y
+  también la consignación diaria del efectivo (ambas cosas pasan por esta cuenta).
+- Movimientos Bancolombia — Fabricato: en Fabricato las transferencias y la tarjeta van por Bold, NO por esta
+  cuenta — este extracto SOLO sirve para confirmar que el efectivo que un día quedó marcado como "CONSIGNADO" en
+  el ERP (ver la anotación junto a cada día de Fabricato abajo) realmente aparece como una consignación en este
+  banco. No uses este documento para "transferencia_real" de Fabricato — esa sale del documento de Bold.
 - Movimientos Bold: solo Fabricato, transferencia/banco (aparte de Bancolombia).
 - Excel de recibos de caja del sistema: ambas sedes, efectivo (y puede traer una columna de sede).
 
 Lee esos documentos y, para CADA UNA de las ${totalCombinaciones} combinaciones día×sede de ese período, extrae lo
 que encuentres (sobre todo efectivo y transferencia) y compáralo contra el facturado del ERP de ese día y esa
 sede. Si un documento no trae desglose por día, repartelo por día tal como aparece, o usa null si no puedes
-separar un día de otro.
+separar un día de otro. Cuando un día traiga la anotación de efectivo consignado, dedica una frase de tu "nota" a
+decir si encontraste o no esa consignación en el extracto de Bancolombia correspondiente a esa sede.
 
 Responde ÚNICAMENTE con un JSON válido, sin texto adicional antes ni después, ni bloques de markdown, con esta forma
 exacta:
@@ -329,6 +356,7 @@ exacta:
         };
         const analisis = analisisPorDiaSede.get(`${fecha}|${sede}`);
         const urlDatafono1 = sede === "Las Americas" ? tirillaLasAmericasPorFecha.get(fecha) ?? null : null;
+        const urlBanco1 = sede === "Las Americas" ? semana.url_bancolombia : semana.url_bancolombia_fabricato;
         const urlBanco2 = sede === "Fabricato" ? semana.url_bold_fabricato : null;
 
         // Tarjeta determinística: Las Américas la trae la IA (leyó la tirilla
@@ -355,7 +383,7 @@ exacta:
             total: facturado.total,
             gasto: facturado.gasto,
             url_recibos_caja: semana.url_recibos_caja,
-            url_movimientos_banco: semana.url_bancolombia,
+            url_movimientos_banco: urlBanco1,
             url_movimientos_banco_2: urlBanco2,
             url_tirilla_datafono: urlDatafono1,
             dataf_sin_docs: !tieneFuenteTarjeta,

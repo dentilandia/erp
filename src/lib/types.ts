@@ -611,6 +611,7 @@ export interface CierreCajaSemana {
   semana_inicio: string;
   semana_fin: string | null;
   url_bancolombia: string | null;
+  url_bancolombia_fabricato: string | null;
   url_bold_fabricato: string | null;
   url_recibos_caja: string | null;
   procesando: boolean;

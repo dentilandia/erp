@@ -662,7 +662,8 @@ function ErroresSeccion({
 }
 
 const DOCUMENTOS_SEMANA: { campo: keyof CierreCajaSemana; label: string }[] = [
-  { campo: "url_bancolombia", label: "Movimientos Bancolombia — ambas sedes" },
+  { campo: "url_bancolombia", label: "Movimientos Bancolombia — Las Américas" },
+  { campo: "url_bancolombia_fabricato", label: "Movimientos Bancolombia — Fabricato (solo consignación de efectivo)" },
   { campo: "url_bold_fabricato", label: "Movimientos Bold — Fabricato" },
   { campo: "url_recibos_caja", label: "Excel recibos de caja del sistema — ambas sedes" },
 ];
