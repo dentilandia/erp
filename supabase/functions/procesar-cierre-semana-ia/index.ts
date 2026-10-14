@@ -286,26 +286,8 @@ sede. Si un documento no trae desglose por día, repartelo por día tal como apa
 separar un día de otro. Cuando un día traiga la anotación de efectivo consignado, dedica una frase de tu "nota" a
 decir si encontraste o no esa consignación en el extracto de Bancolombia correspondiente a esa sede.
 
-Responde ÚNICAMENTE con un JSON válido, sin texto adicional antes ni después, ni bloques de markdown, con esta forma
-exacta:
-{
-  "dias": [
-    {
-      "fecha": "YYYY-MM-DD",
-      "sede": "Las Americas" | "Fabricato",
-      "efectivo_real": number|null,
-      "tarjeta_real": number|null,
-      "transferencia_real": number|null,
-      "diferencia_efectivo": number|null,
-      "diferencia_tarjeta": number|null,
-      "diferencia_transferencia": number|null,
-      "cuadra_sugerido": boolean,
-      "nota": string
-    },
-    ... (una entrada por cada una de las ${totalCombinaciones} combinaciones día×sede, en el mismo orden que te las di)
-  ],
-  "resumen": "3-6 líneas en español: qué días/sedes tienen diferencias o les falta algo, y cualquier cosa rara que encontraste."
-}`;
+Usa la herramienta "reportar_cierre" para dar tu respuesta, una entrada por cada una de las ${totalCombinaciones}
+combinaciones día×sede de ese período, en el mismo orden que te las di.`;
 
     const resp = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -324,13 +306,45 @@ exacta:
         // comparación directa, no necesita razonamiento extendido.
         thinking: { type: "disabled" },
         system: systemPrompt,
-        // "Prefill": arrancamos la respuesta del modelo con "{" — así no puede
-        // escribir análisis en prosa antes del JSON (ya empezó un objeto), que
-        // es justo lo que estaba gastando todo max_tokens sin llegar al JSON.
-        messages: [
-          { role: "user", content: [{ type: "text", text: facturadoTexto }, ...contentBlocks] },
-          { role: "assistant", content: "{" },
+        messages: [{ role: "user", content: [{ type: "text", text: facturadoTexto }, ...contentBlocks] }],
+        // Herramienta forzada en vez de pedir "responde solo JSON": este modelo no
+        // admite prefill del mensaje del asistente, y sin forzar, se gastaba todo
+        // max_tokens narrando el análisis en texto antes de llegar al JSON. Con
+        // tool_choice obligado, el modelo llena directamente el "input" con el
+        // esquema exacto, sin poder escribir texto libre de por medio.
+        tools: [
+          {
+            name: "reportar_cierre",
+            description: "Reporta el análisis día×sede del período comparado contra el facturado del ERP.",
+            input_schema: {
+              type: "object",
+              properties: {
+                dias: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      fecha: { type: "string" },
+                      sede: { type: "string", enum: ["Las Americas", "Fabricato"] },
+                      efectivo_real: { type: ["number", "null"] },
+                      tarjeta_real: { type: ["number", "null"] },
+                      transferencia_real: { type: ["number", "null"] },
+                      diferencia_efectivo: { type: ["number", "null"] },
+                      diferencia_tarjeta: { type: ["number", "null"] },
+                      diferencia_transferencia: { type: ["number", "null"] },
+                      cuadra_sugerido: { type: "boolean" },
+                      nota: { type: "string" },
+                    },
+                    required: ["fecha", "sede", "cuadra_sugerido", "nota"],
+                  },
+                },
+                resumen: { type: "string" },
+              },
+              required: ["dias", "resumen"],
+            },
+          },
         ],
+        tool_choice: { type: "tool", name: "reportar_cierre" },
       }),
     });
 
@@ -339,16 +353,18 @@ exacta:
       throw new Error(`Error de la API de Claude (${resp.status}): ${errText.slice(0, 500)}`);
     }
     const data = await resp.json();
-    const textoRespuesta = "{" + (data.content ?? []).map((b: { type: string; text?: string }) => b.text ?? "").join("").trim();
+    const toolUse = (data.content ?? []).find((b: { type: string }) => b.type === "tool_use") as
+      | { input: { dias: Record<string, unknown>[]; resumen: string } }
+      | undefined;
 
     let resultado: { dias: Record<string, unknown>[]; resumen: string };
-    try {
-      const limpio = textoRespuesta.replace(/^```(json)?\s*/i, "").replace(/```\s*$/, "").trim();
-      resultado = JSON.parse(limpio);
-    } catch {
+    if (toolUse?.input) {
+      resultado = toolUse.input;
+    } else {
       const tiposBloques = (data.content ?? []).map((b: { type: string }) => b.type).join(",");
+      const textoRespuesta = (data.content ?? []).map((b: { type: string; text?: string }) => b.text ?? "").join("");
       throw new Error(
-        `Claude no devolvió un JSON válido (stop_reason: ${data.stop_reason}, bloques: [${tiposBloques}], ` +
+        `Claude no devolvió el resultado esperado (stop_reason: ${data.stop_reason}, bloques: [${tiposBloques}], ` +
           `tokens de salida: ${data.usage?.output_tokens}): ${textoRespuesta.slice(0, 500)}`,
       );
     }

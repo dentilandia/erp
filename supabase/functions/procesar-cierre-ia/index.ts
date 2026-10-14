@@ -138,10 +138,7 @@ movimientos bancarios, cierre de datáfono). Lee esos documentos y extrae:
 - cuadra_sugerido: true si las diferencias son cercanas a 0, false si hay una diferencia relevante o no pudiste leer algo importante.
 - resumen: 2-4 líneas en español explicando lo que encontraste, y cualquier cosa que no pudiste leer con certeza o que te pareció rara.
 
-Responde ÚNICAMENTE con un JSON válido, sin texto adicional antes ni después, ni bloques de markdown, con
-exactamente estas claves: {"efectivo_real": number|null, "tarjeta_real": number|null, "transferencia_real": number|null,
-"diferencia_efectivo": number|null, "diferencia_tarjeta": number|null, "diferencia_transferencia": number|null,
-"cuadra_sugerido": boolean, "resumen": string}`;
+Usa la herramienta "reportar_cierre" para dar tu respuesta.`;
 
     const resp = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -158,12 +155,31 @@ exactamente estas claves: {"efectivo_real": number|null, "tarjeta_real": number|
         // comparación directa, no necesita razonamiento extendido.
         thinking: { type: "disabled" },
         system: systemPrompt,
-        // "Prefill": arrancamos la respuesta del modelo con "{" — así no puede
-        // escribir análisis en prosa antes del JSON (ya empezó un objeto).
-        messages: [
-          { role: "user", content: [{ type: "text", text: facturadoTexto }, ...contentBlocks] },
-          { role: "assistant", content: "{" },
+        messages: [{ role: "user", content: [{ type: "text", text: facturadoTexto }, ...contentBlocks] }],
+        // Herramienta forzada en vez de pedir "responde solo JSON": este modelo no
+        // admite prefill del mensaje del asistente, y sin forzar, se gastaba todo
+        // max_tokens narrando el análisis antes de llegar al JSON.
+        tools: [
+          {
+            name: "reportar_cierre",
+            description: "Reporta el análisis del día comparado contra el facturado del ERP.",
+            input_schema: {
+              type: "object",
+              properties: {
+                efectivo_real: { type: ["number", "null"] },
+                tarjeta_real: { type: ["number", "null"] },
+                transferencia_real: { type: ["number", "null"] },
+                diferencia_efectivo: { type: ["number", "null"] },
+                diferencia_tarjeta: { type: ["number", "null"] },
+                diferencia_transferencia: { type: ["number", "null"] },
+                cuadra_sugerido: { type: "boolean" },
+                resumen: { type: "string" },
+              },
+              required: ["cuadra_sugerido", "resumen"],
+            },
+          },
         ],
+        tool_choice: { type: "tool", name: "reportar_cierre" },
       }),
     });
 
@@ -172,14 +188,23 @@ exactamente estas claves: {"efectivo_real": number|null, "tarjeta_real": number|
       return json({ ok: false, error: `Error de la API de Claude (${resp.status}): ${errText.slice(0, 500)}` }, 502);
     }
     const data = await resp.json();
-    const textoRespuesta = "{" + (data.content ?? []).map((b: { type: string; text?: string }) => b.text ?? "").join("").trim();
+    const toolUse = (data.content ?? []).find((b: { type: string }) => b.type === "tool_use") as
+      | { input: Record<string, unknown> }
+      | undefined;
 
     let resultado: Record<string, unknown>;
-    try {
-      const limpio = textoRespuesta.replace(/^```(json)?\s*/i, "").replace(/```\s*$/, "").trim();
-      resultado = JSON.parse(limpio);
-    } catch {
-      return json({ ok: false, error: `Claude no devolvió un JSON válido: ${textoRespuesta.slice(0, 500)}` }, 502);
+    if (toolUse?.input) {
+      resultado = toolUse.input;
+    } else {
+      const tiposBloques = (data.content ?? []).map((b: { type: string }) => b.type).join(",");
+      const textoRespuesta = (data.content ?? []).map((b: { type: string; text?: string }) => b.text ?? "").join("");
+      return json(
+        {
+          ok: false,
+          error: `Claude no devolvió el resultado esperado (stop_reason: ${data.stop_reason}, bloques: [${tiposBloques}]): ${textoRespuesta.slice(0, 500)}`,
+        },
+        502,
+      );
     }
     resultado.generado_en = new Date().toISOString();
 
