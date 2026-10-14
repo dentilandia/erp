@@ -158,7 +158,12 @@ exactamente estas claves: {"efectivo_real": number|null, "tarjeta_real": number|
         // comparación directa, no necesita razonamiento extendido.
         thinking: { type: "disabled" },
         system: systemPrompt,
-        messages: [{ role: "user", content: [{ type: "text", text: facturadoTexto }, ...contentBlocks] }],
+        // "Prefill": arrancamos la respuesta del modelo con "{" — así no puede
+        // escribir análisis en prosa antes del JSON (ya empezó un objeto).
+        messages: [
+          { role: "user", content: [{ type: "text", text: facturadoTexto }, ...contentBlocks] },
+          { role: "assistant", content: "{" },
+        ],
       }),
     });
 
@@ -167,7 +172,7 @@ exactamente estas claves: {"efectivo_real": number|null, "tarjeta_real": number|
       return json({ ok: false, error: `Error de la API de Claude (${resp.status}): ${errText.slice(0, 500)}` }, 502);
     }
     const data = await resp.json();
-    const textoRespuesta = (data.content ?? []).map((b: { type: string; text?: string }) => b.text ?? "").join("").trim();
+    const textoRespuesta = "{" + (data.content ?? []).map((b: { type: string; text?: string }) => b.text ?? "").join("").trim();
 
     let resultado: Record<string, unknown>;
     try {

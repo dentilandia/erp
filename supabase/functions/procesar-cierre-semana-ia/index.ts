@@ -324,7 +324,13 @@ exacta:
         // comparación directa, no necesita razonamiento extendido.
         thinking: { type: "disabled" },
         system: systemPrompt,
-        messages: [{ role: "user", content: [{ type: "text", text: facturadoTexto }, ...contentBlocks] }],
+        // "Prefill": arrancamos la respuesta del modelo con "{" — así no puede
+        // escribir análisis en prosa antes del JSON (ya empezó un objeto), que
+        // es justo lo que estaba gastando todo max_tokens sin llegar al JSON.
+        messages: [
+          { role: "user", content: [{ type: "text", text: facturadoTexto }, ...contentBlocks] },
+          { role: "assistant", content: "{" },
+        ],
       }),
     });
 
@@ -333,7 +339,7 @@ exacta:
       throw new Error(`Error de la API de Claude (${resp.status}): ${errText.slice(0, 500)}`);
     }
     const data = await resp.json();
-    const textoRespuesta = (data.content ?? []).map((b: { type: string; text?: string }) => b.text ?? "").join("").trim();
+    const textoRespuesta = "{" + (data.content ?? []).map((b: { type: string; text?: string }) => b.text ?? "").join("").trim();
 
     let resultado: { dias: Record<string, unknown>[]; resumen: string };
     try {
