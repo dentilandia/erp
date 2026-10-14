@@ -927,10 +927,22 @@ function ModalAtencion({
                     {label}
                   </label>
                 ))}
+                <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                  <input
+                    type="checkbox"
+                    checked={envioModeloSuperior && envioModeloInferior}
+                    onChange={(e) => {
+                      setEnvioModeloSuperior(e.target.checked);
+                      setEnvioModeloInferior(e.target.checked);
+                    }}
+                  />
+                  Ambos modelos
+                </label>
               </div>
               <p className="text-xs text-gray-400">
                 Marca qué va físicamente en este envío — Ruby lo necesita para su control. Agrega uno por cada
-                aparato (ej. si va superior e inferior, agrega los dos). Queda a nombre de la doctora de la visita.
+                aparato (ej. si va superior e inferior, agrega los dos, o marca "Ambos modelos"). Queda a nombre de
+                la doctora de la visita.
               </p>
             </div>
           )}
@@ -1609,6 +1621,17 @@ function ModalEditarValor({
                         {label}
                       </label>
                     ))}
+                    <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                      <input
+                        type="checkbox"
+                        checked={envioModeloSuperior && envioModeloInferior}
+                        onChange={(e) => {
+                          setEnvioModeloSuperior(e.target.checked);
+                          setEnvioModeloInferior(e.target.checked);
+                        }}
+                      />
+                      Ambos modelos
+                    </label>
                   </div>
                 </div>
               ) : (
