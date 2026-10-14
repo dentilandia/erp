@@ -153,6 +153,10 @@ exactamente estas claves: {"efectivo_real": number|null, "tarjeta_real": number|
       body: JSON.stringify({
         model: ANTHROPIC_MODEL,
         max_tokens: 1500,
+        // Sin esto, el modelo gasta todo max_tokens "pensando" (bloque "thinking")
+        // y nunca llega a escribir el JSON de salida — esta tarea es extracción y
+        // comparación directa, no necesita razonamiento extendido.
+        thinking: { type: "disabled" },
         system: systemPrompt,
         messages: [{ role: "user", content: [{ type: "text", text: facturadoTexto }, ...contentBlocks] }],
       }),
