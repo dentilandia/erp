@@ -378,14 +378,11 @@ combinaciones día×sede de ese período, en el mismo orden que te las di.`;
     // --- Crear/actualizar las filas de cierres_caja de este período ---
     for (const fecha of fechas) {
       for (const sede of ["Las Americas", "Fabricato"] as const) {
-        const facturado = facturadoPorDiaSede.get(`${fecha}|${sede}`) ?? {
-          efvo_fact: 0,
-          tarjeta_fact: 0,
-          transf_fact: 0,
-          addi: 0,
-          total: 0,
-          gasto: 0,
-        };
+        const facturado = facturadoPorDiaSede.get(`${fecha}|${sede}`);
+        // Sin Cierre Diario de Operación registrado ese día (ej. un domingo que
+        // no se trabaja) no hay nada que reconciliar — no se crea una fila
+        // vacía en cierres_caja solo porque el día cae dentro del rango.
+        if (!facturado) continue;
         const analisis = analisisPorDiaSede.get(`${fecha}|${sede}`);
         const urlDatafono1 = sede === "Las Americas" ? tirillaLasAmericasPorFecha.get(fecha) ?? null : null;
         const urlBanco1 = sede === "Las Americas" ? semana.url_bancolombia : semana.url_bancolombia_fabricato;
@@ -404,7 +401,7 @@ combinaciones día×sede de ese período, en el mismo orden que te las di.`;
           sede === "Fabricato" && boldFabricato !== null ? "SPRO Bold" : sede === "Las Americas" && urlDatafono1 ? "Redeban" : undefined;
         const tieneFuenteTarjeta = sede === "Las Americas" ? !!urlDatafono1 : boldFabricato !== null;
 
-        await admin.from("cierres_caja").upsert(
+        const { error: errUpsert } = await admin.from("cierres_caja").upsert(
           {
             fecha,
             sede,
@@ -441,6 +438,10 @@ combinaciones día×sede de ese período, en el mismo orden que te las di.`;
           },
           { onConflict: "fecha,sede" },
         );
+        // Sin esto, un error de escritura (ej. una columna que no existe) se
+        // tragaba en silencio: la función terminaba "ok" sin haber guardado
+        // nada — pasó exactamente eso con analisis_ia antes de esta migración.
+        if (errUpsert) throw new Error(`No se pudo guardar ${fecha} · ${sede}: ${errUpsert.message}`);
       }
     }
 

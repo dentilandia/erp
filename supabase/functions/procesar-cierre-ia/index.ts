@@ -208,7 +208,8 @@ Usa la herramienta "reportar_cierre" para dar tu respuesta.`;
     }
     resultado.generado_en = new Date().toISOString();
 
-    await admin.from("cierres_caja").update({ analisis_ia: resultado }).eq("id", cierre_id);
+    const { error: errUpdate } = await admin.from("cierres_caja").update({ analisis_ia: resultado }).eq("id", cierre_id);
+    if (errUpdate) return json({ ok: false, error: `No se pudo guardar el análisis: ${errUpdate.message}` }, 500);
 
     return json({ ok: true, resultado });
   } catch (e) {
