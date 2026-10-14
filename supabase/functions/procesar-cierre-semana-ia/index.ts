@@ -316,7 +316,9 @@ exacta:
       },
       body: JSON.stringify({
         model: ANTHROPIC_MODEL,
-        max_tokens: 4000,
+        // ~250 tokens de margen por cada día×sede (json + nota) más colchón fijo,
+        // para que un período largo no trunque la respuesta a mitad del JSON.
+        max_tokens: Math.min(16000, 2000 + totalCombinaciones * 250),
         system: systemPrompt,
         messages: [{ role: "user", content: [{ type: "text", text: facturadoTexto }, ...contentBlocks] }],
       }),
@@ -334,7 +336,11 @@ exacta:
       const limpio = textoRespuesta.replace(/^```(json)?\s*/i, "").replace(/```\s*$/, "").trim();
       resultado = JSON.parse(limpio);
     } catch {
-      throw new Error(`Claude no devolvió un JSON válido: ${textoRespuesta.slice(0, 500)}`);
+      const tiposBloques = (data.content ?? []).map((b: { type: string }) => b.type).join(",");
+      throw new Error(
+        `Claude no devolvió un JSON válido (stop_reason: ${data.stop_reason}, bloques: [${tiposBloques}], ` +
+          `tokens de salida: ${data.usage?.output_tokens}): ${textoRespuesta.slice(0, 500)}`,
+      );
     }
 
     const generadoEn = new Date().toISOString();
