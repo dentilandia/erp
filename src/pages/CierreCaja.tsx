@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import type { ReactNode } from "react";
 import { ChevronDown, ChevronRight, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { fmtCOP, today } from "../lib/format";
@@ -25,8 +25,21 @@ function claveSedeDe(sede: Sede) {
   return sede.nombre.includes("Fabricato") ? "Fabricato" : "Las Americas";
 }
 
-/** Un día tiene algo pendiente de revisar/resolver. Mismo criterio para el
- *  filtro "Solo días con pendientes" y para la lista de la pestaña Pendientes. */
+function sumarDiasCal(fechaYMD: string, dias: number): string {
+  const [y, m, d] = fechaYMD.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + dias);
+  return dt.toISOString().slice(0, 10);
+}
+
+function lunesDeSemana(fechaYMD: string): string {
+  const [y, m, d] = fechaYMD.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dow = dt.getUTCDay();
+  dt.setUTCDate(dt.getUTCDate() + (dow === 0 ? -6 : 1 - dow));
+  return dt.toISOString().slice(0, 10);
+}
+
 /** Falta el respaldo del cierre físico de caja: ni el arqueo del histórico
  *  (días viejos) ni el documento de recibos de caja (días nuevos, con el
  *  flujo de adjuntar documentos) están presentes. */
@@ -56,17 +69,22 @@ function tienePendientes(c: CierreCajaRow) {
 interface PendienteItem {
   clave: string;
   fecha: string;
+  sede: string;
   tipo: string;
   descripcion: string;
 }
 
-function pendientesDe(c: CierreCajaRow, claveSede: string): PendienteItem[] {
+/** El panel ahora es gerencial (ambas sedes a la vez, con filtro de pastilla
+ *  encima), así que cada pendiente lleva su propia sede en vez de asumir una
+ *  sola fija para toda la página. */
+function pendientesDe(c: CierreCajaRow): PendienteItem[] {
   const items: PendienteItem[] = [];
-  const base = `${c.fecha}|${claveSede}`;
+  const base = `${c.fecha}|${c.sede}`;
   if (faltaDatafono(c)) {
     items.push({
       clave: `${base}|Datáfono`,
       fecha: c.fecha,
+      sede: c.sede,
       tipo: "Datáfono",
       descripcion: `Falta adjuntar la tirilla o el reporte de ${c.fuente_dataf ?? "datáfono"} (tarjeta facturada ${fmtCOP(c.tarjeta_fact)}).`,
     });
@@ -75,6 +93,7 @@ function pendientesDe(c: CierreCajaRow, claveSede: string): PendienteItem[] {
     items.push({
       clave: `${base}|Cierre físico`,
       fecha: c.fecha,
+      sede: c.sede,
       tipo: "Cierre físico",
       descripcion: "Falta adjuntar el reporte de recibos de caja de este día.",
     });
@@ -83,6 +102,7 @@ function pendientesDe(c: CierreCajaRow, claveSede: string): PendienteItem[] {
     items.push({
       clave: `${base}|Diferencia datáfono`,
       fecha: c.fecha,
+      sede: c.sede,
       tipo: "Diferencia datáfono",
       descripcion: `Diferencia de ${fmtCOP(c.dif_dataf_bruta)} sin explicar entre tarjeta facturada y ${c.fuente_dataf ?? "datáfono"}.`,
     });
@@ -91,6 +111,7 @@ function pendientesDe(c: CierreCajaRow, claveSede: string): PendienteItem[] {
     items.push({
       clave: `${base}|Addi/Sistecrédito`,
       fecha: c.fecha,
+      sede: c.sede,
       tipo: "Addi/Sistecrédito",
       descripcion: `Verificar ${fmtCOP(c.addi)} en Addi/Sistecrédito de este día.`,
     });
@@ -99,6 +120,7 @@ function pendientesDe(c: CierreCajaRow, claveSede: string): PendienteItem[] {
     items.push({
       clave: `${base}|Consignación`,
       fecha: c.fecha,
+      sede: c.sede,
       tipo: "Consignación",
       descripcion: c.nota_consignacion_pendiente,
     });
@@ -106,26 +128,34 @@ function pendientesDe(c: CierreCajaRow, claveSede: string): PendienteItem[] {
   return items;
 }
 
+type TabCierre = "cuadre" | "pendientes" | "errores";
+type SedeFiltro = "todas" | "Fabricato" | "Las Americas";
+type Preset = "todo" | "7" | "mes" | "custom";
+
 export function CierreCaja() {
-  const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
-  const claveSede = claveSedeDe(sedeActiva);
   const [cierres, setCierres] = useState<CierreCajaRow[]>([]);
-  // Lista completa de sedes — a diferencia de sedeActiva (la sede elegida
-  // arriba con las pastillas), hace falta acá para poder abrir el detalle de
-  // un día de CUALQUIER sede desde la pestaña Semana (que junta ambas).
   const [sedes, setSedes] = useState<Sede[]>([]);
   const [revisiones, setRevisiones] = useState<Record<string, boolean>>({});
   const [pendientesEstado, setPendientesEstado] = useState<Record<string, { resuelto: boolean; solucion: string }>>({});
+  const [consignadosReales, setConsignadosReales] = useState<Record<string, { consignado: boolean; entregado_admin: boolean }>>({});
   const [soloConPendientes, setSoloConPendientes] = useState(false);
-  const [tab, setTab] = useState<"dias" | "pendientes" | "reporte" | "semana">("dias");
+  const [tab, setTab] = useState<TabCierre>("cuadre");
+  const [sedeFiltro, setSedeFiltro] = useState<SedeFiltro>("todas");
+  const [preset, setPreset] = useState<Preset>("todo");
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
   const [detalle, setDetalle] = useState<CierreCajaRow | null>(null);
   const [mesesAbiertos, setMesesAbiertos] = useState<Set<string>>(new Set());
-  const [consignadosReales, setConsignadosReales] = useState<Record<string, { consignado: boolean; entregado_admin: boolean }>>({});
-  const [reporteDesde, setReporteDesde] = useState(() => new Date().toISOString().slice(0, 8) + "01");
-  const [reporteHasta, setReporteHasta] = useState(() => new Date().toISOString().slice(0, 10));
 
+  /** Carga todo desde cero cada vez — no depende de estado externo, así que
+   *  la misma referencia sirve tanto para la carga inicial como para el
+   *  handler del canal realtime, sin arrastrar closures viejos. */
   async function cargar() {
-    const { data } = await supabase.from("cierres_caja").select("*").eq("sede", claveSede).order("fecha", { ascending: false });
+    const { data: sedesData } = await supabase.from("sedes").select("id, nombre, color_acento").order("nombre");
+    const listaSedes = (sedesData as Sede[]) ?? [];
+    setSedes(listaSedes);
+
+    const { data } = await supabase.from("cierres_caja").select("*").order("fecha", { ascending: false });
     const filas = (data as CierreCajaRow[]) ?? [];
     setCierres(filas);
 
@@ -141,14 +171,23 @@ export function CierreCaja() {
 
     // Estado real de "Día consignado", tal como lo marca Operación Diaria en Cierre
     // diario — reemplaza el texto libre de nota_banco_extra del histórico importado,
-    // que no se actualiza con los días nuevos y por eso mostraba "Sin verificar" mal.
-    const { data: consignadosData } = await supabase
-      .from("cierres_diarios")
-      .select("fecha, consignado, entregado_admin")
-      .eq("sede_id", sedeActiva.id);
-    const mapaConsignado: Record<string, { consignado: boolean; entregado_admin: boolean }> = {};
-    (consignadosData ?? []).forEach((r) => (mapaConsignado[r.fecha] = { consignado: r.consignado, entregado_admin: r.entregado_admin }));
-    setConsignadosReales(mapaConsignado);
+    // que no se actualiza con los días nuevos. Ahora cubre ambas sedes a la vez.
+    if (listaSedes.length > 0) {
+      const { data: consignadosData } = await supabase
+        .from("cierres_diarios")
+        .select("fecha, sede_id, consignado, entregado_admin")
+        .in(
+          "sede_id",
+          listaSedes.map((s) => s.id),
+        );
+      const mapaConsignado: Record<string, { consignado: boolean; entregado_admin: boolean }> = {};
+      (consignadosData ?? []).forEach((r) => {
+        const sede = listaSedes.find((s) => s.id === r.sede_id);
+        if (!sede) return;
+        mapaConsignado[`${r.fecha}|${claveSedeDe(sede)}`] = { consignado: r.consignado, entregado_admin: r.entregado_admin };
+      });
+      setConsignadosReales(mapaConsignado);
+    }
 
     setMesesAbiertos((prev) => {
       if (prev.size > 0) return prev;
@@ -162,33 +201,25 @@ export function CierreCaja() {
   useEffect(() => {
     cargar();
     const channel = supabase
-      .channel(`cierres_caja_${claveSede}`)
+      .channel("cierres_caja_gerencial")
       .on("postgres_changes", { event: "*", schema: "public", table: "cierres_caja" }, cargar)
-      .on("postgres_changes", { event: "*", schema: "public", table: "cierres_diarios", filter: `sede_id=eq.${sedeActiva.id}` }, cargar)
+      .on("postgres_changes", { event: "*", schema: "public", table: "cierres_diarios" }, cargar)
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [claveSede]);
-
-  useEffect(() => {
-    supabase
-      .from("sedes")
-      .select("id, nombre, color_acento")
-      .order("nombre")
-      .then(({ data }) => setSedes((data as Sede[]) ?? []));
   }, []);
 
-  async function toggleRevisado(fecha: string) {
-    const clave = `${fecha}|${claveSede}`;
+  async function toggleRevisado(fecha: string, sede: string) {
+    const clave = `${fecha}|${sede}`;
     const nuevo = !revisiones[clave];
     setRevisiones((prev) => ({ ...prev, [clave]: nuevo }));
     const {
       data: { user },
     } = await supabase.auth.getUser();
     await supabase.from("cierres_revision_fisica").upsert(
-      { fecha, sede: claveSede, revisado: nuevo, revisado_por: user?.id ?? null, revisado_en: nuevo ? new Date().toISOString() : null },
+      { fecha, sede, revisado: nuevo, revisado_por: user?.id ?? null, revisado_en: nuevo ? new Date().toISOString() : null },
       { onConflict: "fecha,sede" },
     );
   }
@@ -213,9 +244,35 @@ export function CierreCaja() {
     });
   }
 
+  function enRango(fecha: string) {
+    if (desde && fecha < desde) return false;
+    if (hasta && fecha > hasta) return false;
+    return true;
+  }
+
+  function aplicarPreset(p: Preset) {
+    setPreset(p);
+    if (p === "todo") {
+      setDesde("");
+      setHasta("");
+    } else if (p === "7") {
+      setDesde(sumarDiasCal(today(), -6));
+      setHasta(today());
+    } else if (p === "mes") {
+      setDesde(today().slice(0, 8) + "01");
+      setHasta(today());
+    }
+  }
+
+  const cierresPeriodoSede = useMemo(
+    () => cierres.filter((c) => enRango(c.fecha) && (sedeFiltro === "todas" || c.sede === sedeFiltro)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cierres, desde, hasta, sedeFiltro],
+  );
+
   const cierresFiltrados = useMemo(
-    () => (soloConPendientes ? cierres.filter(tienePendientes) : cierres),
-    [cierres, soloConPendientes],
+    () => (soloConPendientes ? cierresPeriodoSede.filter(tienePendientes) : cierresPeriodoSede),
+    [cierresPeriodoSede, soloConPendientes],
   );
 
   const gruposPorMes = useMemo(() => {
@@ -228,67 +285,147 @@ export function CierreCaja() {
     return map;
   }, [cierresFiltrados]);
 
-  const totalPeriodo = cierresFiltrados.reduce((a, c) => a + Number(c.total), 0);
+  const totalPeriodo = cierresPeriodoSede.reduce((a, c) => a + Number(c.total), 0);
+  const diasCuadrados = cierresPeriodoSede.filter((c) => c.cuadra).length;
 
-  const pendientesTodos = useMemo(() => cierres.flatMap((c) => pendientesDe(c, claveSede)), [cierres, claveSede]);
+  const pendientesTodos = useMemo(() => cierresPeriodoSede.flatMap(pendientesDe), [cierresPeriodoSede]);
   const pendientesAbiertos = pendientesTodos.filter((p) => !pendientesEstado[p.clave]?.resuelto);
   const pendientesResueltos = pendientesTodos.filter((p) => pendientesEstado[p.clave]?.resuelto);
 
-  const cierresReporte = useMemo(
-    () => cierres.filter((c) => c.fecha >= reporteDesde && c.fecha <= reporteHasta),
-    [cierres, reporteDesde, reporteHasta],
+  // Las dos "alertas" pedidas: transferencias que todavía no se identifican
+  // contra ningún recibo (transfs) y el resto de hallazgos de cuadre, que
+  // incluyen plata que sobra en el banco sin recibo, sede cruzada, duplicados, etc.
+  const transferenciasPorVerificar = useMemo(
+    () => cierresPeriodoSede.flatMap((c) => c.transfs.map((t, i) => ({ ...t, fecha: c.fecha, sede: c.sede, _k: i }))),
+    [cierresPeriodoSede],
   );
-  const reporte = useMemo(
-    () => ({
-      efectivo: cierresReporte.reduce((a, c) => a + Number(c.efvo_fact), 0),
-      tarjeta: cierresReporte.reduce((a, c) => a + Number(c.tarjeta_fact), 0),
-      transferencia: cierresReporte.reduce((a, c) => a + Number(c.transf_fact), 0),
-      addi: cierresReporte.reduce((a, c) => a + Number(c.addi), 0),
-      total: cierresReporte.reduce((a, c) => a + Number(c.total), 0),
-    }),
-    [cierresReporte],
+  const erroresCuadre = useMemo(
+    () => cierresPeriodoSede.flatMap((c) => c.errores.map((e, i) => ({ ...e, fecha: c.fecha, sede: c.sede, _k: i }))),
+    [cierresPeriodoSede],
   );
+  const dupsElectronicos = useMemo(
+    () => cierresPeriodoSede.flatMap((c) => c.dups_elec.map((d, i) => ({ ...d, fecha: c.fecha, sede: c.sede, _k: i }))),
+    [cierresPeriodoSede],
+  );
+
+  const promedioPorSede = useMemo(() => {
+    return (["Fabricato", "Las Americas"] as const).map((s) => {
+      const dias = cierres.filter((c) => c.sede === s && enRango(c.fecha));
+      const total = dias.reduce((a, c) => a + Number(c.total), 0);
+      return { sede: s, dias: dias.length, promedio: dias.length > 0 ? total / dias.length : 0 };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cierres, desde, hasta]);
 
   return (
-    <div className="max-w-5xl mx-auto space-y-4">
-      <div className="flex gap-1 bg-white rounded-lg border border-gray-200 p-1 w-fit">
-        <button
-          onClick={() => setTab("dias")}
-          className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === "dias" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
-        >
-          Días
-        </button>
-        <button
-          onClick={() => setTab("pendientes")}
-          className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === "pendientes" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
-        >
-          Pendientes {pendientesAbiertos.length > 0 && `(${pendientesAbiertos.length})`}
-        </button>
-        <button
-          onClick={() => setTab("reporte")}
-          className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === "reporte" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
-        >
-          Reporte
-        </button>
-        <button
-          onClick={() => setTab("semana")}
-          className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === "semana" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
-        >
-          Semana
-        </button>
+    <div className="max-w-6xl mx-auto space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex gap-1 bg-white rounded-lg border border-gray-200 p-1 w-fit">
+          <button
+            onClick={() => setTab("cuadre")}
+            className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === "cuadre" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
+          >
+            Cuadre de caja
+          </button>
+          <button
+            onClick={() => setTab("pendientes")}
+            className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === "pendientes" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
+          >
+            Pendientes {pendientesAbiertos.length > 0 && `(${pendientesAbiertos.length})`}
+          </button>
+          <button
+            onClick={() => setTab("errores")}
+            className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === "errores" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
+          >
+            Errores {erroresCuadre.length + transferenciasPorVerificar.length > 0 && `(${erroresCuadre.length + transferenciasPorVerificar.length})`}
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 text-xs flex-wrap">
+          <input
+            type="date"
+            value={desde}
+            onChange={(e) => {
+              setDesde(e.target.value);
+              setPreset("custom");
+            }}
+            className="rounded-lg border border-gray-300 px-2 py-1.5"
+          />
+          <span className="text-gray-300">–</span>
+          <input
+            type="date"
+            value={hasta}
+            onChange={(e) => {
+              setHasta(e.target.value);
+              setPreset("custom");
+            }}
+            className="rounded-lg border border-gray-300 px-2 py-1.5"
+          />
+          {(["todo", "7", "mes"] as const).map((p) => (
+            <button
+              key={p}
+              onClick={() => aplicarPreset(p)}
+              className={`px-2.5 py-1 rounded-full font-semibold ${preset === p ? "bg-[var(--acento)] text-white" : "bg-gray-100 text-gray-500"}`}
+            >
+              {p === "todo" ? "Todo" : p === "7" ? "Últimos 7 días" : "Este mes"}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {tab === "dias" && (
-        <>
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={soloConPendientes} onChange={(e) => setSoloConPendientes(e.target.checked)} />
-              Solo días con pendientes
-            </label>
-            <span className="text-sm text-gray-500">
-              Recaudo del período: <span className="font-semibold text-tinta">{fmtCOP(totalPeriodo)}</span>
-            </span>
+      <div className="flex gap-2 flex-wrap">
+        {(["todas", "Fabricato", "Las Americas"] as const).map((s) => (
+          <button
+            key={s}
+            onClick={() => setSedeFiltro(s)}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
+              sedeFiltro === s ? "bg-[var(--acento)] text-white border-[var(--acento)]" : "bg-white text-gray-500 border-gray-200"
+            }`}
+          >
+            {s === "todas" ? "Todas las sedes" : s === "Fabricato" ? "Parque Fabricato" : "Las Américas"}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {promedioPorSede.map((p) => (
+          <div key={p.sede} className="rounded-xl border border-gray-200 bg-white p-4 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold" style={{ color: "var(--acento)" }}>
+                {p.sede === "Fabricato" ? "Parque Fabricato" : "Las Américas"}
+              </p>
+              <p className="text-xs text-gray-400">
+                {p.dias} día{p.dias !== 1 ? "s" : ""} en el período
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] uppercase font-semibold text-gray-400">Promedio/día</p>
+              <p className="text-lg font-bold text-tinta">{fmtCOP(p.promedio)}</p>
+            </div>
           </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <KpiCard label="Recaudo del período" value={fmtCOP(totalPeriodo)} accent="#1BA098" />
+        <KpiCard label="Días cuadrados" value={`${diasCuadrados}/${cierresPeriodoSede.length}`} accent="#2E9E5B" />
+        <KpiCard label="Pendientes abiertos" value={String(pendientesAbiertos.length)} accent="#D64545" />
+        <KpiCard label="Transferencias por verificar" value={String(transferenciasPorVerificar.length)} accent="#E0A458" />
+      </div>
+
+      {tab === "cuadre" && (
+        <>
+          <details className="bg-white rounded-xl border border-gray-200 p-4" open>
+            <summary className="text-sm font-semibold text-tinta cursor-pointer">Documentos de la semana</summary>
+            <div className="mt-3">
+              <FormularioSemana onGuardado={cargar} onAbrirDetalle={setDetalle} />
+            </div>
+          </details>
+
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={soloConPendientes} onChange={(e) => setSoloConPendientes(e.target.checked)} />
+            Solo días con pendientes
+          </label>
 
           <div className="space-y-3">
             {Object.keys(gruposPorMes)
@@ -309,17 +446,17 @@ export function CierreCaja() {
                     {abierto && (
                       <div className="border-t border-gray-100 p-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                         {dias.map((c) => {
-                          const estadoOperacion = consignadosReales[c.fecha];
+                          const estadoOperacion = consignadosReales[`${c.fecha}|${c.sede}`];
                           const consignado = estadoOperacion?.consignado ?? false;
                           const entregadoAdmin = estadoOperacion?.entregado_admin ?? false;
-                          const claveRev = `${c.fecha}|${claveSede}`;
+                          const claveRev = `${c.fecha}|${c.sede}`;
                           const { corta, diaSemana } = fechaTarjeta(c.fecha);
                           return (
                             <div key={c.id} className="rounded-xl border border-gray-200 bg-white p-3 flex flex-col gap-2">
                               <button onClick={() => setDetalle(c)} className="text-left hover:opacity-70" title="Ver detalle y adjuntar soportes">
                                 <p className="text-sm font-semibold text-tinta">{corta}</p>
                                 <p className="text-xs font-medium" style={{ color: "var(--acento)" }}>
-                                  {diaSemana} · {claveSede}
+                                  {diaSemana} · {c.sede}
                                 </p>
                                 <p className="text-lg font-bold text-tinta mt-1">{fmtCOP(c.total)}</p>
                               </button>
@@ -358,7 +495,7 @@ export function CierreCaja() {
                                 )}
                               </div>
                               <label className="flex items-center gap-1.5 text-xs text-gray-500 pt-1.5 border-t border-gray-100">
-                                <input type="checkbox" checked={!!revisiones[claveRev]} onChange={() => toggleRevisado(c.fecha)} />
+                                <input type="checkbox" checked={!!revisiones[claveRev]} onChange={() => toggleRevisado(c.fecha, c.sede)} />
                                 Revisé el cierre físico
                               </label>
                             </div>
@@ -395,56 +532,131 @@ export function CierreCaja() {
         </div>
       )}
 
-      {tab === "reporte" && (
-        <div className="space-y-4">
-          <div className="flex items-center gap-3 flex-wrap">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Desde</label>
-              <input
-                type="date"
-                value={reporteDesde}
-                onChange={(e) => setReporteDesde(e.target.value)}
-                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Hasta</label>
-              <input
-                type="date"
-                value={reporteHasta}
-                onChange={(e) => setReporteHasta(e.target.value)}
-                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-              />
-            </div>
-          </div>
+      {tab === "errores" && (
+        <div className="space-y-6">
+          <ErroresSeccion
+            titulo="Transferencias por identificar"
+            cantidad={transferenciasPorVerificar.length}
+            vacio="Sin transferencias pendientes de identificar en este período."
+          >
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-gray-500 bg-gray-50">
+                  <th className="px-3 py-2">Fecha</th>
+                  <th className="px-3 py-2">Sede</th>
+                  <th className="px-3 py-2">Paciente</th>
+                  <th className="px-3 py-2 text-right">Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transferenciasPorVerificar.map((t) => (
+                  <tr key={`${t.fecha}-${t.sede}-${t._k}`} className="border-t border-gray-100">
+                    <td className="px-3 py-2">{t.fecha}</td>
+                    <td className="px-3 py-2">{t.sede}</td>
+                    <td className="px-3 py-2">{t.paciente}</td>
+                    <td className="px-3 py-2 text-right font-semibold">{fmtCOP(t.valor)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ErroresSeccion>
 
-          <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
-            {[
-              ["Efectivo", reporte.efectivo],
-              ["Tarjeta (débito + crédito)", reporte.tarjeta],
-              ["Transferencia", reporte.transferencia],
-              ["Addi / Sistecrédito", reporte.addi],
-            ].map(([label, valor]) => (
-              <div key={label} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                <span className="text-gray-500">{label}</span>
-                <span className="font-semibold">{fmtCOP(valor as number)}</span>
-              </div>
-            ))}
-            <div className="flex items-center justify-between px-4 py-3 text-sm font-semibold bg-gray-50">
-              <span>Total ({cierresReporte.length} días)</span>
-              <span>{fmtCOP(reporte.total)}</span>
-            </div>
-          </div>
-          <p className="text-xs text-gray-400">
-            Basado en lo cargado/auditado en Cierre de Caja para {sedeActiva.nombre} — no en lo facturado en vivo por
-            Operación Diaria.
-          </p>
+          <ErroresSeccion titulo="Errores y alertas de cuadre" cantidad={erroresCuadre.length} vacio="Sin alertas en este período.">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-gray-500 bg-gray-50">
+                  <th className="px-3 py-2">Fecha</th>
+                  <th className="px-3 py-2">Sede</th>
+                  <th className="px-3 py-2">Tipo</th>
+                  <th className="px-3 py-2">Paciente</th>
+                  <th className="px-3 py-2">Detalle</th>
+                  <th className="px-3 py-2 text-right">Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {erroresCuadre.map((e) => (
+                  <tr key={`${e.fecha}-${e.sede}-${e._k}`} className="border-t border-gray-100">
+                    <td className="px-3 py-2">{e.fecha}</td>
+                    <td className="px-3 py-2">{e.sede}</td>
+                    <td className="px-3 py-2">
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">{e.tipo}</span>
+                    </td>
+                    <td className="px-3 py-2">{e.paciente}</td>
+                    <td className="px-3 py-2 text-gray-500">{e.sede_recibo}</td>
+                    <td className="px-3 py-2 text-right font-semibold">{fmtCOP(e.valor)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ErroresSeccion>
+
+          {dupsElectronicos.length > 0 && (
+            <ErroresSeccion titulo="Posibles duplicados electrónicos" cantidad={dupsElectronicos.length}>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-500 bg-gray-50">
+                    <th className="px-3 py-2">Fecha</th>
+                    <th className="px-3 py-2">Sede</th>
+                    <th className="px-3 py-2">Paciente</th>
+                    <th className="px-3 py-2">Medio</th>
+                    <th className="px-3 py-2">Nota</th>
+                    <th className="px-3 py-2 text-right">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dupsElectronicos.map((d) => (
+                    <tr key={`${d.fecha}-${d.sede}-${d._k}`} className="border-t border-gray-100">
+                      <td className="px-3 py-2">{d.fecha}</td>
+                      <td className="px-3 py-2">{d.sede}</td>
+                      <td className="px-3 py-2">{d.paciente}</td>
+                      <td className="px-3 py-2">{d.medio}</td>
+                      <td className="px-3 py-2 text-gray-500">{d.nota}</td>
+                      <td className="px-3 py-2 text-right font-semibold">{fmtCOP(d.valor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </ErroresSeccion>
+          )}
         </div>
       )}
 
-      {tab === "semana" && <FormularioSemana onGuardado={cargar} onAbrirDetalle={setDetalle} />}
-
       {detalle && <DetalleModal cierre={detalle} onClose={() => setDetalle(null)} sedes={sedes} onGuardado={cargar} />}
+    </div>
+  );
+}
+
+function KpiCard({ label, value, accent }: { label: string; value: string; accent: string }) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-4 relative overflow-hidden">
+      <div className="absolute left-0 top-0 bottom-0 w-1" style={{ background: accent }} />
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{label}</p>
+      <p className="text-xl font-bold text-tinta mt-1">{value}</p>
+    </div>
+  );
+}
+
+function ErroresSeccion({
+  titulo,
+  cantidad,
+  vacio,
+  children,
+}: {
+  titulo: string;
+  cantidad: number;
+  vacio?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <h3 className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: "var(--acento)" }}>
+        {titulo} {cantidad > 0 && `(${cantidad})`}
+      </h3>
+      {cantidad === 0 && vacio ? (
+        <p className="text-sm text-gray-400 bg-white rounded-xl border border-gray-200 px-4 py-3">{vacio}</p>
+      ) : (
+        <div className="overflow-x-auto bg-white rounded-xl border border-gray-200">{children}</div>
+      )}
     </div>
   );
 }
@@ -456,21 +668,6 @@ const DOCUMENTOS_SEMANA: { campo: keyof CierreCajaSemana; label: string }[] = [
   { campo: "url_bold_fabricato", label: "Movimientos Bold — Fabricato" },
   { campo: "url_recibos_caja", label: "Excel recibos de caja del sistema — ambas sedes" },
 ];
-
-function lunesDeSemana(fechaYMD: string): string {
-  const [y, m, d] = fechaYMD.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  const dow = dt.getUTCDay();
-  dt.setUTCDate(dt.getUTCDate() + (dow === 0 ? -6 : 1 - dow));
-  return dt.toISOString().slice(0, 10);
-}
-
-function sumarDiasCal(fechaYMD: string, dias: number): string {
-  const [y, m, d] = fechaYMD.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + dias);
-  return dt.toISOString().slice(0, 10);
-}
 
 /** El cierre real no se hace día por día: cada semana se sube un solo lote de
  *  5 documentos (cada uno cubre varios días, y salvo Bancolombia, una sola
@@ -580,15 +777,12 @@ function FormularioSemana({
   const fechasSemana = Array.from({ length: 7 }, (_, i) => sumarDiasCal(semanaInicio, i));
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4 max-w-3xl">
+    <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div>
-          <h3 className="font-semibold text-tinta">Cierre de la semana</h3>
-          <p className="text-xs text-gray-400">
-            Sube acá los documentos de toda la semana (una sola vez, no por día) — el sistema compara contra lo que
-            ya cerró cada día en Cierre diario de Operación y te dice cuáles días no cuadran.
-          </p>
-        </div>
+        <p className="text-xs text-gray-400 max-w-md">
+          Sube acá los documentos de toda la semana (una sola vez, no por día) — el sistema compara contra lo que ya
+          cerró cada día en Cierre diario de Operación y te dice cuáles días no cuadran.
+        </p>
         <label className="text-xs text-gray-500">
           Semana del (lunes)
           <input
@@ -710,7 +904,9 @@ function PendienteRow({
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
           <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 mr-2">{item.tipo}</span>
-          <span className="text-gray-400">{item.fecha}</span>
+          <span className="text-gray-400">
+            {item.fecha} · {item.sede}
+          </span>
         </div>
         <label className="flex items-center gap-1.5 text-xs">
           <input
@@ -793,9 +989,6 @@ function DetalleModal({
   sedes: Sede[];
   onGuardado: () => void;
 }) {
-  // El día puede ser de cualquiera de las 2 sedes (se abre también desde el
-  // resumen semanal, que junta ambas) — se resuelve contra la sede real del
-  // día, no contra la que esté elegida arriba con las pastillas.
   const claveSede = cierre.sede;
   const sedeDelCierre = sedes.find((s) => claveSedeDe(s) === cierre.sede) ?? null;
 
@@ -974,7 +1167,9 @@ function DetalleModal({
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-20">
       <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-5 space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-tinta">{fechaCorta(cierre.fecha)} · {cierre.sede}</h3>
+          <h3 className="font-semibold text-tinta">
+            {fechaCorta(cierre.fecha)} · {cierre.sede}
+          </h3>
           <button onClick={onClose}>
             <X size={18} />
           </button>
