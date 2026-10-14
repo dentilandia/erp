@@ -1,25 +1,26 @@
 // Supabase Edge Function: procesar-cierre-semana-ia
 //
-// El cierre de caja real no se hace día por día — cada semana se sube UN
-// lote de 3 documentos (que cada uno cubre varios días, y salvo Bancolombia,
-// una sola sede) y hay que compararlo contra lo que ya cerró cada día en
+// El cierre de caja real no se hace día por día — cada período (normalmente
+// una semana, pero semana_fin permite cualquier rango) se sube UN lote de 3
+// documentos (que cada uno cubre varios días, y salvo Bancolombia, una sola
+// sede) y hay que compararlo contra lo que ya cerró cada día en
 // cierres_diarios (Cierre diario de Operación, fuente oficial desde que se
 // integró con Cierre de Caja). La tarjeta de las 2 sedes NO depende de que
 // nadie suba nada: Las Américas siempre adjunta su tirilla Redeban en Cierre
 // diario de Operación, y Fabricato recibe por correo (Bold, "cierre de
 // ventas") el valor exacto de cada turno — ambas se leen directo, sin IA de
 // por medio para ese número. Esta función:
-//   1. Lee los 3 documentos semanales que sí requieren lectura por IA
+//   1. Lee los 3 documentos del período que sí requieren lectura por IA
 //      (cierres_caja_semanas) + la tirilla de Las Américas y los turnos Bold
-//      de Fabricato de cada uno de los 7 días (cierres_diarios).
-//   2. Junta el facturado real de los 7 días × 2 sedes desde cierres_diarios.
+//      de Fabricato de cada día del rango (cierres_diarios).
+//   2. Junta el facturado real de cada día × 2 sedes desde cierres_diarios.
 //   3. Le pide a Claude que lea los documentos y devuelva, día por día y sede
 //      por sede, lo que encuentra (efectivo/transferencia) y si cuadra contra
 //      lo facturado — la tarjeta ya viene resuelta de forma determinística.
-//   4. Crea/actualiza las 14 filas de cierres_caja correspondientes — con el
-//      facturado ya resuelto (sin que nadie tenga que digitarlo) y el
-//      análisis de la IA. "Cuadra" NO se marca sola, la sigue confirmando un
-//      admin a mano por día en la pantalla de Días.
+//   4. Crea/actualiza las filas de cierres_caja correspondientes (un día ×
+//      2 sedes cada una) — con el facturado ya resuelto (sin que nadie tenga
+//      que digitarlo) y el análisis de la IA. "Cuadra" NO se marca sola, la
+//      sigue confirmando un admin a mano por día en la pantalla de Días.
 //
 // Deploy:
 //   supabase functions deploy procesar-cierre-semana-ia
@@ -145,7 +146,14 @@ Deno.serve(async (req) => {
       { label: "Excel recibos de caja del sistema — ambas sedes", path: semana.url_recibos_caja, sedes: ["Las Americas", "Fabricato"] },
     ].filter((d) => d.path);
 
-    const fechas = Array.from({ length: 7 }, (_, i) => sumarDias(semana.semana_inicio, i));
+    // El período normalmente es una semana completa (7 días), pero
+    // semana_fin puede extenderlo o acortarlo a cualquier rango — algunos
+    // lotes de documentos no llegan alineados a semanas de lunes a lunes.
+    const finPeriodo = semana.semana_fin ?? sumarDias(semana.semana_inicio, 6);
+    const fechas: string[] = [];
+    for (let f = semana.semana_inicio; f <= finPeriodo && fechas.length < 60; f = sumarDias(f, 1)) {
+      fechas.push(f);
+    }
 
     const { data: sedesData } = await admin.from("sedes").select("id, nombre");
     const sedesPorClave = new Map<"Las Americas" | "Fabricato", string>();
@@ -231,24 +239,25 @@ Deno.serve(async (req) => {
         return `- ${fecha} · ${sede}: efectivo ${f.efvo_fact} (ya con el gasto de ${f.gasto} restado), tarjeta ${f.tarjeta_fact}, transferencia ${f.transf_fact}, addi/sistecrédito ${f.addi}, total ${f.total}.${notaTarjeta}`;
       }),
     );
-    const facturadoTexto = `Semana del ${semana.semana_inicio} — facturado según el ERP (Cierre diario de Operación) por día y sede:\n${facturadoLineas.join("\n")}`;
+    const facturadoTexto = `Período del ${semana.semana_inicio} al ${finPeriodo} (${fechas.length} días) — facturado según el ERP (Cierre diario de Operación) por día y sede:\n${facturadoLineas.join("\n")}`;
+    const totalCombinaciones = fechas.length * 2;
 
     const systemPrompt = `Eres un asistente contable de una clínica dental en Colombia (Dentilandia), con 2 sedes:
-"Las Americas" y "Fabricato". Te doy el facturado según el ERP de los 7 días de una semana, para cada sede, y los
-documentos de soporte que cubren esa misma semana (algunos aplican a una sola sede, otros a ambas — se indica en
-cada uno). La tarjeta de las 2 sedes YA viene resuelta de forma determinística (no depende de que tú la leas de
-ningún documento): para Las Américas te llega una imagen/PDF de la tirilla Redeban por cada día que la tenga (la
-etiqueta ya trae su fecha exacta), y para Fabricato el valor ya viene anotado junto al facturado de cada día
-cuando aplica — en ambos casos, para "tarjeta_real" de esos día×sede usa ese mismo valor (o el de la tirilla que
-leas) tal cual, sin necesidad de más verificación.
+"Las Americas" y "Fabricato". Te doy el facturado según el ERP de los ${fechas.length} días de un período, para cada
+sede, y los documentos de soporte que cubren ese mismo período (algunos aplican a una sola sede, otros a ambas — se
+indica en cada uno). La tarjeta de las 2 sedes YA viene resuelta de forma determinística (no depende de que tú la
+leas de ningún documento): para Las Américas te llega una imagen/PDF de la tirilla Redeban por cada día que la
+tenga (la etiqueta ya trae su fecha exacta), y para Fabricato el valor ya viene anotado junto al facturado de cada
+día cuando aplica — en ambos casos, para "tarjeta_real" de esos día×sede usa ese mismo valor (o el de la tirilla
+que leas) tal cual, sin necesidad de más verificación.
 - Movimientos Bancolombia: ambas sedes, transferencia/banco.
 - Movimientos Bold: solo Fabricato, transferencia/banco (aparte de Bancolombia).
 - Excel de recibos de caja del sistema: ambas sedes, efectivo (y puede traer una columna de sede).
 
-Lee esos documentos y, para CADA UNA de las 14 combinaciones día×sede de esa semana, extrae lo que encuentres
-(sobre todo efectivo y transferencia) y compáralo contra el facturado del ERP de ese día y esa sede. Si un
-documento no trae desglose por día, repartelo por día tal como aparece, o usa null si no puedes separar un día
-de otro.
+Lee esos documentos y, para CADA UNA de las ${totalCombinaciones} combinaciones día×sede de ese período, extrae lo
+que encuentres (sobre todo efectivo y transferencia) y compáralo contra el facturado del ERP de ese día y esa
+sede. Si un documento no trae desglose por día, repartelo por día tal como aparece, o usa null si no puedes
+separar un día de otro.
 
 Responde ÚNICAMENTE con un JSON válido, sin texto adicional antes ni después, ni bloques de markdown, con esta forma
 exacta:
@@ -266,7 +275,7 @@ exacta:
       "cuadra_sugerido": boolean,
       "nota": string
     },
-    ... (una entrada por cada una de las 14 combinaciones día×sede, en el mismo orden que te las di)
+    ... (una entrada por cada una de las ${totalCombinaciones} combinaciones día×sede, en el mismo orden que te las di)
   ],
   "resumen": "3-6 líneas en español: qué días/sedes tienen diferencias o les falta algo, y cualquier cosa rara que encontraste."
 }`;
@@ -307,7 +316,7 @@ exacta:
       analisisPorDiaSede.set(`${d.fecha}|${d.sede}`, d);
     }
 
-    // --- Crear/actualizar las 14 filas de cierres_caja de esta semana ---
+    // --- Crear/actualizar las filas de cierres_caja de este período ---
     for (const fecha of fechas) {
       for (const sede of ["Las Americas", "Fabricato"] as const) {
         const facturado = facturadoPorDiaSede.get(`${fecha}|${sede}`) ?? {

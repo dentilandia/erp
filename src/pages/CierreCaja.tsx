@@ -667,11 +667,14 @@ const DOCUMENTOS_SEMANA: { campo: keyof CierreCajaSemana; label: string }[] = [
   { campo: "url_recibos_caja", label: "Excel recibos de caja del sistema — ambas sedes" },
 ];
 
-/** El cierre real no se hace día por día: cada semana se sube un solo lote de
- *  5 documentos (cada uno cubre varios días, y salvo Bancolombia, una sola
- *  sede) y se compara contra los 7 días × 2 sedes de esa semana — sin que
+/** El cierre real no se hace día por día: cada período se sube un solo lote
+ *  de 3 documentos (cada uno cubre varios días, y salvo Bancolombia, una
+ *  sola sede) y se compara contra el facturado de ese período — sin que
  *  nadie tenga que digitar ningún valor, todo sale del ERP (vía Cierre diario
- *  de Operación, ya integrado) y de lo que la IA lee en los documentos. */
+ *  de Operación, ya integrado) y de lo que la IA lee en los documentos. El
+ *  período suele ser una semana (por eso "Hasta" arranca en +6 días), pero
+ *  es un rango libre — algunos lotes de documentos no llegan alineados a
+ *  semanas de lunes a lunes. */
 function FormularioSemana({
   onGuardado,
   onAbrirDetalle,
@@ -680,6 +683,7 @@ function FormularioSemana({
   onAbrirDetalle: (c: CierreCajaRow) => void;
 }) {
   const [semanaInicio, setSemanaInicio] = useState(() => lunesDeSemana(sumarDiasCal(today(), -7)));
+  const [semanaFin, setSemanaFin] = useState(() => sumarDiasCal(lunesDeSemana(sumarDiasCal(today(), -7)), 6));
   const [semana, setSemana] = useState<CierreCajaSemana | null>(null);
   const [cargando, setCargando] = useState(true);
   const [subiendo, setSubiendo] = useState<string | null>(null);
@@ -689,13 +693,14 @@ function FormularioSemana({
   async function cargarSemana() {
     setCargando(true);
     const { data } = await supabase.from("cierres_caja_semanas").select("*").eq("semana_inicio", semanaInicio).maybeSingle();
-    setSemana((data as CierreCajaSemana) ?? null);
-    const hasta = sumarDiasCal(semanaInicio, 6);
+    const fila = (data as CierreCajaSemana) ?? null;
+    setSemana(fila);
+    if (fila?.semana_fin) setSemanaFin(fila.semana_fin);
     const { data: diasData } = await supabase
       .from("cierres_caja")
       .select("*")
       .gte("fecha", semanaInicio)
-      .lte("fecha", hasta)
+      .lte("fecha", fila?.semana_fin ?? semanaFin)
       .order("fecha");
     setResumenDias((diasData as CierreCajaRow[]) ?? []);
     setCargando(false);
@@ -710,15 +715,23 @@ function FormularioSemana({
     if (semana) return semana;
     const { data, error } = await supabase
       .from("cierres_caja_semanas")
-      .upsert({ semana_inicio: semanaInicio }, { onConflict: "semana_inicio" })
+      .upsert({ semana_inicio: semanaInicio, semana_fin: semanaFin }, { onConflict: "semana_inicio" })
       .select("*")
       .single();
     if (error || !data) {
-      window.alert(`No se pudo crear la semana: ${error?.message}`);
+      window.alert(`No se pudo crear el período: ${error?.message}`);
       return null;
     }
     setSemana(data as CierreCajaSemana);
     return data as CierreCajaSemana;
+  }
+
+  async function guardarRangoFin(nuevoFin: string) {
+    setSemanaFin(nuevoFin);
+    if (semana) {
+      await supabase.from("cierres_caja_semanas").update({ semana_fin: nuevoFin }).eq("id", semana.id);
+      cargarSemana();
+    }
   }
 
   async function subirDocumento(campo: keyof CierreCajaSemana, file: File) {
@@ -772,26 +785,48 @@ function FormularioSemana({
     for (const c of resumenDias) map[`${c.fecha}|${c.sede}`] = c;
     return map;
   }, [resumenDias]);
-  const fechasSemana = Array.from({ length: 7 }, (_, i) => sumarDiasCal(semanaInicio, i));
+  const finEfectivo = semana?.semana_fin ?? semanaFin;
+  const fechasSemana = useMemo(() => {
+    const dias: string[] = [];
+    for (let f = semanaInicio; f <= finEfectivo && dias.length < 60; f = sumarDiasCal(f, 1)) dias.push(f);
+    return dias;
+  }, [semanaInicio, finEfectivo]);
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-xs text-gray-400 max-w-md">
-          Sube acá los documentos de toda la semana (una sola vez, no por día) — el sistema compara contra lo que ya
-          cerró cada día en Cierre diario de Operación y te dice cuáles días no cuadran. La tarjeta de ninguna de
-          las 2 sedes se sube acá: la de Las Américas se toma automático de la tirilla que ya se adjunta cada día en
-          Cierre diario de Operación, y la de Fabricato se arma sola leyendo los correos de cierre de turno de Bold.
+          Sube acá los documentos de todo el período (una sola vez, no por día) — el sistema compara contra lo que ya
+          cerró cada día en Cierre diario de Operación y te dice cuáles días no cuadran. Por defecto es una semana,
+          pero puedes estirar "Hasta" para cubrir cualquier rango de días. La tarjeta de ninguna de las 2 sedes se
+          sube acá: la de Las Américas se toma automático de la tirilla que ya se adjunta cada día en Cierre diario
+          de Operación, y la de Fabricato se arma sola leyendo los correos de cierre de turno de Bold.
         </p>
-        <label className="text-xs text-gray-500">
-          Semana del (lunes)
-          <input
-            type="date"
-            value={semanaInicio}
-            onChange={(e) => setSemanaInicio(lunesDeSemana(e.target.value))}
-            className="mt-0.5 block rounded-lg border border-gray-300 px-3 py-2 text-sm"
-          />
-        </label>
+        <div className="flex items-end gap-2">
+          <label className="text-xs text-gray-500">
+            Desde
+            <input
+              type="date"
+              value={semanaInicio}
+              onChange={(e) => {
+                const nuevoInicio = e.target.value;
+                setSemanaInicio(nuevoInicio);
+                if (semanaFin < nuevoInicio) setSemanaFin(sumarDiasCal(nuevoInicio, 6));
+              }}
+              className="mt-0.5 block rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="text-xs text-gray-500">
+            Hasta
+            <input
+              type="date"
+              value={finEfectivo}
+              min={semanaInicio}
+              onChange={(e) => guardarRangoFin(e.target.value)}
+              className="mt-0.5 block rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          </label>
+        </div>
       </div>
 
       {cargando ? (
