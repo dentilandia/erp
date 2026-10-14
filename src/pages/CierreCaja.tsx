@@ -54,14 +54,39 @@ function faltaDatafono(c: CierreCajaRow) {
   return c.dataf_sin_docs && !c.url_tirilla_datafono && !c.url_reporte_datafono;
 }
 
-function tienePendientes(c: CierreCajaRow) {
+interface FinanciacionDia {
+  suma: number;
+  sinComprobante: number;
+}
+
+/** Cruza el Addi/Sistecrédito facturado ese día×sede contra lo que de verdad
+ *  está cargado en Financiación (cargo_pagos + saldos_favor, con la imagen de
+ *  la solicitud del crédito adjunta) — ya no basta con que el ERP tenga un
+ *  monto en addi para considerarlo verificado. */
+function pendienteAddi(c: CierreCajaRow, financiacion: Record<string, FinanciacionDia>): string | null {
+  if (c.addi <= 0) return null;
+  const datos = financiacion[`${c.fecha}|${c.sede}`];
+  if (!datos || datos.suma === 0) {
+    return `Facturado ${fmtCOP(c.addi)} en Addi/Sistecrédito, pero no hay ningún crédito cargado en Financiación para este día — faltan por cargar.`;
+  }
+  const diferencia = c.addi - datos.suma;
+  if (Math.abs(diferencia) >= 1) {
+    return `Diferencia de ${fmtCOP(diferencia)} entre lo facturado en Addi/Sistecrédito (${fmtCOP(c.addi)}) y lo cargado en Financiación (${fmtCOP(datos.suma)}).`;
+  }
+  if (datos.sinComprobante > 0) {
+    return `Falta adjuntar la solicitud del crédito de ${datos.sinComprobante} registro${datos.sinComprobante > 1 ? "s" : ""} en Financiación.`;
+  }
+  return null;
+}
+
+function tienePendientes(c: CierreCajaRow, financiacion: Record<string, FinanciacionDia>) {
   return (
     !c.cuadra ||
     c.errores.length > 0 ||
     faltaDatafono(c) ||
     faltaCierreFisico(c) ||
     (!!c.dif_dataf_bruta && !c.dataf_explicado) ||
-    c.addi > 0 ||
+    pendienteAddi(c, financiacion) !== null ||
     !!c.nota_consignacion_pendiente
   );
 }
@@ -77,7 +102,7 @@ interface PendienteItem {
 /** El panel ahora es gerencial (ambas sedes a la vez, con filtro de pastilla
  *  encima), así que cada pendiente lleva su propia sede en vez de asumir una
  *  sola fija para toda la página. */
-function pendientesDe(c: CierreCajaRow): PendienteItem[] {
+function pendientesDe(c: CierreCajaRow, financiacion: Record<string, FinanciacionDia>): PendienteItem[] {
   const items: PendienteItem[] = [];
   const base = `${c.fecha}|${c.sede}`;
   if (faltaDatafono(c)) {
@@ -107,13 +132,14 @@ function pendientesDe(c: CierreCajaRow): PendienteItem[] {
       descripcion: `Diferencia de ${fmtCOP(c.dif_dataf_bruta)} sin explicar entre tarjeta facturada y ${c.fuente_dataf ?? "datáfono"}.`,
     });
   }
-  if (c.addi > 0) {
+  const addiDescripcion = pendienteAddi(c, financiacion);
+  if (addiDescripcion) {
     items.push({
       clave: `${base}|Addi/Sistecrédito`,
       fecha: c.fecha,
       sede: c.sede,
       tipo: "Addi/Sistecrédito",
-      descripcion: `Verificar ${fmtCOP(c.addi)} en Addi/Sistecrédito de este día.`,
+      descripcion: addiDescripcion,
     });
   }
   if (c.nota_consignacion_pendiente) {
@@ -138,6 +164,7 @@ export function CierreCaja() {
   const [revisiones, setRevisiones] = useState<Record<string, boolean>>({});
   const [pendientesEstado, setPendientesEstado] = useState<Record<string, { resuelto: boolean; solucion: string }>>({});
   const [consignadosReales, setConsignadosReales] = useState<Record<string, { consignado: boolean; entregado_admin: boolean }>>({});
+  const [financiacionPorDiaSede, setFinanciacionPorDiaSede] = useState<Record<string, FinanciacionDia>>({});
   const [soloConPendientes, setSoloConPendientes] = useState(false);
   const [tab, setTab] = useState<TabCierre>("cuadre");
   const [sedeFiltro, setSedeFiltro] = useState<SedeFiltro>("todas");
@@ -187,6 +214,46 @@ export function CierreCaja() {
         mapaConsignado[`${r.fecha}|${claveSedeDe(sede)}`] = { consignado: r.consignado, entregado_admin: r.entregado_admin };
       });
       setConsignadosReales(mapaConsignado);
+    }
+
+    // Cruce de Addi/Sistecrédito contra Financiación: lo facturado ese día×sede
+    // ya no se da por verificado solo porque el ERP tenga un monto — hay que
+    // confirmar que de verdad esté cargado ahí (y con la solicitud adjunta).
+    {
+      const { data: cargosAddiData } = await supabase
+        .from("cargo_pagos")
+        .select("valor, comprobante_financiacion_url, cargos!inner(fecha, sedes(nombre))")
+        .in("medio_pago", ["addi", "sistecredito"]);
+      const { data: saldosAddiData } = await supabase
+        .from("saldos_favor")
+        .select("valor, comprobante_financiacion_url, fecha, sedes:sede_origen_id(nombre)")
+        .in("medio_origen", ["addi", "sistecredito"]);
+
+      const mapaFinanciacion: Record<string, FinanciacionDia> = {};
+      const acumular = (fecha: string | undefined, nombreSede: string | null | undefined, valor: number, tieneComprobante: boolean) => {
+        if (!fecha || !nombreSede) return;
+        const clave = `${fecha}|${nombreSede.includes("Fabricato") ? "Fabricato" : "Las Americas"}`;
+        const actual = mapaFinanciacion[clave] ?? { suma: 0, sinComprobante: 0 };
+        actual.suma += valor;
+        if (!tieneComprobante) actual.sinComprobante += 1;
+        mapaFinanciacion[clave] = actual;
+      };
+      (
+        (cargosAddiData as unknown as {
+          valor: number;
+          comprobante_financiacion_url: string | null;
+          cargos: { fecha: string; sedes: { nombre: string } | null };
+        }[]) ?? []
+      ).forEach((f) => acumular(f.cargos.fecha, f.cargos.sedes?.nombre, Number(f.valor), !!f.comprobante_financiacion_url));
+      (
+        (saldosAddiData as unknown as {
+          valor: number;
+          comprobante_financiacion_url: string | null;
+          fecha: string;
+          sedes: { nombre: string } | null;
+        }[]) ?? []
+      ).forEach((s) => acumular(s.fecha, s.sedes?.nombre, Number(s.valor), !!s.comprobante_financiacion_url));
+      setFinanciacionPorDiaSede(mapaFinanciacion);
     }
 
     setMesesAbiertos((prev) => {
@@ -271,8 +338,8 @@ export function CierreCaja() {
   );
 
   const cierresFiltrados = useMemo(
-    () => (soloConPendientes ? cierresPeriodoSede.filter(tienePendientes) : cierresPeriodoSede),
-    [cierresPeriodoSede, soloConPendientes],
+    () => (soloConPendientes ? cierresPeriodoSede.filter((c) => tienePendientes(c, financiacionPorDiaSede)) : cierresPeriodoSede),
+    [cierresPeriodoSede, soloConPendientes, financiacionPorDiaSede],
   );
 
   const gruposPorMes = useMemo(() => {
@@ -288,7 +355,10 @@ export function CierreCaja() {
   const totalPeriodo = cierresPeriodoSede.reduce((a, c) => a + Number(c.total), 0);
   const diasCuadrados = cierresPeriodoSede.filter((c) => c.cuadra).length;
 
-  const pendientesTodos = useMemo(() => cierresPeriodoSede.flatMap(pendientesDe), [cierresPeriodoSede]);
+  const pendientesTodos = useMemo(
+    () => cierresPeriodoSede.flatMap((c) => pendientesDe(c, financiacionPorDiaSede)),
+    [cierresPeriodoSede, financiacionPorDiaSede],
+  );
   const pendientesAbiertos = pendientesTodos.filter((p) => !pendientesEstado[p.clave]?.resuelto);
   const pendientesResueltos = pendientesTodos.filter((p) => pendientesEstado[p.clave]?.resuelto);
 
