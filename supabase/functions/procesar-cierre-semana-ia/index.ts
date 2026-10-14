@@ -319,6 +319,10 @@ exacta:
         // ~250 tokens de margen por cada día×sede (json + nota) más colchón fijo,
         // para que un período largo no trunque la respuesta a mitad del JSON.
         max_tokens: Math.min(16000, 2000 + totalCombinaciones * 250),
+        // Sin esto, el modelo gasta todo max_tokens "pensando" (bloque "thinking")
+        // y nunca llega a escribir el JSON de salida — esta tarea es extracción y
+        // comparación directa, no necesita razonamiento extendido.
+        thinking: { type: "disabled" },
         system: systemPrompt,
         messages: [{ role: "user", content: [{ type: "text", text: facturadoTexto }, ...contentBlocks] }],
       }),
