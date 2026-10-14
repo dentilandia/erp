@@ -1,11 +1,15 @@
 // Supabase Edge Function: procesar-cierre-semana-ia
 //
 // El cierre de caja real no se hace día por día — cada semana se sube UN
-// lote de 5 documentos (que cada uno cubre varios días, y salvo Bancolombia,
+// lote de 4 documentos (que cada uno cubre varios días, y salvo Bancolombia,
 // una sola sede) y hay que compararlo contra lo que ya cerró cada día en
 // cierres_diarios (Cierre diario de Operación, fuente oficial desde que se
-// integró con Cierre de Caja). Esta función:
-//   1. Lee los 5 documentos de la semana (cierres_caja_semanas).
+// integró con Cierre de Caja). La tirilla datáfono Redeban de Las Américas
+// NO se sube como parte de este lote semanal: siempre se toma, día por día,
+// de lo que ya se adjuntó en Cierre diario de Operación (se adjunta ahí
+// siempre, antes de cerrar el día). Esta función:
+//   1. Lee los 4 documentos semanales (cierres_caja_semanas) + la tirilla
+//      datáfono de cada uno de los 7 días de Las Américas (cierres_diarios).
 //   2. Junta el facturado real de los 7 días × 2 sedes desde cierres_diarios.
 //   3. Le pide a Claude que lea los documentos y devuelva, día por día y sede
 //      por sede, lo que encuentra y si cuadra contra lo facturado.
@@ -53,6 +57,41 @@ function sumarDias(fechaYMD: string, dias: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
+/** Descarga un soporte del storage y lo convierte en los bloques de contenido
+ *  que entiende la API de Claude (texto para xlsx/csv, documento para pdf,
+ *  imagen para jpg/png/webp) — usado tanto para los documentos semanales
+ *  como para cada tirilla diaria de datáfono de Las Américas. */
+async function bloqueDocumento(admin: ReturnType<typeof createClient>, label: string, path: string): Promise<Record<string, unknown>[]> {
+  const bloques: Record<string, unknown>[] = [];
+  const { data: file, error: errFile } = await admin.storage.from("comprobantes").download(path);
+  if (errFile || !file) {
+    bloques.push({ type: "text", text: `[No se pudo descargar "${label}": ${errFile?.message ?? "desconocido"}]` });
+    return bloques;
+  }
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  bloques.push({ type: "text", text: `--- ${label} ---` });
+  if (ext === "xlsx" || ext === "xls" || ext === "csv") {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const wb = XLSX.read(buf, { type: "array" });
+    let texto = "";
+    for (const nombreHoja of wb.SheetNames) {
+      const hoja = wb.Sheets[nombreHoja];
+      texto += `\n[Hoja: ${nombreHoja}]\n${XLSX.utils.sheet_to_csv(hoja)}`;
+    }
+    bloques.push({ type: "text", text: texto.slice(0, 60000) });
+  } else if (ext === "pdf") {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    bloques.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Encode(buf) } });
+  } else if (["jpg", "jpeg", "png", "webp"].includes(ext)) {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const media = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+    bloques.push({ type: "image", source: { type: "base64", media_type: media, data: base64Encode(buf) } });
+  } else {
+    bloques.push({ type: "text", text: `[Formato ".${ext}" no soportado para lectura automática — súbelo como xlsx, pdf, jpg o png.]` });
+  }
+  return bloques;
+}
+
 // Mismo criterio que el front (claveSedeDe en CierreCaja.tsx): dos sedes hoy,
 // se identifican por si el nombre contiene "Fabricato" o no.
 function claveSedeDe(nombreSede: string): "Las Americas" | "Fabricato" {
@@ -98,18 +137,11 @@ Deno.serve(async (req) => {
     if (errSemana || !semana) return json({ ok: false, error: "No se encontró la semana." }, 404);
 
     const documentosSemana: { label: string; path: string | null; sedes: ("Las Americas" | "Fabricato")[] }[] = [
-      { label: "Tirilla datáfono Redeban — Las Américas", path: semana.url_datafono_americas, sedes: ["Las Americas"] },
       { label: "Cierre ventas datáfono — Fabricato", path: semana.url_datafono_fabricato, sedes: ["Fabricato"] },
       { label: "Movimientos Bancolombia — ambas sedes", path: semana.url_bancolombia, sedes: ["Las Americas", "Fabricato"] },
       { label: "Movimientos Bold — Fabricato", path: semana.url_bold_fabricato, sedes: ["Fabricato"] },
       { label: "Excel recibos de caja del sistema — ambas sedes", path: semana.url_recibos_caja, sedes: ["Las Americas", "Fabricato"] },
     ].filter((d) => d.path);
-
-    if (documentosSemana.length === 0) {
-      return json({ ok: false, error: "Esta semana no tiene ningún documento adjunto todavía." }, 400);
-    }
-
-    await admin.from("cierres_caja_semanas").update({ procesando: true, error_ia: null }).eq("id", semanaId);
 
     const fechas = Array.from({ length: 7 }, (_, i) => sumarDias(semana.semana_inicio, i));
 
@@ -119,13 +151,24 @@ Deno.serve(async (req) => {
 
     const { data: cierresDiariosData } = await admin
       .from("cierres_diarios")
-      .select("sede_id, fecha, totales_por_medio, gasto")
+      .select("sede_id, fecha, totales_por_medio, gasto, tirilla_datafono_url")
       .in("fecha", fechas);
     const facturadoPorDiaSede = new Map<
       string,
       { efvo_fact: number; tarjeta_fact: number; transf_fact: number; addi: number; total: number; gasto: number }
     >();
-    for (const c of (cierresDiariosData as { sede_id: string; fecha: string; totales_por_medio: Record<string, number>; gasto: number }[]) ?? []) {
+    // La tirilla Redeban de Las Américas ya no se sube una vez por semana:
+    // siempre está adjunta día por día en Cierre diario de Operación, así
+    // que se toma de ahí directo — una imagen/PDF por fecha, sin ambigüedad
+    // de a qué día pertenece (a diferencia de un solo documento semanal).
+    const tirillaLasAmericasPorFecha = new Map<string, string>();
+    for (const c of (cierresDiariosData as {
+      sede_id: string;
+      fecha: string;
+      totales_por_medio: Record<string, number>;
+      gasto: number;
+      tirilla_datafono_url: string | null;
+    }[]) ?? []) {
       let claveSede: "Las Americas" | "Fabricato" | null = null;
       for (const [k, v] of sedesPorClave) if (v === c.sede_id) claveSede = k;
       if (!claveSede) continue;
@@ -143,41 +186,26 @@ Deno.serve(async (req) => {
         total: efvo_fact + tarjeta_fact + transf_fact + addi,
         gasto,
       });
+      if (claveSede === "Las Americas" && c.tirilla_datafono_url) {
+        tirillaLasAmericasPorFecha.set(c.fecha, c.tirilla_datafono_url);
+      }
     }
+
+    if (documentosSemana.length === 0 && tirillaLasAmericasPorFecha.size === 0) {
+      return json({ ok: false, error: "Esta semana no tiene ningún documento adjunto todavía." }, 400);
+    }
+
+    await admin.from("cierres_caja_semanas").update({ procesando: true, error_ia: null }).eq("id", semanaId);
 
     // --- Descargar y preparar cada documento como bloque de contenido para Claude ---
     const contentBlocks: Record<string, unknown>[] = [];
     for (const doc of documentosSemana) {
-      const { data: file, error: errFile } = await admin.storage.from("comprobantes").download(doc.path!);
-      if (errFile || !file) {
-        contentBlocks.push({ type: "text", text: `[No se pudo descargar "${doc.label}": ${errFile?.message ?? "desconocido"}]` });
-        continue;
-      }
-      const ext = doc.path!.split(".").pop()?.toLowerCase() ?? "";
-      contentBlocks.push({ type: "text", text: `--- ${doc.label} (aplica a: ${doc.sedes.join(", ")}) ---` });
-
-      if (ext === "xlsx" || ext === "xls" || ext === "csv") {
-        const buf = new Uint8Array(await file.arrayBuffer());
-        const wb = XLSX.read(buf, { type: "array" });
-        let texto = "";
-        for (const nombreHoja of wb.SheetNames) {
-          const hoja = wb.Sheets[nombreHoja];
-          texto += `\n[Hoja: ${nombreHoja}]\n${XLSX.utils.sheet_to_csv(hoja)}`;
-        }
-        contentBlocks.push({ type: "text", text: texto.slice(0, 60000) });
-      } else if (ext === "pdf") {
-        const buf = new Uint8Array(await file.arrayBuffer());
-        contentBlocks.push({
-          type: "document",
-          source: { type: "base64", media_type: "application/pdf", data: base64Encode(buf) },
-        });
-      } else if (["jpg", "jpeg", "png", "webp"].includes(ext)) {
-        const buf = new Uint8Array(await file.arrayBuffer());
-        const media = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-        contentBlocks.push({ type: "image", source: { type: "base64", media_type: media, data: base64Encode(buf) } });
-      } else {
-        contentBlocks.push({ type: "text", text: `[Formato ".${ext}" no soportado para lectura automática — súbelo como xlsx, pdf, jpg o png.]` });
-      }
+      contentBlocks.push(...(await bloqueDocumento(admin, `${doc.label} (aplica a: ${doc.sedes.join(", ")})`, doc.path!)));
+    }
+    for (const fecha of fechas) {
+      const path = tirillaLasAmericasPorFecha.get(fecha);
+      if (!path) continue;
+      contentBlocks.push(...(await bloqueDocumento(admin, `Tirilla datáfono Redeban — Las Américas — ${fecha} (aplica a: Las Americas)`, path)));
     }
 
     const facturadoLineas = fechas.flatMap((fecha) =>
@@ -190,11 +218,13 @@ Deno.serve(async (req) => {
     const facturadoTexto = `Semana del ${semana.semana_inicio} — facturado según el ERP (Cierre diario de Operación) por día y sede:\n${facturadoLineas.join("\n")}`;
 
     const systemPrompt = `Eres un asistente contable de una clínica dental en Colombia (Dentilandia), con 2 sedes:
-"Las Americas" y "Fabricato". Te doy el facturado según el ERP de los 7 días de una semana, para cada sede, y 5
+"Las Americas" y "Fabricato". Te doy el facturado según el ERP de los 7 días de una semana, para cada sede, y los
 documentos de soporte que cubren esa misma semana (algunos aplican a una sola sede, otros a ambas — se indica en
 cada uno):
-- Tirilla datáfono Redeban: solo Las Américas, tarjeta.
-- Cierre de ventas datáfono: solo Fabricato, tarjeta.
+- Tirilla datáfono Redeban — Las Américas: te llega UNA imagen/PDF por cada día de la semana que la tenga adjunta
+  (la etiqueta de cada una ya trae su fecha exacta) — es la fuente de tarjeta de esa sede, día por día, sin que
+  tengas que repartir nada.
+- Cierre de ventas datáfono: solo Fabricato, tarjeta (un solo documento para toda la semana).
 - Movimientos Bancolombia: ambas sedes, transferencia/banco.
 - Movimientos Bold: solo Fabricato, transferencia/banco (aparte de Bancolombia).
 - Excel de recibos de caja del sistema: ambas sedes, efectivo (y puede traer una columna de sede).
@@ -272,7 +302,7 @@ exacta:
           gasto: 0,
         };
         const analisis = analisisPorDiaSede.get(`${fecha}|${sede}`);
-        const urlDatafono1 = sede === "Las Americas" ? semana.url_datafono_americas : null;
+        const urlDatafono1 = sede === "Las Americas" ? tirillaLasAmericasPorFecha.get(fecha) ?? null : null;
         const urlDatafono2 = sede === "Fabricato" ? semana.url_datafono_fabricato : null;
         const urlBanco2 = sede === "Fabricato" ? semana.url_bold_fabricato : null;
 
