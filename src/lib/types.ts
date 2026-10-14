@@ -596,16 +596,17 @@ export interface AnalisisIA {
   generado_en: string;
 }
 
-/** Los 4 documentos que se suben una vez por semana (no por día) — cada uno
+/** Los 3 documentos que se suben una vez por semana (no por día) — cada uno
  *  cubre varios días y, salvo Bancolombia, una sola sede — y a partir de los
  *  cuales se genera/actualiza el cierre de cada uno de los 7 días × 2 sedes
- *  de esa semana en cierres_caja. La tirilla datáfono Redeban de Las Américas
- *  NO se sube acá: siempre se toma de lo ya adjuntado día a día en Cierre
- *  diario de Operación (cierres_diarios.tirilla_datafono_url). */
+ *  de esa semana en cierres_caja. La tarjeta de ninguna de las 2 sedes se
+ *  sube acá: Las Américas siempre adjunta su tirilla Redeban día a día en
+ *  Cierre diario de Operación (cierres_diarios.tirilla_datafono_url), y
+ *  Fabricato se arma sola leyendo los correos de cierre de turno de Bold
+ *  (cierres_diarios.bold_cierre_turnos). */
 export interface CierreCajaSemana {
   id: string;
   semana_inicio: string;
-  url_datafono_fabricato: string | null;
   url_bancolombia: string | null;
   url_bold_fabricato: string | null;
   url_recibos_caja: string | null;

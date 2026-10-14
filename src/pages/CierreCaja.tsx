@@ -662,7 +662,6 @@ function ErroresSeccion({
 }
 
 const DOCUMENTOS_SEMANA: { campo: keyof CierreCajaSemana; label: string }[] = [
-  { campo: "url_datafono_fabricato", label: "Cierre ventas datáfono — Fabricato" },
   { campo: "url_bancolombia", label: "Movimientos Bancolombia — ambas sedes" },
   { campo: "url_bold_fabricato", label: "Movimientos Bold — Fabricato" },
   { campo: "url_recibos_caja", label: "Excel recibos de caja del sistema — ambas sedes" },
@@ -780,9 +779,9 @@ function FormularioSemana({
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-xs text-gray-400 max-w-md">
           Sube acá los documentos de toda la semana (una sola vez, no por día) — el sistema compara contra lo que ya
-          cerró cada día en Cierre diario de Operación y te dice cuáles días no cuadran. La tirilla datáfono Redeban
-          de Las Américas no se sube acá: se toma automático de lo que ya se adjunta cada día en Cierre diario de
-          Operación.
+          cerró cada día en Cierre diario de Operación y te dice cuáles días no cuadran. La tarjeta de ninguna de
+          las 2 sedes se sube acá: la de Las Américas se toma automático de la tirilla que ya se adjunta cada día en
+          Cierre diario de Operación, y la de Fabricato se arma sola leyendo los correos de cierre de turno de Bold.
         </p>
         <label className="text-xs text-gray-500">
           Semana del (lunes)

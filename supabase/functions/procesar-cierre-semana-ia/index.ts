@@ -1,18 +1,21 @@
 // Supabase Edge Function: procesar-cierre-semana-ia
 //
 // El cierre de caja real no se hace día por día — cada semana se sube UN
-// lote de 4 documentos (que cada uno cubre varios días, y salvo Bancolombia,
+// lote de 3 documentos (que cada uno cubre varios días, y salvo Bancolombia,
 // una sola sede) y hay que compararlo contra lo que ya cerró cada día en
 // cierres_diarios (Cierre diario de Operación, fuente oficial desde que se
-// integró con Cierre de Caja). La tirilla datáfono Redeban de Las Américas
-// NO se sube como parte de este lote semanal: siempre se toma, día por día,
-// de lo que ya se adjuntó en Cierre diario de Operación (se adjunta ahí
-// siempre, antes de cerrar el día). Esta función:
-//   1. Lee los 4 documentos semanales (cierres_caja_semanas) + la tirilla
-//      datáfono de cada uno de los 7 días de Las Américas (cierres_diarios).
+// integró con Cierre de Caja). La tarjeta de las 2 sedes NO depende de que
+// nadie suba nada: Las Américas siempre adjunta su tirilla Redeban en Cierre
+// diario de Operación, y Fabricato recibe por correo (Bold, "cierre de
+// ventas") el valor exacto de cada turno — ambas se leen directo, sin IA de
+// por medio para ese número. Esta función:
+//   1. Lee los 3 documentos semanales que sí requieren lectura por IA
+//      (cierres_caja_semanas) + la tirilla de Las Américas y los turnos Bold
+//      de Fabricato de cada uno de los 7 días (cierres_diarios).
 //   2. Junta el facturado real de los 7 días × 2 sedes desde cierres_diarios.
 //   3. Le pide a Claude que lea los documentos y devuelva, día por día y sede
-//      por sede, lo que encuentra y si cuadra contra lo facturado.
+//      por sede, lo que encuentra (efectivo/transferencia) y si cuadra contra
+//      lo facturado — la tarjeta ya viene resuelta de forma determinística.
 //   4. Crea/actualiza las 14 filas de cierres_caja correspondientes — con el
 //      facturado ya resuelto (sin que nadie tenga que digitarlo) y el
 //      análisis de la IA. "Cuadra" NO se marca sola, la sigue confirmando un
@@ -137,7 +140,6 @@ Deno.serve(async (req) => {
     if (errSemana || !semana) return json({ ok: false, error: "No se encontró la semana." }, 404);
 
     const documentosSemana: { label: string; path: string | null; sedes: ("Las Americas" | "Fabricato")[] }[] = [
-      { label: "Cierre ventas datáfono — Fabricato", path: semana.url_datafono_fabricato, sedes: ["Fabricato"] },
       { label: "Movimientos Bancolombia — ambas sedes", path: semana.url_bancolombia, sedes: ["Las Americas", "Fabricato"] },
       { label: "Movimientos Bold — Fabricato", path: semana.url_bold_fabricato, sedes: ["Fabricato"] },
       { label: "Excel recibos de caja del sistema — ambas sedes", path: semana.url_recibos_caja, sedes: ["Las Americas", "Fabricato"] },
@@ -151,7 +153,7 @@ Deno.serve(async (req) => {
 
     const { data: cierresDiariosData } = await admin
       .from("cierres_diarios")
-      .select("sede_id, fecha, totales_por_medio, gasto, tirilla_datafono_url")
+      .select("sede_id, fecha, totales_por_medio, gasto, tirilla_datafono_url, bold_cierre_turnos")
       .in("fecha", fechas);
     const facturadoPorDiaSede = new Map<
       string,
@@ -162,12 +164,18 @@ Deno.serve(async (req) => {
     // que se toma de ahí directo — una imagen/PDF por fecha, sin ambigüedad
     // de a qué día pertenece (a diferencia de un solo documento semanal).
     const tirillaLasAmericasPorFecha = new Map<string, string>();
+    // La tarjeta de Fabricato tampoco depende de un documento: Bold manda un
+    // correo por cada turno cerrado ("cierre de ventas") con el valor exacto
+    // en texto plano — un bot lee Gmail y los va guardando acá, uno o varios
+    // por día. Se suman para tener el total determinístico del día.
+    const boldFabricatoPorFecha = new Map<string, number>();
     for (const c of (cierresDiariosData as {
       sede_id: string;
       fecha: string;
       totales_por_medio: Record<string, number>;
       gasto: number;
       tirilla_datafono_url: string | null;
+      bold_cierre_turnos: { valor: number }[] | null;
     }[]) ?? []) {
       let claveSede: "Las Americas" | "Fabricato" | null = null;
       for (const [k, v] of sedesPorClave) if (v === c.sede_id) claveSede = k;
@@ -189,9 +197,13 @@ Deno.serve(async (req) => {
       if (claveSede === "Las Americas" && c.tirilla_datafono_url) {
         tirillaLasAmericasPorFecha.set(c.fecha, c.tirilla_datafono_url);
       }
+      if (claveSede === "Fabricato" && c.bold_cierre_turnos && c.bold_cierre_turnos.length > 0) {
+        const suma = c.bold_cierre_turnos.reduce((a, turno) => a + Number(turno.valor ?? 0), 0);
+        boldFabricatoPorFecha.set(c.fecha, suma);
+      }
     }
 
-    if (documentosSemana.length === 0 && tirillaLasAmericasPorFecha.size === 0) {
+    if (documentosSemana.length === 0 && tirillaLasAmericasPorFecha.size === 0 && boldFabricatoPorFecha.size === 0) {
       return json({ ok: false, error: "Esta semana no tiene ningún documento adjunto todavía." }, 400);
     }
 
@@ -212,7 +224,11 @@ Deno.serve(async (req) => {
       (["Las Americas", "Fabricato"] as const).map((sede) => {
         const f = facturadoPorDiaSede.get(`${fecha}|${sede}`);
         if (!f) return `- ${fecha} · ${sede}: sin cierre diario registrado en el ERP.`;
-        return `- ${fecha} · ${sede}: efectivo ${f.efvo_fact} (ya con el gasto de ${f.gasto} restado), tarjeta ${f.tarjeta_fact}, transferencia ${f.transf_fact}, addi/sistecrédito ${f.addi}, total ${f.total}.`;
+        const notaTarjeta =
+          sede === "Fabricato" && boldFabricatoPorFecha.has(fecha)
+            ? ` [tarjeta ya verificada contra Bold: $${boldFabricatoPorFecha.get(fecha)}, no hace falta que la verifiques tú]`
+            : "";
+        return `- ${fecha} · ${sede}: efectivo ${f.efvo_fact} (ya con el gasto de ${f.gasto} restado), tarjeta ${f.tarjeta_fact}, transferencia ${f.transf_fact}, addi/sistecrédito ${f.addi}, total ${f.total}.${notaTarjeta}`;
       }),
     );
     const facturadoTexto = `Semana del ${semana.semana_inicio} — facturado según el ERP (Cierre diario de Operación) por día y sede:\n${facturadoLineas.join("\n")}`;
@@ -220,18 +236,19 @@ Deno.serve(async (req) => {
     const systemPrompt = `Eres un asistente contable de una clínica dental en Colombia (Dentilandia), con 2 sedes:
 "Las Americas" y "Fabricato". Te doy el facturado según el ERP de los 7 días de una semana, para cada sede, y los
 documentos de soporte que cubren esa misma semana (algunos aplican a una sola sede, otros a ambas — se indica en
-cada uno):
-- Tirilla datáfono Redeban — Las Américas: te llega UNA imagen/PDF por cada día de la semana que la tenga adjunta
-  (la etiqueta de cada una ya trae su fecha exacta) — es la fuente de tarjeta de esa sede, día por día, sin que
-  tengas que repartir nada.
-- Cierre de ventas datáfono: solo Fabricato, tarjeta (un solo documento para toda la semana).
+cada uno). La tarjeta de las 2 sedes YA viene resuelta de forma determinística (no depende de que tú la leas de
+ningún documento): para Las Américas te llega una imagen/PDF de la tirilla Redeban por cada día que la tenga (la
+etiqueta ya trae su fecha exacta), y para Fabricato el valor ya viene anotado junto al facturado de cada día
+cuando aplica — en ambos casos, para "tarjeta_real" de esos día×sede usa ese mismo valor (o el de la tirilla que
+leas) tal cual, sin necesidad de más verificación.
 - Movimientos Bancolombia: ambas sedes, transferencia/banco.
 - Movimientos Bold: solo Fabricato, transferencia/banco (aparte de Bancolombia).
 - Excel de recibos de caja del sistema: ambas sedes, efectivo (y puede traer una columna de sede).
 
 Lee esos documentos y, para CADA UNA de las 14 combinaciones día×sede de esa semana, extrae lo que encuentres
-y compáralo contra el facturado del ERP de ese día y esa sede. Si un documento no trae desglose por día, repartelo
-por día tal como aparece, o usa null si no puedes separar un día de otro.
+(sobre todo efectivo y transferencia) y compáralo contra el facturado del ERP de ese día y esa sede. Si un
+documento no trae desglose por día, repartelo por día tal como aparece, o usa null si no puedes separar un día
+de otro.
 
 Responde ÚNICAMENTE con un JSON válido, sin texto adicional antes ni después, ni bloques de markdown, con esta forma
 exacta:
@@ -303,8 +320,20 @@ exacta:
         };
         const analisis = analisisPorDiaSede.get(`${fecha}|${sede}`);
         const urlDatafono1 = sede === "Las Americas" ? tirillaLasAmericasPorFecha.get(fecha) ?? null : null;
-        const urlDatafono2 = sede === "Fabricato" ? semana.url_datafono_fabricato : null;
         const urlBanco2 = sede === "Fabricato" ? semana.url_bold_fabricato : null;
+
+        // Tarjeta determinística: Las Américas la trae la IA (leyó la tirilla
+        // Redeban); Fabricato ya la tenemos exacta de los correos de Bold, sin
+        // IA de por medio. Si por algún motivo falta la fuente determinística
+        // de ese día, se deja sin resolver en vez de inventar un valor.
+        const boldFabricato = sede === "Fabricato" ? boldFabricatoPorFecha.get(fecha) ?? null : null;
+        const dataf_spro =
+          sede === "Fabricato" ? boldFabricato : typeof analisis?.tarjeta_real === "number" ? analisis.tarjeta_real : null;
+        const dif_dataf_bruta = dataf_spro === null ? null : facturado.tarjeta_fact - dataf_spro;
+        const dataf_explicado = dif_dataf_bruta !== null && Math.abs(dif_dataf_bruta) < 1;
+        const fuente_dataf =
+          sede === "Fabricato" && boldFabricato !== null ? "SPRO Bold" : sede === "Las Americas" && urlDatafono1 ? "Redeban" : undefined;
+        const tieneFuenteTarjeta = sede === "Las Americas" ? !!urlDatafono1 : boldFabricato !== null;
 
         await admin.from("cierres_caja").upsert(
           {
@@ -320,16 +349,19 @@ exacta:
             url_movimientos_banco: semana.url_bancolombia,
             url_movimientos_banco_2: urlBanco2,
             url_tirilla_datafono: urlDatafono1,
-            url_reporte_datafono: urlDatafono2,
-            dataf_sin_docs: !urlDatafono1 && !urlDatafono2,
+            dataf_sin_docs: !tieneFuenteTarjeta,
+            dataf_spro,
+            dif_dataf_bruta,
+            dataf_explicado,
+            ...(fuente_dataf ? { fuente_dataf } : {}),
             ...(analisis
               ? {
                   analisis_ia: {
                     efectivo_real: analisis.efectivo_real ?? null,
-                    tarjeta_real: analisis.tarjeta_real ?? null,
+                    tarjeta_real: dataf_spro ?? analisis.tarjeta_real ?? null,
                     transferencia_real: analisis.transferencia_real ?? null,
                     diferencia_efectivo: analisis.diferencia_efectivo ?? null,
-                    diferencia_tarjeta: analisis.diferencia_tarjeta ?? null,
+                    diferencia_tarjeta: dif_dataf_bruta ?? analisis.diferencia_tarjeta ?? null,
                     diferencia_transferencia: analisis.diferencia_transferencia ?? null,
                     cuadra_sugerido: analisis.cuadra_sugerido ?? false,
                     resumen: analisis.nota ?? "",
