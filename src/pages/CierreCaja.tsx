@@ -5,6 +5,25 @@ import { supabase } from "../lib/supabase";
 import { fmtCOP, today } from "../lib/format";
 import type { Sede, CierreCaja as CierreCajaRow, CierreCajaSemana } from "../lib/types";
 
+/** supabase-js, cuando un Edge Function responde con un status que no es 2xx,
+ *  lanza un error genérico ("Edge Function returned a non-2xx status code")
+ *  en vez del mensaje real que la función devolvió en su cuerpo JSON — el
+ *  detalle útil ("Este día no tiene ningún documento adjunto todavía.", etc.)
+ *  queda escondido en error.context (la Response cruda). Esto lo rescata. */
+async function mensajeDeErrorFuncion(e: unknown): Promise<string> {
+  const ctx = (e as { context?: Response })?.context;
+  if (ctx instanceof Response) {
+    try {
+      const body = await ctx.clone().json();
+      if (body?.error) return String(body.error);
+    } catch {
+      // el cuerpo no era JSON — sigue al mensaje genérico de abajo
+    }
+  }
+  if (e && typeof e === "object" && "message" in e) return String((e as { message: unknown }).message);
+  return "No se pudo procesar el cierre con IA.";
+}
+
 const DIAS_SEMANA = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 const DIAS_SEMANA_LARGO = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
@@ -47,11 +66,14 @@ function faltaCierreFisico(c: CierreCajaRow) {
   return c.arqueo === null && !c.url_recibos_caja;
 }
 
-/** Falta el respaldo de datáfono: la bandera legacy sigue en true (nunca se
- *  adjuntó nada, ni antes ni ahora) y tampoco hay ninguno de los 2 documentos
- *  de datáfono adjuntos. */
-function faltaDatafono(c: CierreCajaRow) {
-  return c.dataf_sin_docs && !c.url_tirilla_datafono && !c.url_reporte_datafono;
+/** Falta el respaldo de datáfono: ni hay fuente determinística ahora mismo
+ *  (tirilla Redeban u correo de Bold de ESE día, leídos en vivo desde
+ *  cierres_diarios — no la copia que quedó pegada en cierres_caja la última
+ *  vez que se procesó con IA, que se queda vieja si alguien adjunta la
+ *  tirilla después) ni se subió un respaldo manual en "Soportes del día". */
+function faltaDatafono(c: CierreCajaRow, fuentePorDiaSede: Record<string, boolean>) {
+  if (c.url_tirilla_datafono || c.url_reporte_datafono) return false;
+  return !(fuentePorDiaSede[`${c.fecha}|${c.sede}`] ?? false);
 }
 
 interface FinanciacionDia {
@@ -79,11 +101,11 @@ function pendienteAddi(c: CierreCajaRow, financiacion: Record<string, Financiaci
   return null;
 }
 
-function tienePendientes(c: CierreCajaRow, financiacion: Record<string, FinanciacionDia>) {
+function tienePendientes(c: CierreCajaRow, financiacion: Record<string, FinanciacionDia>, fuenteDatafono: Record<string, boolean>) {
   return (
     !c.cuadra ||
     c.errores.length > 0 ||
-    faltaDatafono(c) ||
+    faltaDatafono(c, fuenteDatafono) ||
     faltaCierreFisico(c) ||
     (!!c.dif_dataf_bruta && !c.dataf_explicado) ||
     pendienteAddi(c, financiacion) !== null ||
@@ -102,10 +124,14 @@ interface PendienteItem {
 /** El panel ahora es gerencial (ambas sedes a la vez, con filtro de pastilla
  *  encima), así que cada pendiente lleva su propia sede en vez de asumir una
  *  sola fija para toda la página. */
-function pendientesDe(c: CierreCajaRow, financiacion: Record<string, FinanciacionDia>): PendienteItem[] {
+function pendientesDe(
+  c: CierreCajaRow,
+  financiacion: Record<string, FinanciacionDia>,
+  fuenteDatafono: Record<string, boolean>,
+): PendienteItem[] {
   const items: PendienteItem[] = [];
   const base = `${c.fecha}|${c.sede}`;
-  if (faltaDatafono(c)) {
+  if (faltaDatafono(c, fuenteDatafono)) {
     items.push({
       clave: `${base}|Datáfono`,
       fecha: c.fecha,
@@ -165,6 +191,7 @@ export function CierreCaja() {
   const [pendientesEstado, setPendientesEstado] = useState<Record<string, { resuelto: boolean; solucion: string }>>({});
   const [consignadosReales, setConsignadosReales] = useState<Record<string, { consignado: boolean; entregado_admin: boolean }>>({});
   const [financiacionPorDiaSede, setFinanciacionPorDiaSede] = useState<Record<string, FinanciacionDia>>({});
+  const [fuenteDatafonoPorDiaSede, setFuenteDatafonoPorDiaSede] = useState<Record<string, boolean>>({});
   const [soloConPendientes, setSoloConPendientes] = useState(false);
   const [tab, setTab] = useState<TabCierre>("cuadre");
   const [sedeFiltro, setSedeFiltro] = useState<SedeFiltro>("todas");
@@ -199,21 +226,39 @@ export function CierreCaja() {
     // Estado real de "Día consignado", tal como lo marca Operación Diaria en Cierre
     // diario — reemplaza el texto libre de nota_banco_extra del histórico importado,
     // que no se actualiza con los días nuevos. Ahora cubre ambas sedes a la vez.
+    // fuenteDatafonoPorDiaSede también sale de acá (en vivo, no de la copia
+    // que procesar-cierre-semana-ia pegó en cierres_caja la última vez que
+    // corrió) — así, si alguien adjunta la tirilla Redeban en Cierre Diario
+    // DESPUÉS de haber procesado la semana, la alerta de "falta datáfono" se
+    // apaga sola sin necesidad de reprocesar con IA.
+    const mapaFuenteDatafono: Record<string, boolean> = {};
     if (listaSedes.length > 0) {
       const { data: consignadosData } = await supabase
         .from("cierres_diarios")
-        .select("fecha, sede_id, consignado, entregado_admin")
+        .select("fecha, sede_id, consignado, entregado_admin, tirilla_datafono_url, bold_cierre_turnos")
         .in(
           "sede_id",
           listaSedes.map((s) => s.id),
         );
       const mapaConsignado: Record<string, { consignado: boolean; entregado_admin: boolean }> = {};
-      (consignadosData ?? []).forEach((r) => {
+      (
+        (consignadosData as unknown as {
+          fecha: string;
+          sede_id: string;
+          consignado: boolean;
+          entregado_admin: boolean;
+          tirilla_datafono_url: string | null;
+          bold_cierre_turnos: unknown[] | null;
+        }[]) ?? []
+      ).forEach((r) => {
         const sede = listaSedes.find((s) => s.id === r.sede_id);
         if (!sede) return;
-        mapaConsignado[`${r.fecha}|${claveSedeDe(sede)}`] = { consignado: r.consignado, entregado_admin: r.entregado_admin };
+        const clave = `${r.fecha}|${claveSedeDe(sede)}`;
+        mapaConsignado[clave] = { consignado: r.consignado, entregado_admin: r.entregado_admin };
+        mapaFuenteDatafono[clave] = claveSedeDe(sede) === "Fabricato" ? (r.bold_cierre_turnos?.length ?? 0) > 0 : !!r.tirilla_datafono_url;
       });
       setConsignadosReales(mapaConsignado);
+      setFuenteDatafonoPorDiaSede(mapaFuenteDatafono);
     }
 
     // Cruce de Addi/Sistecrédito contra Financiación: lo facturado ese día×sede
@@ -258,7 +303,9 @@ export function CierreCaja() {
 
     setMesesAbiertos((prev) => {
       if (prev.size > 0) return prev;
-      const mesesConFaltantes = new Set(filas.filter((c) => faltaDatafono(c) || faltaCierreFisico(c)).map((c) => c.fecha.slice(0, 7)));
+      const mesesConFaltantes = new Set(
+        filas.filter((c) => faltaDatafono(c, mapaFuenteDatafono) || faltaCierreFisico(c)).map((c) => c.fecha.slice(0, 7)),
+      );
       const mesMasReciente = filas[0]?.fecha.slice(0, 7);
       if (mesMasReciente) mesesConFaltantes.add(mesMasReciente);
       return mesesConFaltantes;
@@ -338,8 +385,11 @@ export function CierreCaja() {
   );
 
   const cierresFiltrados = useMemo(
-    () => (soloConPendientes ? cierresPeriodoSede.filter((c) => tienePendientes(c, financiacionPorDiaSede)) : cierresPeriodoSede),
-    [cierresPeriodoSede, soloConPendientes, financiacionPorDiaSede],
+    () =>
+      soloConPendientes
+        ? cierresPeriodoSede.filter((c) => tienePendientes(c, financiacionPorDiaSede, fuenteDatafonoPorDiaSede))
+        : cierresPeriodoSede,
+    [cierresPeriodoSede, soloConPendientes, financiacionPorDiaSede, fuenteDatafonoPorDiaSede],
   );
 
   const gruposPorMes = useMemo(() => {
@@ -356,8 +406,8 @@ export function CierreCaja() {
   const diasCuadrados = cierresPeriodoSede.filter((c) => c.cuadra).length;
 
   const pendientesTodos = useMemo(
-    () => cierresPeriodoSede.flatMap((c) => pendientesDe(c, financiacionPorDiaSede)),
-    [cierresPeriodoSede, financiacionPorDiaSede],
+    () => cierresPeriodoSede.flatMap((c) => pendientesDe(c, financiacionPorDiaSede, fuenteDatafonoPorDiaSede)),
+    [cierresPeriodoSede, financiacionPorDiaSede, fuenteDatafonoPorDiaSede],
   );
   const pendientesAbiertos = pendientesTodos.filter((p) => !pendientesEstado[p.clave]?.resuelto);
   const pendientesResueltos = pendientesTodos.filter((p) => pendientesEstado[p.clave]?.resuelto);
@@ -521,6 +571,14 @@ export function CierreCaja() {
                           const entregadoAdmin = estadoOperacion?.entregado_admin ?? false;
                           const claveRev = `${c.fecha}|${c.sede}`;
                           const { corta, diaSemana } = fechaTarjeta(c.fecha);
+                          // El resto de pendientes (diferencia de datáfono ya con fuente,
+                          // Addi/Sistecrédito, consignación) no tenían ningún badge propio —
+                          // un día podía verse "✔ Cuadra" sin ninguna alerta y aun así tener
+                          // pendientes abiertos en esa pestaña. Datáfono y Cierre físico ya
+                          // tienen su propio badge, así que no se repiten acá.
+                          const pendientesOcultos = pendientesDe(c, financiacionPorDiaSede, fuenteDatafonoPorDiaSede).filter(
+                            (p) => p.tipo !== "Datáfono" && p.tipo !== "Cierre físico",
+                          );
                           return (
                             <div key={c.id} className="rounded-xl border border-gray-200 bg-white p-3 flex flex-col gap-2">
                               <button onClick={() => setDetalle(c)} className="text-left hover:opacity-70" title="Ver detalle y adjuntar soportes">
@@ -553,7 +611,7 @@ export function CierreCaja() {
                                     🏦 Cuenta 2
                                   </span>
                                 )}
-                                {faltaDatafono(c) && (
+                                {faltaDatafono(c, fuenteDatafonoPorDiaSede) && (
                                   <span className="text-xs font-semibold px-2 py-0.5 rounded-full text-white" style={{ background: "#C0392B" }}>
                                     ⚠ Falta {c.fuente_dataf ?? "tirilla/reporte de datáfono"}
                                   </span>
@@ -561,6 +619,15 @@ export function CierreCaja() {
                                 {faltaCierreFisico(c) && (
                                   <span className="text-xs font-semibold px-2 py-0.5 rounded-full text-white" style={{ background: "#C0392B" }}>
                                     ⚠ Falta cierre físico
+                                  </span>
+                                )}
+                                {pendientesOcultos.length > 0 && (
+                                  <span
+                                    className="text-xs font-semibold px-2 py-0.5 rounded-full text-white"
+                                    style={{ background: "#C7891F" }}
+                                    title={pendientesOcultos.map((p) => `${p.tipo}: ${p.descripcion}`).join(" · ")}
+                                  >
+                                    ⚠ {pendientesOcultos.length} pendiente{pendientesOcultos.length > 1 ? "s" : ""}
                                   </span>
                                 )}
                               </div>
@@ -838,11 +905,7 @@ function FormularioSemana({
       if (error) throw error;
       if (!data?.ok) throw new Error(data?.error ?? "Error desconocido procesando la semana.");
     } catch (e) {
-      window.alert(
-        e && typeof e === "object" && "message" in e
-          ? String((e as { message: unknown }).message)
-          : "No se pudo procesar la semana con IA.",
-      );
+      window.alert(await mensajeDeErrorFuncion(e));
     } finally {
       setProcesando(false);
       await cargarSemana();
@@ -1243,11 +1306,7 @@ function DetalleModal({
       if (!data?.ok) throw new Error(data?.error ?? "Error desconocido procesando el cierre.");
       onGuardado();
     } catch (e) {
-      setErrorIA(
-        e && typeof e === "object" && "message" in e
-          ? String((e as { message: unknown }).message)
-          : "No se pudo procesar el cierre con IA.",
-      );
+      setErrorIA(await mensajeDeErrorFuncion(e));
     } finally {
       setProcesandoIA(false);
     }
