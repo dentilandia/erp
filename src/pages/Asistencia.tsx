@@ -77,38 +77,40 @@ function horasTrabajadasDeMarcas(
   return Math.max(0, horas);
 }
 
-/** Separa el faltante YA CALCULADO de un día compensado (minutosGuardado —
+/** Separa el faltante YA CALCULADO de un día (minutosGuardado —
  *  jornadaOrdinariaHoras - horasTrabajadasDeMarcas, la fuente de verdad) en
- *  Compensadas (dentro de una autorización de admin) vs Ingreso (por
- *  fuera). Ojo con la entrada: si hay una hora de entrada autorizada MÁS
- *  TARDE que la normal (ej. "autorizada a entrar a la 1pm"), la tardanza se
- *  mide contra ESA hora, nunca contra la normal — compararla contra la
- *  normal fija fue el bug original: un día 100% autorizado (llegó justo a
- *  la hora autorizada) aparecía con cientos de minutos de "Ingreso" solo
- *  por ser más tarde que las 8:30 de siempre.
- *  Se calculan por separado cuánto de la entrada tardía y cuánto de la
- *  salida temprana caen dentro de lo autorizado, y el resultado se recorta
- *  para nunca superar minutosGuardado — un turno autorizado que cruza el
- *  almuerzo puede hacer que la ventana autorizada, sumada aparte, no
- *  encaje exacto contra ese número; lo que sobra cae en Ingreso, nunca al
- *  revés (nunca se le atribuye a Compensadas más de lo que el faltante
- *  real vale). */
+ *  Compensadas (dentro de una autorización de admin, entrada o salida) y lo
+ *  que queda sin perdonar, repartido por RAZÓN: Ingreso (tardanza de
+ *  entrada sin autorizar) y Finalización jornada (salida temprano sin
+ *  autorizar) — antes esos dos se mezclaban en un solo "Ingreso" sin decir
+ *  cuál de los dos pasó. Ojo con la entrada: si hay una hora de entrada
+ *  autorizada MÁS TARDE que la normal (ej. "autorizada a entrar a la 1pm"),
+ *  la tardanza se mide contra ESA hora, nunca contra la normal — compararla
+ *  contra la normal fija fue el bug original: un día 100% autorizado (llegó
+ *  justo a la hora autorizada) aparecía con cientos de minutos de "Ingreso"
+ *  solo por ser más tarde que las 8:30 de siempre.
+ *  Se calcula la tardanza real de entrada y la salida temprana real por
+ *  separado (sin tope de autorización), se les resta lo que sí está
+ *  autorizado en cada una, y lo que sobra de cada una es Ingreso/
+ *  Finalización jornada respectivamente — recortado para que entre los 3
+ *  nunca sumen más que minutosGuardado (un turno autorizado que cruza el
+ *  almuerzo puede desajustar un poco la cuenta exacta). */
 function descomponerCompensadoDia(
   marcas: { tipo: TipoAsistencia; marcado_en: string }[],
   fecha: string,
   horaEntradaAutorizada: string | null | undefined,
   horaSalidaAutorizada: string | null | undefined,
   minutosGuardado: number,
-): { minutosCompensadas: number; minutosIngreso: number } {
+): { minutosCompensadas: number; minutosIngresoEntrada: number; minutosIngresoSalida: number } {
   const porTipo: Partial<Record<TipoAsistencia, string>> = {};
   for (const m of marcas) if (!porTipo[m.tipo]) porTipo[m.tipo] = m.marcado_en;
   if (!porTipo.llegada || !porTipo.salida) {
     // Sin marcas todavía (día programado de un día para otro, antes de que
-    // la persona marque) — no hay de dónde separar, se usa el booleano
-    // simple como mejor estimado hasta que haya marcas reales.
+    // la persona marque) — no hay de dónde separar por razón, se usa el
+    // booleano simple como mejor estimado hasta que haya marcas reales.
     return horaEntradaAutorizada || horaSalidaAutorizada
-      ? { minutosCompensadas: minutosGuardado, minutosIngreso: 0 }
-      : { minutosCompensadas: 0, minutosIngreso: minutosGuardado };
+      ? { minutosCompensadas: minutosGuardado, minutosIngresoEntrada: 0, minutosIngresoSalida: 0 }
+      : { minutosCompensadas: 0, minutosIngresoEntrada: minutosGuardado, minutosIngresoSalida: 0 };
   }
   const horario = horasPorDefecto(fecha);
   const inicioNormalMs = new Date(`${fecha}T${horario.llegada}:00-05:00`).getTime();
@@ -136,11 +138,23 @@ function descomponerCompensadoDia(
     minutosSalidaAutorizada = Math.max(0, (finNormalMs - pisoMs) / 60_000);
   }
 
-  const minutosCompensadas = Math.min(
-    Math.round(minutosEntradaAutorizada + minutosSalidaAutorizada),
-    minutosGuardado,
-  );
-  return { minutosCompensadas, minutosIngreso: minutosGuardado - minutosCompensadas };
+  // Tardanza y salida-temprano REALES, sin tope de autorización — llegar
+  // temprano nunca cuenta como tardanza (la jornada no "empieza antes"), y
+  // salir después del cierre normal nunca cuenta como salida temprana (esa
+  // cola es horas extra, otro concepto, en otro reporte).
+  const llegadaMs = new Date(porTipo.llegada).getTime();
+  const salidaMs = Math.min(new Date(porTipo.salida).getTime(), finNormalMs);
+  const tardanzaRealMin = Math.max(0, (llegadaMs - inicioNormalMs) / 60_000);
+  const salidaTempranoRealMin = Math.max(0, (finNormalMs - salidaMs) / 60_000);
+
+  const ingresoEntradaCrudo = Math.max(0, tardanzaRealMin - minutosEntradaAutorizada);
+  const ingresoSalidaCrudo = Math.max(0, salidaTempranoRealMin - minutosSalidaAutorizada);
+  const crudoTotal = ingresoEntradaCrudo + ingresoSalidaCrudo;
+  const ingresoTotal = Math.min(Math.round(crudoTotal), minutosGuardado);
+  const minutosIngresoEntrada = crudoTotal > 0 ? Math.round((ingresoEntradaCrudo / crudoTotal) * ingresoTotal) : 0;
+  const minutosIngresoSalida = ingresoTotal - minutosIngresoEntrada;
+  const minutosCompensadas = minutosGuardado - ingresoTotal;
+  return { minutosCompensadas, minutosIngresoEntrada, minutosIngresoSalida };
 }
 
 /** Escapa texto libre (nombres, notas) antes de interpolarlo en el HTML del
@@ -318,9 +332,11 @@ interface SemanaReporte {
   // entrar tarde/salir temprano ese día) — es lo que se resta del saldo
   // anterior para dar "Saldo restante".
   minutosCompensados: number;
-  // Minutos de faltante en días SIN autorización — tardanza normal que
-  // marcaron tarde sin permiso. Se resta aparte en la Liquidación.
-  minutosIngreso: number;
+  // Minutos de faltante en días SIN autorización, repartidos por razón —
+  // tardanza de entrada vs salida antes de la hora de cierre ("Finalización
+  // jornada"). Los dos se restan aparte en la Liquidación.
+  minutosIngresoEntrada: number;
+  minutosIngresoSalida: number;
   cuentaParaEsteMes: boolean;
 }
 
@@ -343,10 +359,11 @@ interface CompensacionReporte {
   fecha: string;
   // Ya separados por descomponerCompensadoDia: minutos de ese día que caen
   // dentro de una autorización de admin (Compensadas) vs por fuera de
-  // cualquier autorización (Ingreso). Un mismo día puede tener de los dos
-  // (ej. llegó 8 min tarde sin permiso Y salió temprano con permiso).
+  // cualquier autorización, repartidos por razón — Ingreso (entrada) y
+  // Finalización jornada (salida). Un mismo día puede tener de los tres.
   minutosCompensadas: number;
-  minutosIngreso: number;
+  minutosIngresoEntrada: number;
+  minutosIngresoSalida: number;
 }
 
 interface AutorizacionReporte {
@@ -439,11 +456,13 @@ function armarReporteHoras(
   for (const a of autorizaciones) horaAutorizadaPorDia.set(`${a.perfil_id}|${a.fecha}`, a.hora);
 
   const compensadasPorDia = new Map<string, number>();
-  const ingresoPorDia = new Map<string, number>();
+  const ingresoEntradaPorDia = new Map<string, number>();
+  const ingresoSalidaPorDia = new Map<string, number>();
   for (const c of compensaciones) {
     const clave = `${c.perfil_id}|${c.fecha}`;
     compensadasPorDia.set(clave, (compensadasPorDia.get(clave) ?? 0) + c.minutosCompensadas);
-    ingresoPorDia.set(clave, (ingresoPorDia.get(clave) ?? 0) + c.minutosIngreso);
+    ingresoEntradaPorDia.set(clave, (ingresoEntradaPorDia.get(clave) ?? 0) + c.minutosIngresoEntrada);
+    ingresoSalidaPorDia.set(clave, (ingresoSalidaPorDia.get(clave) ?? 0) + c.minutosIngresoSalida);
   }
 
   const porPersonaYDia = new Map<string, { nombre: string; marcas: Record<string, string> }>();
@@ -488,7 +507,15 @@ function armarReporteHoras(
 
   const porPersonaYSemana = new Map<
     string,
-    { nombre: string; horas: number; horasSabado: number; minutosCompensados: number; minutosIngreso: number; horasFestivo: number }
+    {
+      nombre: string;
+      horas: number;
+      horasSabado: number;
+      minutosCompensados: number;
+      minutosIngresoEntrada: number;
+      minutosIngresoSalida: number;
+      horasFestivo: number;
+    }
   >();
   for (const [clave, { nombre, marcas }] of porPersonaYDia) {
     const [perfilId, dia] = clave.split("|");
@@ -505,16 +532,18 @@ function armarReporteHoras(
       horas -= 1;
     }
     const minutosCompensadasDia = compensadasPorDia.get(clave) ?? 0;
-    const minutosIngresoDia = ingresoPorDia.get(clave) ?? 0;
-    horas += (minutosCompensadasDia + minutosIngresoDia) / 60;
+    const minutosIngresoEntradaDia = ingresoEntradaPorDia.get(clave) ?? 0;
+    const minutosIngresoSalidaDia = ingresoSalidaPorDia.get(clave) ?? 0;
+    horas += (minutosCompensadasDia + minutosIngresoEntradaDia + minutosIngresoSalidaDia) / 60;
     if (horas <= 0) continue;
     const lunes = lunesDeSemana(dia);
     const claveSemana = `${perfilId}|${lunes}`;
     const acumulado = porPersonaYSemana.get(claveSemana);
-    // El faltante del día ya viene repartido en dos cajas desde
+    // El faltante del día ya viene repartido en 3 cajas desde
     // descomponerCompensadoDia (Compensadas = dentro de una autorización de
-    // admin, Ingreso = por fuera) — las dos ya están sumadas de vuelta en
-    // "horas" arriba, solo se reparten distinto para el desglose.
+    // admin, Ingreso/Finalización jornada = por fuera, por razón) — las 3 ya
+    // están sumadas de vuelta en "horas" arriba, solo se reparten distinto
+    // para el desglose.
     porPersonaYSemana.set(claveSemana, {
       nombre,
       horas: (acumulado?.horas ?? 0) + horas,
@@ -524,7 +553,8 @@ function armarReporteHoras(
       // entre semana (ver uso más abajo).
       horasSabado: (acumulado?.horasSabado ?? 0) + (diaDeSemana(dia) === 6 ? horas : 0),
       minutosCompensados: (acumulado?.minutosCompensados ?? 0) + minutosCompensadasDia,
-      minutosIngreso: (acumulado?.minutosIngreso ?? 0) + minutosIngresoDia,
+      minutosIngresoEntrada: (acumulado?.minutosIngresoEntrada ?? 0) + minutosIngresoEntradaDia,
+      minutosIngresoSalida: (acumulado?.minutosIngresoSalida ?? 0) + minutosIngresoSalidaDia,
       horasFestivo: acumulado?.horasFestivo ?? 0,
     });
   }
@@ -538,7 +568,8 @@ function armarReporteHoras(
       horas: (acumulado?.horas ?? 0) + credito,
       horasSabado: acumulado?.horasSabado ?? 0,
       minutosCompensados: acumulado?.minutosCompensados ?? 0,
-      minutosIngreso: acumulado?.minutosIngreso ?? 0,
+      minutosIngresoEntrada: acumulado?.minutosIngresoEntrada ?? 0,
+      minutosIngresoSalida: acumulado?.minutosIngresoSalida ?? 0,
       horasFestivo: (acumulado?.horasFestivo ?? 0) + credito,
     });
   }
@@ -575,7 +606,8 @@ function armarReporteHoras(
     const horas = porPersonaYSemana.get(claveSemana)?.horas ?? 0;
     const horasSabado = porPersonaYSemana.get(claveSemana)?.horasSabado ?? 0;
     const minutosCompensados = porPersonaYSemana.get(claveSemana)?.minutosCompensados ?? 0;
-    const minutosIngreso = porPersonaYSemana.get(claveSemana)?.minutosIngreso ?? 0;
+    const minutosIngresoEntrada = porPersonaYSemana.get(claveSemana)?.minutosIngresoEntrada ?? 0;
+    const minutosIngresoSalida = porPersonaYSemana.get(claveSemana)?.minutosIngresoSalida ?? 0;
     const horasFestivo = porPersonaYSemana.get(claveSemana)?.horasFestivo ?? 0;
     const diasAusencia = ausenciasPorSemana.get(claveSemana)?.dias ?? 0;
     const nombre = porPersonaYSemana.get(claveSemana)?.nombre ?? ausenciasPorSemana.get(claveSemana)?.nombre ?? "—";
@@ -603,7 +635,8 @@ function armarReporteHoras(
     // "Trabajadas" resta el faltante TOTAL del día (autorizado + sin
     // autorizar) — ya está sumado de vuelta en "horas", así que hay que
     // quitarlo completo, sin importar en cuál de las dos cajas cayó.
-    const horasTrabajadas = horas - (minutosCompensados + minutosIngreso) / 60 - horasFestivo;
+    const horasTrabajadas =
+      horas - (minutosCompensados + minutosIngresoEntrada + minutosIngresoSalida) / 60 - horasFestivo;
     fila.semanas.push({
       lunes,
       horasTrabajadas,
@@ -613,7 +646,8 @@ function armarReporteHoras(
       horasDescuentoAusencia,
       horasFestivo,
       minutosCompensados,
-      minutosIngreso,
+      minutosIngresoEntrada,
+      minutosIngresoSalida,
       cuentaParaEsteMes,
     });
     if (cuentaParaEsteMes) fila.totalHorasExtra += horasExtra;
@@ -1325,7 +1359,8 @@ export function Asistencia() {
                 s.horas + s.horasDescuentoAusencia + (extraAtencionSinMarcaPorPersonaYSemana[`${fila.perfilId}|${s.lunes}`] ?? 0)
               ).toFixed(1)}</td>
               <td class="num">${s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
-              <td class="num">${s.minutosIngreso > 0 ? (s.minutosIngreso / 60).toFixed(1) : "—"}</td>
+              <td class="num">${s.minutosIngresoEntrada > 0 ? (s.minutosIngresoEntrada / 60).toFixed(1) : "—"}</td>
+              <td class="num">${s.minutosIngresoSalida > 0 ? (s.minutosIngresoSalida / 60).toFixed(1) : "—"}</td>
             </tr>`,
           )
           .join("");
@@ -1366,7 +1401,7 @@ export function Asistencia() {
               <span>Horas extra: <strong>${fila.totalHorasExtra.toFixed(1)} h</strong></span>
             </div>
             <table>
-              <thead><tr><th>Semana</th><th>Trabaj.</th><th>Comp.</th><th>Festivo</th><th>Atención</th><th>Ausencia</th><th>Total</th><th>Extra</th><th>Ingreso</th></tr></thead>
+              <thead><tr><th>Semana</th><th>Trabaj.</th><th>Comp.</th><th>Festivo</th><th>Atención</th><th>Ausencia</th><th>Total</th><th>Extra</th><th>Ingreso</th><th>Finaliz.</th></tr></thead>
               <tbody>${filasSemana}</tbody>
             </table>
             ${observacionesHtml}
@@ -1568,7 +1603,7 @@ export function Asistencia() {
         (c) => c.perfil_id === fp.perfilId && c.fecha >= inicio && c.fecha < finExclusivo,
       );
       const compensadoHoras = delPeriodo.reduce((a, c) => a + c.minutosCompensadas, 0) / 60;
-      const ingresoHoras = delPeriodo.reduce((a, c) => a + c.minutosIngreso, 0) / 60;
+      const ingresoHoras = delPeriodo.reduce((a, c) => a + c.minutosIngresoEntrada + c.minutosIngresoSalida, 0) / 60;
       const nuevoSaldo = saldoActual - compensadoHoras - ingresoHoras + fp.totalHorasExtra;
       await supabase
         .from("perfiles")
@@ -2648,7 +2683,9 @@ export function Asistencia() {
               // solo hasta la Liquidación (no baja el "Saldo restante" en
               // vivo, que sigue siendo estrictamente saldo anterior menos lo
               // compensado con autorización).
-              const ingresoEstePeriodo = fila.semanas.reduce((a, s) => a + s.minutosIngreso, 0) / 60;
+              const ingresoEntradaEstePeriodo = fila.semanas.reduce((a, s) => a + s.minutosIngresoEntrada, 0) / 60;
+              const ingresoSalidaEstePeriodo = fila.semanas.reduce((a, s) => a + s.minutosIngresoSalida, 0) / 60;
+              const ingresoEstePeriodo = ingresoEntradaEstePeriodo + ingresoSalidaEstePeriodo;
               const liquidacion = saldoRestante + fila.totalHorasExtra - ingresoEstePeriodo;
               return (
               <div key={fila.perfilId} className="border border-gray-100 rounded-lg p-3">
@@ -2674,6 +2711,7 @@ export function Asistencia() {
                         <th className="font-normal pb-1 text-right">Totales</th>
                         <th className="font-normal pb-1 text-right">Extra</th>
                         <th className="font-normal pb-1 text-right">Ingreso</th>
+                        <th className="font-normal pb-1 text-right">Finaliz.</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
@@ -2707,7 +2745,10 @@ export function Asistencia() {
                           </td>
                           <td className="py-1 text-right text-emerald-700">{s.horasExtra > 0 ? s.horasExtra.toFixed(1) : "—"}</td>
                           <td className="py-1 text-right text-amber-600">
-                            {s.minutosIngreso > 0 ? (s.minutosIngreso / 60).toFixed(1) : "—"}
+                            {s.minutosIngresoEntrada > 0 ? (s.minutosIngresoEntrada / 60).toFixed(1) : "—"}
+                          </td>
+                          <td className="py-1 text-right text-orange-600">
+                            {s.minutosIngresoSalida > 0 ? (s.minutosIngresoSalida / 60).toFixed(1) : "—"}
                           </td>
                         </tr>
                       ))}
@@ -2721,7 +2762,10 @@ export function Asistencia() {
                         </td>
                         <td className="py-1 text-right" colSpan={5}></td>
                         <td className="py-1 text-right text-amber-600">
-                          {ingresoEstePeriodo > 0 ? ingresoEstePeriodo.toFixed(1) : "—"}
+                          {ingresoEntradaEstePeriodo > 0 ? ingresoEntradaEstePeriodo.toFixed(1) : "—"}
+                        </td>
+                        <td className="py-1 text-right text-orange-600">
+                          {ingresoSalidaEstePeriodo > 0 ? ingresoSalidaEstePeriodo.toFixed(1) : "—"}
                         </td>
                       </tr>
                     </tfoot>
@@ -2737,9 +2781,19 @@ export function Asistencia() {
                   {persona?.saldoAnteriorFecha && (
                     <>
                       <p>
-                        <span className="text-gray-500">Ingreso del período (tardanzas sin autorizar): </span>
-                        <span className={`font-semibold ${ingresoEstePeriodo > 0 ? "text-amber-600" : "text-gray-400"}`}>
-                          {ingresoEstePeriodo.toFixed(1)} h
+                        <span className="text-gray-500">Ingreso del período (tardanzas de entrada sin autorizar): </span>
+                        <span
+                          className={`font-semibold ${ingresoEntradaEstePeriodo > 0 ? "text-amber-600" : "text-gray-400"}`}
+                        >
+                          {ingresoEntradaEstePeriodo.toFixed(1)} h
+                        </span>
+                      </p>
+                      <p>
+                        <span className="text-gray-500">Finalización jornada del período (salida temprano sin autorizar): </span>
+                        <span
+                          className={`font-semibold ${ingresoSalidaEstePeriodo > 0 ? "text-orange-600" : "text-gray-400"}`}
+                        >
+                          {ingresoSalidaEstePeriodo.toFixed(1)} h
                         </span>
                       </p>
                       <p>
