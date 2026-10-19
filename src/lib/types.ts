@@ -616,7 +616,8 @@ export interface CierreCajaSemana {
   url_recibos_caja: string | null;
   procesando: boolean;
   procesado_en: string | null;
-  resumen_ia: string | null;
+  resumen_ia_las_americas: string | null;
+  resumen_ia_fabricato: string | null;
   error_ia: string | null;
   created_at: string;
 }

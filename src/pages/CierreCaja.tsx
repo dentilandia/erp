@@ -943,11 +943,21 @@ function FormularioSemana({
             {procesando ? "Procesando…" : "✨ Procesar semana con IA"}
           </button>
           {semana?.error_ia && <p className="text-sm text-red-600">{semana.error_ia}</p>}
-          {semana?.resumen_ia && (
-            <p className="text-sm rounded-lg bg-gray-50 p-3">
-              <span className="font-semibold text-gray-600">Resumen de la IA: </span>
-              {semana.resumen_ia}
-            </p>
+          {(semana?.resumen_ia_las_americas || semana?.resumen_ia_fabricato) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {semana?.resumen_ia_las_americas && (
+                <p className="text-sm rounded-lg bg-gray-50 p-3">
+                  <span className="font-semibold text-gray-600">Resumen de la IA — Las Américas: </span>
+                  {semana.resumen_ia_las_americas}
+                </p>
+              )}
+              {semana?.resumen_ia_fabricato && (
+                <p className="text-sm rounded-lg bg-gray-50 p-3">
+                  <span className="font-semibold text-gray-600">Resumen de la IA — Fabricato: </span>
+                  {semana.resumen_ia_fabricato}
+                </p>
+              )}
+            </div>
           )}
 
           <div>

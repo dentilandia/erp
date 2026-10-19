@@ -287,7 +287,9 @@ separar un día de otro. Cuando un día traiga la anotación de efectivo consign
 decir si encontraste o no esa consignación en el extracto de Bancolombia correspondiente a esa sede.
 
 Usa la herramienta "reportar_cierre" para dar tu respuesta, una entrada por cada una de las ${totalCombinaciones}
-combinaciones día×sede de ese período, en el mismo orden que te las di.`;
+combinaciones día×sede de ese período, en el mismo orden que te las di. Da el resumen en dos textos separados, uno
+por cada sede ("resumen_las_americas" y "resumen_fabricato") — no los mezcles en un solo párrafo, cada uno debe
+leerse de corrido sin mencionar a la otra sede.`;
 
     const resp = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -338,9 +340,10 @@ combinaciones día×sede de ese período, en el mismo orden que te las di.`;
                     required: ["fecha", "sede", "cuadra_sugerido", "nota"],
                   },
                 },
-                resumen: { type: "string" },
+                resumen_las_americas: { type: "string" },
+                resumen_fabricato: { type: "string" },
               },
-              required: ["dias", "resumen"],
+              required: ["dias", "resumen_las_americas", "resumen_fabricato"],
             },
           },
         ],
@@ -354,10 +357,10 @@ combinaciones día×sede de ese período, en el mismo orden que te las di.`;
     }
     const data = await resp.json();
     const toolUse = (data.content ?? []).find((b: { type: string }) => b.type === "tool_use") as
-      | { input: { dias: Record<string, unknown>[]; resumen: string } }
+      | { input: { dias: Record<string, unknown>[]; resumen_las_americas: string; resumen_fabricato: string } }
       | undefined;
 
-    let resultado: { dias: Record<string, unknown>[]; resumen: string };
+    let resultado: { dias: Record<string, unknown>[]; resumen_las_americas: string; resumen_fabricato: string };
     if (toolUse?.input) {
       resultado = toolUse.input;
     } else {
@@ -447,10 +450,16 @@ combinaciones día×sede de ese período, en el mismo orden que te las di.`;
 
     await admin
       .from("cierres_caja_semanas")
-      .update({ procesando: false, procesado_en: generadoEn, resumen_ia: resultado.resumen ?? null, error_ia: null })
+      .update({
+        procesando: false,
+        procesado_en: generadoEn,
+        resumen_ia_las_americas: resultado.resumen_las_americas ?? null,
+        resumen_ia_fabricato: resultado.resumen_fabricato ?? null,
+        error_ia: null,
+      })
       .eq("id", semanaId);
 
-    return json({ ok: true, resumen: resultado.resumen });
+    return json({ ok: true, resumen_las_americas: resultado.resumen_las_americas, resumen_fabricato: resultado.resumen_fabricato });
   } catch (e) {
     const mensaje = e instanceof Error ? e.message : String(e);
     if (semanaId) {
