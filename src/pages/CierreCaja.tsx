@@ -1045,10 +1045,13 @@ function PendienteRow({
   );
 }
 
+// El Excel de recibos de caja y los movimientos bancarios (las 2 cuentas) ya
+// llegan solos a cada día desde el documento semanal (Documentos de la
+// semana) — subirlos también aquí sería duplicar lo mismo dos veces. Lo
+// único que de verdad puede faltar día a día es el datáfono, cuando la
+// fuente determinística (tirilla Redeban o correo de Bold) no está
+// disponible para ese día — estos 2 slots quedan como respaldo manual.
 const DOCUMENTOS: { campo: keyof CierreCajaRow; label: string }[] = [
-  { campo: "url_recibos_caja", label: "Reporte de recibos de caja (Oral Drive)" },
-  { campo: "url_movimientos_banco", label: "Movimientos de cuentas bancarias" },
-  { campo: "url_movimientos_banco_2", label: "Movimientos de cuentas bancarias (cuenta 2 / Bold)" },
   { campo: "url_tirilla_datafono", label: "Tirilla de datáfono" },
   { campo: "url_reporte_datafono", label: "Reporte de datáfono" },
 ];
