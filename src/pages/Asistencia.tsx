@@ -217,6 +217,82 @@ function construirCompensaciones(
   return compensaciones;
 }
 
+/** Trazabilidad para la lista de "Observaciones" del reporte: un renglón
+ *  por cada llegada tarde y cada salida temprano REAL, con la fecha, la
+ *  hora exacta de la marca y los minutos de diferencia — para poder
+ *  revisar día por día qué pasó, no solo el total de la semana. Cubre
+ *  TODOS los días con marcas (compensados o no), igual que
+ *  construirCompensaciones — misma fórmula, pero exponiendo los dos
+ *  tiempos reales por separado en vez de solo el reparto final. */
+function construirHistorialTardanzas(
+  filas: { perfil_id: string; tipo: TipoAsistencia; marcado_en: string }[],
+  notasRows: {
+    perfil_id: string;
+    fecha: string;
+    hora_entrada_autorizada: string | null;
+    hora_salida_autorizada: string | null;
+  }[],
+): { perfil_id: string; fecha: string; texto: string; esSalida: boolean; minutosCompensados: number }[] {
+  const marcasPorPersonaYDia: Record<string, { tipo: TipoAsistencia; marcado_en: string }[]> = {};
+  for (const r of filas) {
+    (marcasPorPersonaYDia[`${r.perfil_id}|${fechaBogota(r.marcado_en)}`] ??= []).push({
+      tipo: r.tipo,
+      marcado_en: r.marcado_en,
+    });
+  }
+  const notaPorClave = new Map<string, (typeof notasRows)[number]>();
+  for (const n of notasRows) notaPorClave.set(`${n.perfil_id}|${n.fecha}`, n);
+  const formatoHora = (iso: string) =>
+    new Date(iso).toLocaleTimeString("es-CO", { timeZone: "America/Bogota", hour: "numeric", minute: "2-digit" });
+
+  const resultado: { perfil_id: string; fecha: string; texto: string; esSalida: boolean; minutosCompensados: number }[] = [];
+  for (const [clave, marcasDia] of Object.entries(marcasPorPersonaYDia)) {
+    const [perfilId, fecha] = clave.split("|");
+    const porTipo: Partial<Record<TipoAsistencia, string>> = {};
+    for (const m of marcasDia) if (!porTipo[m.tipo]) porTipo[m.tipo] = m.marcado_en;
+    if (!porTipo.llegada || !porTipo.salida) continue;
+    const nota = notaPorClave.get(clave);
+    const horario = horasPorDefecto(fecha);
+    const inicioNormalMs = new Date(`${fecha}T${horario.llegada}:00-05:00`).getTime();
+    const finNormalMs = new Date(`${fecha}T${horario.salida}:00-05:00`).getTime();
+    let minutosEntradaAutorizada = 0;
+    if (nota?.hora_entrada_autorizada) {
+      const autorizadaMs = new Date(`${fecha}T${nota.hora_entrada_autorizada.slice(0, 5)}:00-05:00`).getTime();
+      minutosEntradaAutorizada = Math.max(0, (autorizadaMs - inicioNormalMs) / 60_000);
+    }
+    let minutosSalidaAutorizada = 0;
+    if (nota?.hora_salida_autorizada) {
+      const autorizadaMs = new Date(`${fecha}T${nota.hora_salida_autorizada.slice(0, 5)}:00-05:00`).getTime();
+      const salidaEfectivaMs = Math.min(new Date(porTipo.salida).getTime(), finNormalMs);
+      const pisoMs = Math.max(salidaEfectivaMs, autorizadaMs);
+      minutosSalidaAutorizada = Math.max(0, (finNormalMs - pisoMs) / 60_000);
+    }
+    const llegadaMs = new Date(porTipo.llegada).getTime();
+    const salidaMs = Math.min(new Date(porTipo.salida).getTime(), finNormalMs);
+    const tardanzaRealMin = Math.round(Math.max(0, (llegadaMs - inicioNormalMs) / 60_000));
+    const salidaTempranoRealMin = Math.round(Math.max(0, (finNormalMs - salidaMs) / 60_000));
+    if (tardanzaRealMin > 0) {
+      resultado.push({
+        perfil_id: perfilId,
+        fecha,
+        texto: `Llegó ${formatoHora(porTipo.llegada)} (${tardanzaRealMin}min tarde)`,
+        esSalida: false,
+        minutosCompensados: Math.round(Math.min(tardanzaRealMin, minutosEntradaAutorizada)),
+      });
+    }
+    if (salidaTempranoRealMin > 0) {
+      resultado.push({
+        perfil_id: perfilId,
+        fecha,
+        texto: `Salió ${formatoHora(porTipo.salida)} (${salidaTempranoRealMin}min antes)`,
+        esSalida: true,
+        minutosCompensados: Math.round(Math.min(salidaTempranoRealMin, minutosSalidaAutorizada)),
+      });
+    }
+  }
+  return resultado;
+}
+
 /** Escapa texto libre (nombres, notas) antes de interpolarlo en el HTML del
  *  PDF, para no romper el documento si alguien escribió comillas o símbolos. */
 function escPdf(texto: string): string {
@@ -873,6 +949,9 @@ export function Asistencia() {
   const [notasPorPersona, setNotasPorPersona] = useState<
     Record<string, { fecha: string; nota: string; minutosCompensados: number }[]>
   >({});
+  const [historialTardanzasPorPersona, setHistorialTardanzasPorPersona] = useState<
+    Record<string, { fecha: string; texto: string; esSalida: boolean; minutosCompensados: number }[]>
+  >({});
   const [ausenciasPorPersona, setAusenciasPorPersona] = useState<
     Record<string, { fecha: string; tipo: "vacaciones" | "incapacidad" | "descanso" }[]>
   >({});
@@ -1333,6 +1412,19 @@ export function Asistencia() {
       }
     }
     setNotasPorPersona(notasAgrupadas);
+    const historialTardanzasAgrupado: Record<
+      string,
+      { fecha: string; texto: string; esSalida: boolean; minutosCompensados: number }[]
+    > = {};
+    for (const h of construirHistorialTardanzas(filas, notasRows)) {
+      (historialTardanzasAgrupado[h.perfil_id] ??= []).push({
+        fecha: h.fecha,
+        texto: h.texto,
+        esSalida: h.esSalida,
+        minutosCompensados: h.minutosCompensados,
+      });
+    }
+    setHistorialTardanzasPorPersona(historialTardanzasAgrupado);
     const compensaciones = construirCompensaciones(filas, notasRows);
     const autorizaciones: AutorizacionReporte[] = notasRows
       .filter((n) => n.hora_entrada_autorizada)
@@ -1424,6 +1516,11 @@ export function Asistencia() {
               texto: `${Math.round(horas * 60)} minutos extra acumulados por ${extraAtencionMotivoPorPersonaYDia[clave] ?? "atención de paciente"}`,
               color: "#db2777",
             })),
+          ...(historialTardanzasPorPersona[fila.perfilId] ?? []).map((h) => ({
+            fecha: h.fecha,
+            texto: h.texto + (h.minutosCompensados > 0 ? ` (+${h.minutosCompensados}min comp.)` : ""),
+            color: h.esSalida ? "#c2410c" : "#b45309",
+          })),
         ].sort((a, b) => a.fecha.localeCompare(b.fecha));
         const observacionesHtml =
           observaciones.length > 0
@@ -2855,6 +2952,12 @@ export function Asistencia() {
                         color: "text-pink-600",
                         minutosCompensados: 0,
                       })),
+                    ...(historialTardanzasPorPersona[fila.perfilId] ?? []).map((h) => ({
+                      fecha: h.fecha,
+                      texto: h.texto,
+                      color: h.esSalida ? "text-orange-600" : "text-amber-600",
+                      minutosCompensados: h.minutosCompensados,
+                    })),
                   ].sort((a, b) => a.fecha.localeCompare(b.fecha));
                   if (observaciones.length === 0) return null;
                   return (
