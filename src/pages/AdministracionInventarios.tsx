@@ -68,7 +68,7 @@ export function AdministracionInventarios() {
   const [cantidadesEntregaPedido, setCantidadesEntregaPedido] = useState<Record<string, string>>({});
   const [entregandoPedidoId, setEntregandoPedidoId] = useState<string | null>(null);
   const [errorPedido, setErrorPedido] = useState<string | null>(null);
-  const [notasPedidoPorSede, setNotasPedidoPorSede] = useState<{ sedeNombre: string; nota: string }[]>([]);
+  const [notasPedidoPorSede, setNotasPedidoPorSede] = useState<{ sedeNombre: string; etiqueta: string; nota: string }[]>([]);
 
   const [entregasNoRecibidas, setEntregasNoRecibidas] = useState<EntregaHistorial[]>([]);
   const [entregasConDiferencia, setEntregasConDiferencia] = useState<EntregaHistorial[]>([]);
@@ -157,39 +157,36 @@ export function AdministracionInventarios() {
     cargarSolicitudesPendientes();
   }, []);
 
-  // Últimos pedidos de bodega pendientes de cada sede — el período más
-  // reciente de cada una, ítems con pedido > 0. Sirve como "notificación"
-  // visible ya que el sistema no manda avisos push ni por correo.
+  // Pedidos de bodega pendientes de cada sede, en TODOS sus períodos (no
+  // solo el más reciente) — antes, si una sede abría "Nuevo período" (ej. al
+  // empezar el mes) mientras el pedido del período anterior seguía sin
+  // entregar, ese pedido (y su "Observaciones del pedido") quedaba enterrado
+  // en el período viejo, invisible acá, porque solo se miraba el período más
+  // reciente de cada sede. Un período se deja de contar solo. Sirve como
+  // "notificación" visible ya que el sistema no manda avisos push ni por
+  // correo.
   async function cargarPedidosPendientes() {
     type PeriodoConSede = {
       id: string;
       sede_id: string;
-      fecha_inicio: string;
+      etiqueta: string;
       nota_pedido: string | null;
       sedes: { nombre: string } | null;
     };
     const { data: periodosData } = await supabase
       .from("insumos_generales_periodos")
-      .select("id, sede_id, fecha_inicio, nota_pedido, sedes(nombre)")
+      .select("id, sede_id, etiqueta, nota_pedido, sedes(nombre)")
       .order("fecha_inicio", { ascending: false });
-    const masRecientePorSede = new Map<string, { periodoId: string; sedeId: string; sedeNombre: string; nota: string | null }>();
-    for (const p of (periodosData as unknown as PeriodoConSede[]) ?? []) {
-      if (!masRecientePorSede.has(p.sede_id)) {
-        masRecientePorSede.set(p.sede_id, {
-          periodoId: p.id,
-          sedeId: p.sede_id,
-          sedeNombre: p.sedes?.nombre ?? "—",
-          nota: p.nota_pedido,
-        });
-      }
-    }
-    setNotasPedidoPorSede(
-      Array.from(masRecientePorSede.values())
-        .filter((v) => v.nota && v.nota.trim())
-        .map((v) => ({ sedeNombre: v.sedeNombre, nota: v.nota as string })),
+    const periodos = (periodosData as unknown as PeriodoConSede[]) ?? [];
+    const periodoAInfo = new Map(
+      periodos.map((p) => [p.id, { sedeId: p.sede_id, sedeNombre: p.sedes?.nombre ?? "—", etiqueta: p.etiqueta }]),
     );
-    const periodoAInfo = new Map(Array.from(masRecientePorSede.values()).map((v) => [v.periodoId, v]));
-    const periodoIds = Array.from(periodoAInfo.keys());
+    setNotasPedidoPorSede(
+      periodos
+        .filter((p) => p.nota_pedido && p.nota_pedido.trim())
+        .map((p) => ({ sedeNombre: p.sedes?.nombre ?? "—", etiqueta: p.etiqueta, nota: p.nota_pedido as string })),
+    );
+    const periodoIds = periodos.map((p) => p.id);
     if (periodoIds.length === 0) {
       setPedidosPendientes([]);
       return;
@@ -780,9 +777,15 @@ export function AdministracionInventarios() {
           </p>
           {notasPedidoPorSede.length > 0 && (
             <div className="space-y-1 mb-3">
-              {notasPedidoPorSede.map((n) => (
-                <p key={n.sedeNombre} className="text-sm bg-white/60 border border-amber-200 rounded-lg px-3 py-2 text-amber-900">
-                  <span className="font-semibold">{n.sedeNombre}:</span> {n.nota}
+              {notasPedidoPorSede.map((n, i) => (
+                <p
+                  key={`${n.sedeNombre}-${n.etiqueta}-${i}`}
+                  className="text-sm bg-white/60 border border-amber-200 rounded-lg px-3 py-2 text-amber-900 whitespace-pre-wrap"
+                >
+                  <span className="font-semibold">
+                    {n.sedeNombre} ({n.etiqueta}):
+                  </span>{" "}
+                  {n.nota}
                 </p>
               ))}
             </div>

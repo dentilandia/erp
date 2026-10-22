@@ -47,6 +47,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   const [catalogo, setCatalogo] = useState<InsumoGeneralCatalogo[]>([]);
   const [periodos, setPeriodos] = useState<InsumoGeneralPeriodo[]>([]);
   const [periodoId, setPeriodoId] = useState("");
+  const [periodosConPedidoPendiente, setPeriodosConPedidoPendiente] = useState<Set<string>>(new Set());
   const [movimientos, setMovimientos] = useState<Record<string, InsumoGeneralMovimiento>>({});
   const [entregasRecibidas, setEntregasRecibidas] = useState<EntregaConCatalogo[]>([]);
   const [entregasPendientes, setEntregasPendientes] = useState<EntregaConCatalogo[]>([]);
@@ -103,6 +104,21 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     setPeriodos(filas);
     setPeriodoId((prev) => (prev && filas.some((p) => p.id === prev) ? prev : filas[0]?.id ?? ""));
     setCargando(false);
+    // Para avisar si queda un pedido pendiente en un período que NO es el
+    // que se ve por defecto (ej. se abrió "Nuevo período" del mes nuevo
+    // mientras el pedido del mes pasado todavía no lo entregaba
+    // administración) — si no, ese pedido queda enterrado, sin que nadie se
+    // dé cuenta de que sigue ahí.
+    if (filas.length > 0) {
+      const { data: movsPedido } = await supabase
+        .from("insumos_generales_movimientos")
+        .select("periodo_id")
+        .in("periodo_id", filas.map((p) => p.id))
+        .gt("pedido", 0);
+      setPeriodosConPedidoPendiente(new Set(((movsPedido as { periodo_id: string }[]) ?? []).map((m) => m.periodo_id)));
+    } else {
+      setPeriodosConPedidoPendiente(new Set());
+    }
   }
 
   async function cargarEntregasRecibidas() {
@@ -259,6 +275,17 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     return Array.from(porCategoria.entries());
   }, [catalogo, movimientos]);
 
+  // Otros períodos de esta sede (no el que se ve ahora) con un pedido sin
+  // entregar o una observación escrita — para no dejarlos enterrados en
+  // silencio cuando se crea un período nuevo.
+  const periodosConPendienteAntiguo = useMemo(
+    () =>
+      periodos.filter(
+        (p) => p.id !== periodoId && (periodosConPedidoPendiente.has(p.id) || !!p.nota_pedido?.trim()),
+      ),
+    [periodos, periodoId, periodosConPedidoPendiente],
+  );
+
   async function crearPeriodo() {
     setCreandoPeriodo(true);
     setErrorPeriodo(null);
@@ -395,6 +422,25 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
 
   return (
     <div className="space-y-4">
+      {periodosConPendienteAntiguo.length > 0 && (
+        <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
+          <p className="font-semibold text-amber-800 mb-1">⚠️ Hay un pedido o una observación sin resolver en otro período</p>
+          <p className="text-xs text-amber-700 mb-2">
+            No se perdió — está en un período que no es el que se ve ahora. Cámbiate para revisarlo:
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {periodosConPendienteAntiguo.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setPeriodoId(p.id)}
+                className="rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700"
+              >
+                Ver {p.etiqueta}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
       {entregasNoVistas.length > 0 && (
         <section className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-4">
           <p className="font-semibold text-emerald-800 mb-2">📦 Llegaron entregas nuevas de administración</p>
