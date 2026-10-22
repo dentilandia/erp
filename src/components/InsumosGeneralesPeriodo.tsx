@@ -38,16 +38,18 @@ const ANIOS = [ANIO_ACTUAL - 1, ANIO_ACTUAL, ANIO_ACTUAL + 1];
 
 /** Bodega operativa de una sede — réplica del Excel: catálogo compartido de
  *  172 ítems por categoría, con un período de conteo a la vez (inventario
- *  inicial, entrega 1/2, salidas, entradas, pedido → inventario final). Se
- *  usa tanto en Operación (atada a la sede activa) como en Administración
- *  (con selector de sede) — por eso recibe sedeId como prop en vez de
- *  leerlo del contexto de la ruta. */
+ *  inicial, entrega 1/2, salidas, entradas → inventario final). Pedir
+ *  insumos no depende de este período — va aparte, por "Solicitar insumos a
+ *  la bodega administrativa" (insumos_generales_solicitudes), que guarda su
+ *  propia fecha de solicitud y de entrega sin que nadie tenga que crear
+ *  nada. Se usa tanto en Operación (atada a la sede activa) como en
+ *  Administración (con selector de sede) — por eso recibe sedeId como prop
+ *  en vez de leerlo del contexto de la ruta. */
 export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   const { perfil } = useAuth();
   const [catalogo, setCatalogo] = useState<InsumoGeneralCatalogo[]>([]);
   const [periodos, setPeriodos] = useState<InsumoGeneralPeriodo[]>([]);
   const [periodoId, setPeriodoId] = useState("");
-  const [periodosConPedidoPendiente, setPeriodosConPedidoPendiente] = useState<Set<string>>(new Set());
   const [movimientos, setMovimientos] = useState<Record<string, InsumoGeneralMovimiento>>({});
   const [entregasRecibidas, setEntregasRecibidas] = useState<EntregaConCatalogo[]>([]);
   const [entregasPendientes, setEntregasPendientes] = useState<EntregaConCatalogo[]>([]);
@@ -104,21 +106,6 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     setPeriodos(filas);
     setPeriodoId((prev) => (prev && filas.some((p) => p.id === prev) ? prev : filas[0]?.id ?? ""));
     setCargando(false);
-    // Para avisar si queda un pedido pendiente en un período que NO es el
-    // que se ve por defecto (ej. se abrió "Nuevo período" del mes nuevo
-    // mientras el pedido del mes pasado todavía no lo entregaba
-    // administración) — si no, ese pedido queda enterrado, sin que nadie se
-    // dé cuenta de que sigue ahí.
-    if (filas.length > 0) {
-      const { data: movsPedido } = await supabase
-        .from("insumos_generales_movimientos")
-        .select("periodo_id")
-        .in("periodo_id", filas.map((p) => p.id))
-        .gt("pedido", 0);
-      setPeriodosConPedidoPendiente(new Set(((movsPedido as { periodo_id: string }[]) ?? []).map((m) => m.periodo_id)));
-    } else {
-      setPeriodosConPedidoPendiente(new Set());
-    }
   }
 
   async function cargarEntregasRecibidas() {
@@ -231,9 +218,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     // Si el período está completamente vacío (recién creado en otra sesión, o
     // se recargó la página), se abren todas las categorías de una vez — si no,
     // parece que no hay dónde escribir el inventario inicial.
-    const vacio = filas.every(
-      (m) => !m.inventario_inicial && !m.entrega1 && !m.entrega2 && !m.salidas && !m.entradas && !m.pedido,
-    );
+    const vacio = filas.every((m) => !m.inventario_inicial && !m.entrega1 && !m.entrega2 && !m.salidas && !m.entradas);
     if (filas.length > 0 && vacio) {
       setCategoriasAbiertas(Object.fromEntries(catalogo.map((c) => [c.categoria, true])));
     }
@@ -261,29 +246,12 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
 
   const categorias = useMemo(() => Array.from(new Set(catalogo.map((c) => c.categoria))), [catalogo]);
 
-  // Lo que ya se pidió (columna "Pedido") pero administración todavía no ha
-  // entregado — para que la sede lo vea de un vistazo sin tener que abrir
-  // cada categoría a buscarlo.
-  const pendientesPorEntregar = useMemo(() => {
-    const porCategoria = new Map<string, { nombre: string; pedido: number }[]>();
-    for (const item of catalogo) {
-      const mov = movimientos[item.id];
-      if (!mov || mov.pedido <= 0) continue;
-      if (!porCategoria.has(item.categoria)) porCategoria.set(item.categoria, []);
-      porCategoria.get(item.categoria)!.push({ nombre: item.nombre, pedido: mov.pedido });
-    }
-    return Array.from(porCategoria.entries());
-  }, [catalogo, movimientos]);
-
-  // Otros períodos de esta sede (no el que se ve ahora) con un pedido sin
-  // entregar o una observación escrita — para no dejarlos enterrados en
-  // silencio cuando se crea un período nuevo.
+  // Otros períodos de esta sede (no el que se ve ahora) con una observación
+  // escrita — para no dejarla enterrada en silencio cuando se crea un
+  // período nuevo (ej. al empezar el mes).
   const periodosConPendienteAntiguo = useMemo(
-    () =>
-      periodos.filter(
-        (p) => p.id !== periodoId && (periodosConPedidoPendiente.has(p.id) || !!p.nota_pedido?.trim()),
-      ),
-    [periodos, periodoId, periodosConPedidoPendiente],
+    () => periodos.filter((p) => p.id !== periodoId && !!p.nota_pedido?.trim()),
+    [periodos, periodoId],
   );
 
   async function crearPeriodo() {
@@ -337,7 +305,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
 
   function actualizarCampo(
     catalogoId: string,
-    campo: "inventario_inicial" | "entrega1" | "entrega2" | "salidas" | "entradas" | "pedido",
+    campo: "inventario_inicial" | "entrega1" | "entrega2" | "salidas" | "entradas",
     valor: number,
   ) {
     setMovimientos((prev) => {
@@ -424,9 +392,9 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     <div className="space-y-4">
       {periodosConPendienteAntiguo.length > 0 && (
         <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
-          <p className="font-semibold text-amber-800 mb-1">⚠️ Hay un pedido o una observación sin resolver en otro período</p>
+          <p className="font-semibold text-amber-800 mb-1">⚠️ Hay una observación sin resolver en otro período</p>
           <p className="text-xs text-amber-700 mb-2">
-            No se perdió — está en un período que no es el que se ve ahora. Cámbiate para revisarlo:
+            No se perdió — está en un período que no es el que se ve ahora. Cámbiate para revisarla:
           </p>
           <div className="flex flex-wrap gap-2">
             {periodosConPendienteAntiguo.map((p) => (
@@ -505,26 +473,6 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                 >
                   Entendido
                 </button>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {pendientesPorEntregar.length > 0 && (
-        <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
-          <p className="font-semibold text-amber-800 mb-2">📋 Pendiente por entregar (ya pedido, administración no lo ha entregado)</p>
-          <div className="space-y-2">
-            {pendientesPorEntregar.map(([categoria, items]) => (
-              <div key={categoria}>
-                <p className="text-xs font-semibold text-amber-700 mb-0.5">{categoria}</p>
-                <div className="pl-2 space-y-0.5">
-                  {items.map((it) => (
-                    <p key={it.nombre} className="text-sm text-amber-800">
-                      {it.nombre}: <span className="font-semibold">pedir {it.pedido}</span>
-                    </p>
-                  ))}
-                </div>
               </div>
             ))}
           </div>
@@ -796,7 +744,6 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                         <th className="px-2 py-1.5 text-right">Salidas</th>
                         <th className="px-2 py-1.5 text-right">Entradas</th>
                         <th className="px-2 py-1.5 text-right">Final</th>
-                        <th className="px-2 py-1.5 text-right">Pedido</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -827,18 +774,6 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                             </td>
                             <td className={`px-2 py-1.5 text-right font-semibold ${final <= 0 ? "text-red-600" : "text-tinta"}`}>
                               {final}
-                            </td>
-                            <td className="px-2 py-1.5 text-right">
-                              <input
-                                type="number"
-                                defaultValue={mov.pedido}
-                                onBlur={(e) => {
-                                  const v = Number(e.target.value) || 0;
-                                  actualizarCampo(item.id, "pedido", v);
-                                  guardarCampo(item.id, "pedido", v);
-                                }}
-                                className="w-16 rounded-md border border-gray-200 px-1.5 py-1 text-right"
-                              />
                             </td>
                           </tr>
                         );

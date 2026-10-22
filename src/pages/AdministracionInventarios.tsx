@@ -18,19 +18,8 @@ interface SalidaHistorial extends InsumoGeneralSalida {
 }
 
 interface SolicitudConDetalle extends InsumoGeneralSolicitud {
-  insumos_generales_catalogo: { nombre: string } | null;
+  insumos_generales_catalogo: { categoria: string; nombre: string } | null;
   sedes: { nombre: string } | null;
-}
-
-interface PedidoPendiente {
-  movimientoId: string;
-  periodoId: string;
-  sedeId: string;
-  sedeNombre: string;
-  catalogoId: string;
-  categoria: string;
-  nombre: string;
-  pedido: number;
 }
 
 function etiquetaMesActual(): string {
@@ -48,8 +37,8 @@ export function AdministracionInventarios() {
   const [sedes, setSedes] = useState<Sede[]>([]);
   const [catalogo, setCatalogo] = useState<InsumoGeneralCatalogo[]>([]);
   // Se sube cada vez que algo resta de la bodega administrativa (entregar,
-  // entregar solicitud, diferir, pedido entregado) para que BodegaAdminTabla
-  // se refresque sola — si no, el número ahí se queda desactualizado hasta
+  // entregar solicitud, diferir) para que BodegaAdminTabla se refresque sola
+  // — si no, el número ahí se queda desactualizado hasta
   // que alguien recargue la página a mano.
   const [refreshBodega, setRefreshBodega] = useState(0);
 
@@ -64,10 +53,6 @@ export function AdministracionInventarios() {
   const [cantidadesEntregaSolicitud, setCantidadesEntregaSolicitud] = useState<Record<string, string>>({});
   const [entregandoSolicitudId, setEntregandoSolicitudId] = useState<string | null>(null);
 
-  const [pedidosPendientes, setPedidosPendientes] = useState<PedidoPendiente[]>([]);
-  const [cantidadesEntregaPedido, setCantidadesEntregaPedido] = useState<Record<string, string>>({});
-  const [entregandoPedidoId, setEntregandoPedidoId] = useState<string | null>(null);
-  const [errorPedido, setErrorPedido] = useState<string | null>(null);
   const [notasPedidoPorSede, setNotasPedidoPorSede] = useState<{ sedeNombre: string; etiqueta: string; nota: string }[]>([]);
 
   const [entregasNoRecibidas, setEntregasNoRecibidas] = useState<EntregaHistorial[]>([]);
@@ -145,7 +130,7 @@ export function AdministracionInventarios() {
   async function cargarSolicitudesPendientes() {
     const { data } = await supabase
       .from("insumos_generales_solicitudes")
-      .select("*, insumos_generales_catalogo(nombre), sedes(nombre)")
+      .select("*, insumos_generales_catalogo(categoria, nombre), sedes(nombre)")
       .eq("estado", "pendiente")
       .order("created_at");
     const lista = (data as unknown as SolicitudConDetalle[]) ?? [];
@@ -157,71 +142,28 @@ export function AdministracionInventarios() {
     cargarSolicitudesPendientes();
   }, []);
 
-  // Pedidos de bodega pendientes de cada sede, en TODOS sus períodos (no
-  // solo el más reciente) — antes, si una sede abría "Nuevo período" (ej. al
-  // empezar el mes) mientras el pedido del período anterior seguía sin
-  // entregar, ese pedido (y su "Observaciones del pedido") quedaba enterrado
-  // en el período viejo, invisible acá, porque solo se miraba el período más
-  // reciente de cada sede. Un período se deja de contar solo. Sirve como
-  // "notificación" visible ya que el sistema no manda avisos push ni por
-  // correo.
-  async function cargarPedidosPendientes() {
-    type PeriodoConSede = {
-      id: string;
-      sede_id: string;
-      etiqueta: string;
-      nota_pedido: string | null;
-      sedes: { nombre: string } | null;
-    };
+  // Observaciones de pedido escritas por las sedes (texto libre, para algún
+  // insumo que no está en el catálogo), en TODOS sus períodos — no solo el
+  // más reciente, para no dejar enterrada la de un período viejo en cuanto
+  // una sede abre uno nuevo (ej. al empezar el mes). Pedir insumos del
+  // catálogo en sí va por "Solicitar insumos a la bodega administrativa"
+  // (insumos_generales_solicitudes), que no depende de ningún período.
+  async function cargarNotasPedidoPorSede() {
+    type PeriodoConSede = { etiqueta: string; nota_pedido: string | null; sedes: { nombre: string } | null };
     const { data: periodosData } = await supabase
       .from("insumos_generales_periodos")
-      .select("id, sede_id, etiqueta, nota_pedido, sedes(nombre)")
+      .select("etiqueta, nota_pedido, sedes(nombre)")
       .order("fecha_inicio", { ascending: false });
     const periodos = (periodosData as unknown as PeriodoConSede[]) ?? [];
-    const periodoAInfo = new Map(
-      periodos.map((p) => [p.id, { sedeId: p.sede_id, sedeNombre: p.sedes?.nombre ?? "—", etiqueta: p.etiqueta }]),
-    );
     setNotasPedidoPorSede(
       periodos
         .filter((p) => p.nota_pedido && p.nota_pedido.trim())
         .map((p) => ({ sedeNombre: p.sedes?.nombre ?? "—", etiqueta: p.etiqueta, nota: p.nota_pedido as string })),
     );
-    const periodoIds = periodos.map((p) => p.id);
-    if (periodoIds.length === 0) {
-      setPedidosPendientes([]);
-      return;
-    }
-    type MovConCatalogo = {
-      id: string;
-      periodo_id: string;
-      catalogo_id: string;
-      pedido: number;
-      insumos_generales_catalogo: { categoria: string; nombre: string } | null;
-    };
-    const { data: movs } = await supabase
-      .from("insumos_generales_movimientos")
-      .select("id, periodo_id, catalogo_id, pedido, insumos_generales_catalogo(categoria, nombre)")
-      .in("periodo_id", periodoIds)
-      .gt("pedido", 0);
-    const lista = ((movs as unknown as MovConCatalogo[]) ?? []).map((m) => {
-      const info = periodoAInfo.get(m.periodo_id);
-      return {
-        movimientoId: m.id,
-        periodoId: m.periodo_id,
-        sedeId: info?.sedeId ?? "",
-        sedeNombre: info?.sedeNombre ?? "—",
-        catalogoId: m.catalogo_id,
-        categoria: m.insumos_generales_catalogo?.categoria ?? "—",
-        nombre: m.insumos_generales_catalogo?.nombre ?? "—",
-        pedido: m.pedido,
-      };
-    });
-    setPedidosPendientes(lista);
-    setCantidadesEntregaPedido(Object.fromEntries(lista.map((p) => [p.movimientoId, String(p.pedido)])));
   }
 
   useEffect(() => {
-    cargarPedidosPendientes();
+    cargarNotasPedidoPorSede();
   }, []);
 
   async function cargarEntregasNoRecibidas() {
@@ -267,104 +209,6 @@ export function AdministracionInventarios() {
     cargarEntregasConDiferencia();
   }
 
-  // Marcar "Entregado" hace lo mismo que "Entregar a una sede" (resta de la
-  // bodega administrativa; "Entradas" en la sede queda pendiente de que
-  // ellos confirmen recibido). Si se entrega menos de lo pedido, el pedido
-  // no desaparece — se queda con lo que falta.
-  async function marcarPedidoEntregado(p: PedidoPendiente) {
-    const cantidad = Number(cantidadesEntregaPedido[p.movimientoId]);
-    if (!cantidad || cantidad <= 0) return;
-    setEntregandoPedidoId(p.movimientoId);
-    setErrorPedido(null);
-    const { error: errorEntregaPedido } = await supabase.from("insumos_generales_entregas").insert({
-      catalogo_id: p.catalogoId,
-      sede_id: p.sedeId,
-      periodo_id: p.periodoId,
-      cantidad,
-      fecha: today(),
-      created_by: perfil?.id ?? null,
-    });
-    if (errorEntregaPedido) {
-      setEntregandoPedidoId(null);
-      setErrorPedido(errorEntregaPedido.message);
-      return;
-    }
-    const pedidoRestante = Math.max(0, p.pedido - cantidad);
-    const { error: errorPedidoUpd } = await supabase
-      .from("insumos_generales_movimientos")
-      .update({ pedido: pedidoRestante })
-      .eq("id", p.movimientoId);
-    setEntregandoPedidoId(null);
-    if (errorPedidoUpd) {
-      setErrorPedido(errorPedidoUpd.message);
-      return;
-    }
-    if (pedidoRestante > 0) {
-      setPedidosPendientes((prev) => prev.map((x) => (x.movimientoId === p.movimientoId ? { ...x, pedido: pedidoRestante } : x)));
-      setCantidadesEntregaPedido((prev) => ({ ...prev, [p.movimientoId]: String(pedidoRestante) }));
-    } else {
-      setPedidosPendientes((prev) => prev.filter((x) => x.movimientoId !== p.movimientoId));
-    }
-    setRefreshBodega((n) => n + 1);
-    if (sedeIdHistorial === "todas" || sedeIdHistorial === p.sedeId) cargarHistorial();
-  }
-
-  // Para cuando ya no se va a completar lo que falta de este pedido en esta
-  // vuelta (se cubre en el próximo pedido de bodega): si queda algo escrito
-  // en el campo de cantidad, se registra esa entrega igual que "Entregado";
-  // el resto NO se deja esperando indefinidamente en "Pedido" — se pone en 0
-  // (desaparece de pendientes acá y en la sede, que lee la misma columna) y
-  // se deja un aviso explícito para que la sede sepa que ese resto llega en
-  // el próximo pedido, en vez de pensar que se perdió.
-  async function marcarPedidoDiferido(p: PedidoPendiente) {
-    const cantidadEntregada = Number(cantidadesEntregaPedido[p.movimientoId]) || 0;
-    const resto = Math.max(0, p.pedido - cantidadEntregada);
-    setEntregandoPedidoId(p.movimientoId);
-    setErrorPedido(null);
-    if (cantidadEntregada > 0) {
-      const { error: errorEntregaPedido } = await supabase.from("insumos_generales_entregas").insert({
-        catalogo_id: p.catalogoId,
-        sede_id: p.sedeId,
-        periodo_id: p.periodoId,
-        cantidad: cantidadEntregada,
-        fecha: today(),
-        created_by: perfil?.id ?? null,
-      });
-      if (errorEntregaPedido) {
-        setEntregandoPedidoId(null);
-        setErrorPedido(errorEntregaPedido.message);
-        return;
-      }
-    }
-    const { error: errorPedidoUpd } = await supabase
-      .from("insumos_generales_movimientos")
-      .update({ pedido: 0 })
-      .eq("id", p.movimientoId);
-    if (errorPedidoUpd) {
-      setEntregandoPedidoId(null);
-      setErrorPedido(errorPedidoUpd.message);
-      return;
-    }
-    if (resto > 0) {
-      const { error: errorDiferido } = await supabase.from("insumos_generales_pedidos_diferidos").insert({
-        periodo_id: p.periodoId,
-        sede_id: p.sedeId,
-        catalogo_id: p.catalogoId,
-        cantidad: resto,
-        fecha: today(),
-        created_by: perfil?.id ?? null,
-      });
-      if (errorDiferido) {
-        setEntregandoPedidoId(null);
-        setErrorPedido(errorDiferido.message);
-        return;
-      }
-    }
-    setEntregandoPedidoId(null);
-    setPedidosPendientes((prev) => prev.filter((x) => x.movimientoId !== p.movimientoId));
-    if (sedeIdHistorial === "todas" || sedeIdHistorial === p.sedeId) cargarHistorial();
-  }
-
   // Busca el período más reciente de la sede, o crea uno — usado tanto para
   // entregar una solicitud como para diferir el resto. La bodega
   // administrativa es continua, no debe bloquearse porque la sede no haya
@@ -394,8 +238,7 @@ export function AdministracionInventarios() {
   // formulario "Entregar a una sede" de arriba y hacía scroll hasta allá,
   // esperando un segundo clic en OTRO botón para que de verdad se
   // guardara; parecía que "Entregar" no hacía nada. Ahora entrega de una,
-  // mismo patrón que "Entregado" en pedidos pendientes — incluida la
-  // cantidad editable, por si llega menos de lo solicitado.
+  // incluida la cantidad editable, por si llega menos de lo solicitado.
   async function entregarSolicitud(s: SolicitudConDetalle) {
     const cantidad = Number(cantidadesEntregaSolicitud[s.id]) || 0;
     if (cantidad <= 0) return;
@@ -447,11 +290,9 @@ export function AdministracionInventarios() {
     if (sedeIdHistorial === "todas" || sedeIdHistorial === s.sede_id) cargarHistorial();
   }
 
-  // Mismo concepto que "Resto en el próximo pedido" de pedidos pendientes,
-  // pero para una solicitud puntual: entrega lo que sí se escribió, y el
-  // resto no se deja la solicitud repitiéndose indefinidamente — se marca
-  // entregada (ya no aparece acá) y se deja un aviso a la sede de que ese
-  // resto llega en el próximo pedido.
+  // Entrega lo que sí se escribió, y el resto no se deja la solicitud
+  // repitiéndose indefinidamente — se marca entregada (ya no aparece acá) y
+  // se deja un aviso a la sede de que ese resto llega en el próximo pedido.
   async function diferirSolicitud(s: SolicitudConDetalle) {
     const cantidadEntregada = Number(cantidadesEntregaSolicitud[s.id]) || 0;
     const resto = Math.max(0, s.cantidad - cantidadEntregada);
@@ -589,47 +430,30 @@ export function AdministracionInventarios() {
     return Array.from(porPeriodo.entries());
   }, [historialSalidas]);
 
-  // Agrupa los pedidos pendientes por sede → categoría, para poder leerlos
-  // de corrido en vez de una lista plana mezclada.
-  const pedidosPendientesAgrupados = useMemo(() => {
-    const porSede = new Map<string, { sedeId: string; sedeNombre: string; porCategoria: Map<string, PedidoPendiente[]> }>();
-    for (const p of pedidosPendientes) {
-      if (!porSede.has(p.sedeId)) porSede.set(p.sedeId, { sedeId: p.sedeId, sedeNombre: p.sedeNombre, porCategoria: new Map() });
-      const grupo = porSede.get(p.sedeId)!;
-      if (!grupo.porCategoria.has(p.categoria)) grupo.porCategoria.set(p.categoria, []);
-      grupo.porCategoria.get(p.categoria)!.push(p);
-    }
-    return Array.from(porSede.values()).map(({ sedeId, sedeNombre, porCategoria }) => ({
-      sedeId,
-      sedeNombre,
-      categorias: Array.from(porCategoria.entries())
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([categoria, items]) => ({
-          categoria,
-          items: [...items].sort((a, b) => a.nombre.localeCompare(b.nombre)),
-        })),
-    }));
-  }, [pedidosPendientes]);
-
   function colorSede(sedeId: string): string {
     return sedes.find((s) => s.id === sedeId)?.color_acento ?? "#9CA3AF";
   }
 
-  // Consolida el pedido de todas las sedes en un solo listado por ítem
-  // (sumando cantidades), para poder mandarlo de una vez a cotizar con
-  // proveedores en vez de mandar un pedido por sede.
+  // Consolida las solicitudes pendientes de todas las sedes en un solo
+  // listado por ítem (sumando cantidades), para poder mandarlo de una vez a
+  // cotizar con proveedores en vez de mandar un pedido por sede.
   const pedidoConsolidado = useMemo(() => {
     const porCatalogo = new Map<
       string,
       { categoria: string; nombre: string; total: number; porSede: { sedeNombre: string; cantidad: number }[] }
     >();
-    for (const p of pedidosPendientes) {
-      if (!porCatalogo.has(p.catalogoId)) {
-        porCatalogo.set(p.catalogoId, { categoria: p.categoria, nombre: p.nombre, total: 0, porSede: [] });
+    for (const s of solicitudesPendientes) {
+      if (!porCatalogo.has(s.catalogo_id)) {
+        porCatalogo.set(s.catalogo_id, {
+          categoria: s.insumos_generales_catalogo?.categoria ?? "—",
+          nombre: s.insumos_generales_catalogo?.nombre ?? "—",
+          total: 0,
+          porSede: [],
+        });
       }
-      const item = porCatalogo.get(p.catalogoId)!;
-      item.total += p.pedido;
-      item.porSede.push({ sedeNombre: p.sedeNombre, cantidad: p.pedido });
+      const item = porCatalogo.get(s.catalogo_id)!;
+      item.total += s.cantidad;
+      item.porSede.push({ sedeNombre: s.sedes?.nombre ?? "—", cantidad: s.cantidad });
     }
     const porCategoria = new Map<string, { categoria: string; nombre: string; total: number; porSede: { sedeNombre: string; cantidad: number }[] }[]>();
     for (const item of porCatalogo.values()) {
@@ -639,7 +463,7 @@ export function AdministracionInventarios() {
     return Array.from(porCategoria.entries())
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([categoria, items]) => ({ categoria, items: items.sort((a, b) => a.nombre.localeCompare(b.nombre)) }));
-  }, [pedidosPendientes]);
+  }, [solicitudesPendientes]);
 
   function descargarPedidoConsolidadoPdf() {
     const filas = pedidoConsolidado
@@ -754,92 +578,26 @@ export function AdministracionInventarios() {
         </section>
       )}
 
-      {(pedidosPendientes.length > 0 || notasPedidoPorSede.length > 0) && (
+      {notasPedidoPorSede.length > 0 && (
         <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
-          <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
-            <div className="flex items-center gap-2 text-amber-800 font-semibold text-sm">
-              <Bell size={16} /> Pedidos de bodega pendientes ({pedidosPendientes.length})
-            </div>
-            {pedidosPendientes.length > 0 && (
-              <button
-                onClick={descargarPedidoConsolidadoPdf}
-                className="flex items-center gap-1.5 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700"
-              >
-                <Download size={14} /> Pedido consolidado (PDF, todas las sedes)
-              </button>
-            )}
+          <div className="flex items-center gap-2 text-amber-800 font-semibold text-sm mb-2">
+            <Bell size={16} /> Observaciones de pedido de las sedes
           </div>
           <p className="text-xs text-amber-700 mb-2">
-            Del período más reciente de cada sede, en Operación → Inventario → Insumos generales. Puedes cambiar la
-            cantidad si no entregas todo lo pedido — lo que falte se queda pendiente. Al marcar "Entregado" se resta
-            de la bodega administrativa y le llega el aviso a la sede para que confirme recibido (ahí se suma a sus
-            "Entradas").
+            Texto libre que dejó cada sede en "Observaciones del pedido" (Insumos generales), para algo que no está
+            en el catálogo — bórrala desde ahí una vez quede resuelta.
           </p>
-          {notasPedidoPorSede.length > 0 && (
-            <div className="space-y-1 mb-3">
-              {notasPedidoPorSede.map((n, i) => (
-                <p
-                  key={`${n.sedeNombre}-${n.etiqueta}-${i}`}
-                  className="text-sm bg-white/60 border border-amber-200 rounded-lg px-3 py-2 text-amber-900 whitespace-pre-wrap"
-                >
-                  <span className="font-semibold">
-                    {n.sedeNombre} ({n.etiqueta}):
-                  </span>{" "}
-                  {n.nota}
-                </p>
-              ))}
-            </div>
-          )}
-          {errorPedido && <p className="text-sm text-red-600 mb-2">{errorPedido}</p>}
-          <div className="space-y-3">
-            {pedidosPendientesAgrupados.map((s) => (
-              <div key={s.sedeId}>
-                <p className="flex items-center gap-1.5 text-xs font-bold text-amber-900 uppercase tracking-wide mb-1">
-                  <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorSede(s.sedeId) }} />
-                  {s.sedeNombre}
-                </p>
-                <div className="space-y-2.5">
-                  {s.categorias.map((c) => (
-                    <div key={c.categoria}>
-                      <p className="text-xs font-semibold text-amber-700 mb-1">{c.categoria}</p>
-                      <div className="space-y-1 pl-2">
-                        {c.items.map((p) => (
-                          <div key={p.movimientoId} className="flex items-center justify-between gap-2 text-sm flex-wrap">
-                            <p className="text-amber-800">
-                              {p.nombre}: <span className="font-semibold">pedir {p.pedido}</span>
-                            </p>
-                            <div className="flex items-center gap-2 shrink-0">
-                              <input
-                                type="number"
-                                value={cantidadesEntregaPedido[p.movimientoId] ?? String(p.pedido)}
-                                onChange={(e) =>
-                                  setCantidadesEntregaPedido((prev) => ({ ...prev, [p.movimientoId]: e.target.value }))
-                                }
-                                className="w-20 rounded-lg border border-amber-300 px-2 py-1.5 text-sm"
-                              />
-                              <button
-                                onClick={() => marcarPedidoEntregado(p)}
-                                disabled={entregandoPedidoId === p.movimientoId}
-                                className="flex items-center gap-1 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700 disabled:opacity-40"
-                              >
-                                <Check size={14} /> {entregandoPedidoId === p.movimientoId ? "Entregando…" : "Entregado"}
-                              </button>
-                              <button
-                                onClick={() => marcarPedidoDiferido(p)}
-                                disabled={entregandoPedidoId === p.movimientoId}
-                                title="Lo que falte de esta cantidad ya no se entrega en este pedido — se avisa a la sede que llega en el próximo"
-                                className="flex items-center gap-1 rounded-lg border border-amber-400 text-amber-800 px-3 py-1.5 text-xs font-medium hover:bg-amber-100 disabled:opacity-40"
-                              >
-                                <Clock size={14} /> Resto en el próximo pedido
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+          <div className="space-y-1">
+            {notasPedidoPorSede.map((n, i) => (
+              <p
+                key={`${n.sedeNombre}-${n.etiqueta}-${i}`}
+                className="text-sm bg-white/60 border border-amber-200 rounded-lg px-3 py-2 text-amber-900 whitespace-pre-wrap"
+              >
+                <span className="font-semibold">
+                  {n.sedeNombre} ({n.etiqueta}):
+                </span>{" "}
+                {n.nota}
+              </p>
             ))}
           </div>
         </section>
@@ -847,7 +605,15 @@ export function AdministracionInventarios() {
 
       {solicitudesPendientes.length > 0 && (
         <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
-          <p className="font-semibold text-amber-800 mb-2">📋 Solicitudes pendientes de las sedes</p>
+          <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <p className="font-semibold text-amber-800">📋 Solicitudes pendientes de las sedes</p>
+            <button
+              onClick={descargarPedidoConsolidadoPdf}
+              className="flex items-center gap-1.5 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700"
+            >
+              <Download size={14} /> Pedido consolidado (PDF, todas las sedes)
+            </button>
+          </div>
           <div className="space-y-1.5">
             {solicitudesPendientes.map((s) => (
               <div key={s.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
