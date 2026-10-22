@@ -157,6 +157,66 @@ function descomponerCompensadoDia(
   return { minutosCompensadas, minutosIngresoEntrada, minutosIngresoSalida };
 }
 
+/** Arma los días con faltante para el reporte semanal, EN VIVO contra las
+ *  marcas reales de cada día — no depende de que un admin haya abierto ese
+ *  día puntual en "Registro administrativo" (antes, si nadie lo visitaba,
+ *  el faltante de ese día quedaba sin guardar en asistencia_notas_dia y por
+ *  lo tanto invisible en el reporte, aunque la persona sí hubiera llegado
+ *  tarde o salido temprano sin autorización). Misma fórmula que
+ *  recalcularCompensadoDia. Las horas autorizadas, si existen, se siguen
+ *  tomando de la nota guardada, para decidir cuánto de ese faltante se
+ *  perdona. Un día sin llegada+salida todavía (programado de antemano) usa
+ *  el estimado escrito a mano en la nota, si lo hay. */
+function construirCompensaciones(
+  filas: { perfil_id: string; tipo: TipoAsistencia; marcado_en: string }[],
+  notasRows: {
+    perfil_id: string;
+    fecha: string;
+    minutos_compensados: number;
+    hora_entrada_autorizada: string | null;
+    hora_salida_autorizada: string | null;
+  }[],
+): CompensacionReporte[] {
+  const marcasPorPersonaYDia: Record<string, { tipo: TipoAsistencia; marcado_en: string }[]> = {};
+  for (const r of filas) {
+    (marcasPorPersonaYDia[`${r.perfil_id}|${fechaBogota(r.marcado_en)}`] ??= []).push({
+      tipo: r.tipo,
+      marcado_en: r.marcado_en,
+    });
+  }
+  const notaPorClave = new Map<string, (typeof notasRows)[number]>();
+  for (const n of notasRows) notaPorClave.set(`${n.perfil_id}|${n.fecha}`, n);
+  const claves = new Set([...Object.keys(marcasPorPersonaYDia), ...notaPorClave.keys()]);
+  const compensaciones: CompensacionReporte[] = [];
+  for (const clave of claves) {
+    const [perfilId, fecha] = clave.split("|");
+    const marcasDia = marcasPorPersonaYDia[clave] ?? [];
+    const nota = notaPorClave.get(clave);
+    const hayLlegadaYSalida = marcasDia.some((m) => m.tipo === "llegada") && marcasDia.some((m) => m.tipo === "salida");
+    const minutosGuardado = hayLlegadaYSalida
+      ? Math.round(
+          Math.max(
+            0,
+            jornadaOrdinariaHoras(fecha) - horasTrabajadasDeMarcas(marcasDia, fecha, nota?.hora_entrada_autorizada ?? null),
+          ) * 60,
+        )
+      : (nota?.minutos_compensados ?? 0);
+    if (!minutosGuardado) continue;
+    compensaciones.push({
+      perfil_id: perfilId,
+      fecha,
+      ...descomponerCompensadoDia(
+        marcasDia,
+        fecha,
+        nota?.hora_entrada_autorizada ?? null,
+        nota?.hora_salida_autorizada ?? null,
+        minutosGuardado,
+      ),
+    });
+  }
+  return compensaciones;
+}
+
 /** Escapa texto libre (nombres, notas) antes de interpolarlo en el HTML del
  *  PDF, para no romper el documento si alguien escribió comillas o símbolos. */
 function escPdf(texto: string): string {
@@ -1273,30 +1333,7 @@ export function Asistencia() {
       }
     }
     setNotasPorPersona(notasAgrupadas);
-    // Para separar cada día compensado en Compensadas/Ingreso hace falta la
-    // llegada y salida reales de ese día — ya están en "filas" (marcas del
-    // rango completo, con colchón), así que se agrupan por persona+día en
-    // vez de volver a consultarlas.
-    const marcasPorPersonaYDia: Record<string, { tipo: TipoAsistencia; marcado_en: string }[]> = {};
-    for (const r of filas) {
-      (marcasPorPersonaYDia[`${r.perfil_id}|${fechaBogota(r.marcado_en)}`] ??= []).push({
-        tipo: r.tipo,
-        marcado_en: r.marcado_en,
-      });
-    }
-    const compensaciones: CompensacionReporte[] = notasRows
-      .filter((n) => n.minutos_compensados)
-      .map((n) => ({
-        perfil_id: n.perfil_id,
-        fecha: n.fecha,
-        ...descomponerCompensadoDia(
-          marcasPorPersonaYDia[`${n.perfil_id}|${n.fecha}`] ?? [],
-          n.fecha,
-          n.hora_entrada_autorizada,
-          n.hora_salida_autorizada,
-          n.minutos_compensados,
-        ),
-      }));
+    const compensaciones = construirCompensaciones(filas, notasRows);
     const autorizaciones: AutorizacionReporte[] = notasRows
       .filter((n) => n.hora_entrada_autorizada)
       .map((n) => ({ perfil_id: n.perfil_id, fecha: n.fecha, hora: n.hora_entrada_autorizada as string }));
@@ -1546,26 +1583,7 @@ export function Asistencia() {
         perfil_id: string; fecha: string; minutos_compensados: number;
         hora_entrada_autorizada: string | null; hora_salida_autorizada: string | null;
       }[]) ?? [];
-    const marcasPorPersonaYDia: Record<string, { tipo: TipoAsistencia; marcado_en: string }[]> = {};
-    for (const r of filas) {
-      (marcasPorPersonaYDia[`${r.perfil_id}|${fechaBogota(r.marcado_en)}`] ??= []).push({
-        tipo: r.tipo,
-        marcado_en: r.marcado_en,
-      });
-    }
-    const compensaciones: CompensacionReporte[] = notasRows
-      .filter((n) => n.minutos_compensados)
-      .map((n) => ({
-        perfil_id: n.perfil_id,
-        fecha: n.fecha,
-        ...descomponerCompensadoDia(
-          marcasPorPersonaYDia[`${n.perfil_id}|${n.fecha}`] ?? [],
-          n.fecha,
-          n.hora_entrada_autorizada,
-          n.hora_salida_autorizada,
-          n.minutos_compensados,
-        ),
-      }));
+    const compensaciones = construirCompensaciones(filas, notasRows);
     const autorizaciones: AutorizacionReporte[] = notasRows
       .filter((n) => n.hora_entrada_autorizada)
       .map((n) => ({ perfil_id: n.perfil_id, fecha: n.fecha, hora: n.hora_entrada_autorizada as string }));
@@ -2313,10 +2331,11 @@ export function Asistencia() {
               Compensado de tiempo
             </label>
             <p className="text-xs text-gray-400 mt-1">
-              Si llegó tarde o salió temprano pero ese tiempo ya estaba a su favor de un período anterior (autorizado),
-              marca esto y toca "Guardar": el sistema calcula solo cuánto le faltó ese día contra la jornada
-              ({jornadaOrdinariaHoras(fechaAdmin)}h) y lo suma de vuelta a las horas de la semana, para no
-              descontárselo dos veces.
+              Para un día que YA tiene llegada y salida marcadas, el faltante se calcula solo en el reporte — no hace
+              falta marcar esto; usa "Hora de entrada/salida autorizada" abajo para decidir cuánto de ese faltante se
+              perdona. Esto solo hace falta si TODAVÍA no hay marcas ese día (lo estás programando de un día para
+              otro) y ya sabes que va a tener un faltante que compensar: marca esto, escribe el estimado abajo y toca
+              "Guardar" — en cuanto la persona marque, se recalcula solo contra las horas reales.
             </p>
             {esCompensado &&
               !(marcasPersona.some((m) => m.tipo === "llegada") && marcasPersona.some((m) => m.tipo === "salida")) && (
@@ -2353,6 +2372,8 @@ export function Asistencia() {
               <p className="text-xs text-gray-400 mt-1">
                 Llegar antes de esta hora (o de la jornada normal, {horasPorDefecto(fechaAdmin).llegada}, si dejas
                 esto vacío) no suma horas de más — las horas trabajadas se cuentan desde acá, no desde la marca real.
+                La tardanza por fuera de este permiso se resta de lo trabajado y queda en "Ingreso" del reporte, sin
+                perdonar; la que cae dentro del permiso se perdona (queda en "Compensadas").
               </p>
             </div>
             <div className="mt-2">
@@ -2366,9 +2387,10 @@ export function Asistencia() {
                 className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
               />
               <p className="text-xs text-gray-400 mt-1">
-                Esto no cambia las horas trabajadas (salir antes sí resta horas de verdad — para perdonar ese
-                faltante usa "Compensado de tiempo" arriba). Solo apaga la alerta del dashboard de "Hoy — quién ha
-                marcado" una vez que ya revisaste que la salida temprano estaba autorizada.
+                Salir antes sí resta horas de verdad. El tiempo por fuera de este permiso (salió antes de esta hora)
+                se resta de lo trabajado y queda en "Finalización jornada" del reporte, sin perdonar; el que cae
+                dentro del permiso se perdona (queda en "Compensadas"). También apaga la alerta del dashboard de
+                "Hoy — quién ha marcado".
               </p>
             </div>
           </div>
