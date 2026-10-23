@@ -1405,9 +1405,15 @@ export function Asistencia() {
         perfil_id: string; fecha: string; nota: string; minutos_compensados: number;
         hora_entrada_autorizada: string | null; hora_salida_autorizada: string | null;
       }[]) ?? [];
+    // Solo notas con texto de verdad — una fila sin nota pero con
+    // minutos_compensados > 0 es el valor que recalcularCompensadoDia dejó
+    // guardado solo con ABRIR el día en "Registro administrativo" (no
+    // significa que de verdad esté autorizado/perdonado); mostrarla acá como
+    // "(+Xmin comp.)" sin más contexto duplicaba y contradecía el renglón de
+    // Llegó/Salió de abajo, que sí refleja si en realidad se perdonó o no.
     const notasAgrupadas: Record<string, { fecha: string; nota: string; minutosCompensados: number }[]> = {};
     for (const n of notasRows) {
-      if (n.nota || n.minutos_compensados) {
+      if (n.nota && n.nota.trim()) {
         (notasAgrupadas[n.perfil_id] ??= []).push({ fecha: n.fecha, nota: n.nota, minutosCompensados: n.minutos_compensados });
       }
     }
@@ -1519,7 +1525,7 @@ export function Asistencia() {
           ...(historialTardanzasPorPersona[fila.perfilId] ?? []).map((h) => ({
             fecha: h.fecha,
             texto: h.texto + (h.minutosCompensados > 0 ? ` (+${h.minutosCompensados}min comp.)` : ""),
-            color: h.esSalida ? "#c2410c" : "#b45309",
+            color: h.esSalida ? "#2563eb" : "#b45309",
           })),
         ].sort((a, b) => a.fecha.localeCompare(b.fecha));
         const observacionesHtml =
@@ -2866,7 +2872,7 @@ export function Asistencia() {
                           <td className="py-1 text-right text-amber-600">
                             {s.minutosIngresoEntrada > 0 ? (s.minutosIngresoEntrada / 60).toFixed(1) : "—"}
                           </td>
-                          <td className="py-1 text-right text-orange-600">
+                          <td className="py-1 text-right text-blue-600">
                             {s.minutosIngresoSalida > 0 ? (s.minutosIngresoSalida / 60).toFixed(1) : "—"}
                           </td>
                         </tr>
@@ -2883,7 +2889,7 @@ export function Asistencia() {
                         <td className="py-1 text-right text-amber-600">
                           {ingresoEntradaEstePeriodo > 0 ? ingresoEntradaEstePeriodo.toFixed(1) : "—"}
                         </td>
-                        <td className="py-1 text-right text-orange-600">
+                        <td className="py-1 text-right text-blue-600">
                           {ingresoSalidaEstePeriodo > 0 ? ingresoSalidaEstePeriodo.toFixed(1) : "—"}
                         </td>
                       </tr>
@@ -2910,7 +2916,7 @@ export function Asistencia() {
                       <p>
                         <span className="text-gray-500">Finalización jornada del período (salida temprano sin autorizar): </span>
                         <span
-                          className={`font-semibold ${ingresoSalidaEstePeriodo > 0 ? "text-orange-600" : "text-gray-400"}`}
+                          className={`font-semibold ${ingresoSalidaEstePeriodo > 0 ? "text-blue-600" : "text-gray-400"}`}
                         >
                           {ingresoSalidaEstePeriodo.toFixed(1)} h
                         </span>
@@ -2955,7 +2961,7 @@ export function Asistencia() {
                     ...(historialTardanzasPorPersona[fila.perfilId] ?? []).map((h) => ({
                       fecha: h.fecha,
                       texto: h.texto,
-                      color: h.esSalida ? "text-orange-600" : "text-amber-600",
+                      color: h.esSalida ? "text-blue-600" : "text-amber-600",
                       minutosCompensados: h.minutosCompensados,
                     })),
                   ].sort((a, b) => a.fecha.localeCompare(b.fecha));
