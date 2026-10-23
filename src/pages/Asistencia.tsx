@@ -101,7 +101,13 @@ function descomponerCompensadoDia(
   horaEntradaAutorizada: string | null | undefined,
   horaSalidaAutorizada: string | null | undefined,
   minutosGuardado: number,
-): { minutosCompensadas: number; minutosIngresoEntrada: number; minutosIngresoSalida: number } {
+): {
+  minutosCompensadas: number;
+  minutosIngresoEntrada: number;
+  minutosIngresoSalida: number;
+  horaLlegadaIso: string | null;
+  horaSalidaIso: string | null;
+} {
   const porTipo: Partial<Record<TipoAsistencia, string>> = {};
   for (const m of marcas) if (!porTipo[m.tipo]) porTipo[m.tipo] = m.marcado_en;
   if (!porTipo.llegada || !porTipo.salida) {
@@ -109,8 +115,8 @@ function descomponerCompensadoDia(
     // la persona marque) — no hay de dónde separar por razón, se usa el
     // booleano simple como mejor estimado hasta que haya marcas reales.
     return horaEntradaAutorizada || horaSalidaAutorizada
-      ? { minutosCompensadas: minutosGuardado, minutosIngresoEntrada: 0, minutosIngresoSalida: 0 }
-      : { minutosCompensadas: 0, minutosIngresoEntrada: minutosGuardado, minutosIngresoSalida: 0 };
+      ? { minutosCompensadas: minutosGuardado, minutosIngresoEntrada: 0, minutosIngresoSalida: 0, horaLlegadaIso: null, horaSalidaIso: null }
+      : { minutosCompensadas: 0, minutosIngresoEntrada: minutosGuardado, minutosIngresoSalida: 0, horaLlegadaIso: null, horaSalidaIso: null };
   }
   const horario = horasPorDefecto(fecha);
   const inicioNormalMs = new Date(`${fecha}T${horario.llegada}:00-05:00`).getTime();
@@ -154,7 +160,7 @@ function descomponerCompensadoDia(
   const minutosIngresoEntrada = crudoTotal > 0 ? Math.round((ingresoEntradaCrudo / crudoTotal) * ingresoTotal) : 0;
   const minutosIngresoSalida = ingresoTotal - minutosIngresoEntrada;
   const minutosCompensadas = minutosGuardado - ingresoTotal;
-  return { minutosCompensadas, minutosIngresoEntrada, minutosIngresoSalida };
+  return { minutosCompensadas, minutosIngresoEntrada, minutosIngresoSalida, horaLlegadaIso: porTipo.llegada, horaSalidaIso: porTipo.salida };
 }
 
 /** Arma los días con faltante para el reporte semanal, EN VIVO contra las
@@ -218,21 +224,25 @@ function construirCompensaciones(
 }
 
 /** Trazabilidad para la lista de "Observaciones" del reporte: un renglón
- *  por cada llegada tarde y cada salida temprano REAL, con la fecha, la
- *  hora exacta de la marca y los minutos de diferencia — para poder
- *  revisar día por día qué pasó, no solo el total de la semana. Cubre
- *  TODOS los días con marcas (compensados o no), igual que
- *  construirCompensaciones — misma fórmula, pero exponiendo los dos
- *  tiempos reales por separado en vez de solo el reparto final. */
+ *  SOLO por lo que de verdad quedó SIN compensar — no uno por cada llegada
+ *  tarde/salida temprano real, sino por el remanente que descomponerCompensadoDia
+ *  ya decidió que no se perdona (si un día está 100% autorizado, el faltante
+ *  completo ya se ve en la nota de "Autorizada..." — no hace falta otro
+ *  renglón aparte repitiéndolo con otro número, que fue justo el bug: dos
+ *  renglones del mismo día con dos minutajes DISTINTOS porque se calculaban
+ *  por separado). Usa el mismo minutosGuardado y el mismo
+ *  descomponerCompensadoDia que construirCompensaciones, así que el número
+ *  que aparece acá es exactamente el que resta de la semana — nunca otro. */
 function construirHistorialTardanzas(
   filas: { perfil_id: string; tipo: TipoAsistencia; marcado_en: string }[],
   notasRows: {
     perfil_id: string;
     fecha: string;
+    minutos_compensados: number;
     hora_entrada_autorizada: string | null;
     hora_salida_autorizada: string | null;
   }[],
-): { perfil_id: string; fecha: string; texto: string; esSalida: boolean; minutosCompensados: number }[] {
+): { perfil_id: string; fecha: string; texto: string; esSalida: boolean }[] {
   const marcasPorPersonaYDia: Record<string, { tipo: TipoAsistencia; marcado_en: string }[]> = {};
   for (const r of filas) {
     (marcasPorPersonaYDia[`${r.perfil_id}|${fechaBogota(r.marcado_en)}`] ??= []).push({
@@ -245,48 +255,39 @@ function construirHistorialTardanzas(
   const formatoHora = (iso: string) =>
     new Date(iso).toLocaleTimeString("es-CO", { timeZone: "America/Bogota", hour: "numeric", minute: "2-digit" });
 
-  const resultado: { perfil_id: string; fecha: string; texto: string; esSalida: boolean; minutosCompensados: number }[] = [];
-  for (const [clave, marcasDia] of Object.entries(marcasPorPersonaYDia)) {
+  const resultado: { perfil_id: string; fecha: string; texto: string; esSalida: boolean }[] = [];
+  const claves = new Set([...Object.keys(marcasPorPersonaYDia), ...notaPorClave.keys()]);
+  for (const clave of claves) {
     const [perfilId, fecha] = clave.split("|");
-    const porTipo: Partial<Record<TipoAsistencia, string>> = {};
-    for (const m of marcasDia) if (!porTipo[m.tipo]) porTipo[m.tipo] = m.marcado_en;
-    if (!porTipo.llegada || !porTipo.salida) continue;
+    const marcasDia = marcasPorPersonaYDia[clave] ?? [];
     const nota = notaPorClave.get(clave);
-    const horario = horasPorDefecto(fecha);
-    const inicioNormalMs = new Date(`${fecha}T${horario.llegada}:00-05:00`).getTime();
-    const finNormalMs = new Date(`${fecha}T${horario.salida}:00-05:00`).getTime();
-    let minutosEntradaAutorizada = 0;
-    if (nota?.hora_entrada_autorizada) {
-      const autorizadaMs = new Date(`${fecha}T${nota.hora_entrada_autorizada.slice(0, 5)}:00-05:00`).getTime();
-      minutosEntradaAutorizada = Math.max(0, (autorizadaMs - inicioNormalMs) / 60_000);
-    }
-    let minutosSalidaAutorizada = 0;
-    if (nota?.hora_salida_autorizada) {
-      const autorizadaMs = new Date(`${fecha}T${nota.hora_salida_autorizada.slice(0, 5)}:00-05:00`).getTime();
-      const salidaEfectivaMs = Math.min(new Date(porTipo.salida).getTime(), finNormalMs);
-      const pisoMs = Math.max(salidaEfectivaMs, autorizadaMs);
-      minutosSalidaAutorizada = Math.max(0, (finNormalMs - pisoMs) / 60_000);
-    }
-    const llegadaMs = new Date(porTipo.llegada).getTime();
-    const salidaMs = Math.min(new Date(porTipo.salida).getTime(), finNormalMs);
-    const tardanzaRealMin = Math.round(Math.max(0, (llegadaMs - inicioNormalMs) / 60_000));
-    const salidaTempranoRealMin = Math.round(Math.max(0, (finNormalMs - salidaMs) / 60_000));
-    if (tardanzaRealMin > 0) {
+    const hayLlegadaYSalida = marcasDia.some((m) => m.tipo === "llegada") && marcasDia.some((m) => m.tipo === "salida");
+    if (!hayLlegadaYSalida) continue; // sin marcas no hay hora que mostrar
+    const minutosGuardado = Math.round(
+      Math.max(0, jornadaOrdinariaHoras(fecha) - horasTrabajadasDeMarcas(marcasDia, fecha, nota?.hora_entrada_autorizada ?? null)) * 60,
+    );
+    if (!minutosGuardado) continue;
+    const { minutosIngresoEntrada, minutosIngresoSalida, horaLlegadaIso, horaSalidaIso } = descomponerCompensadoDia(
+      marcasDia,
+      fecha,
+      nota?.hora_entrada_autorizada ?? null,
+      nota?.hora_salida_autorizada ?? null,
+      minutosGuardado,
+    );
+    if (minutosIngresoEntrada > 0 && horaLlegadaIso) {
       resultado.push({
         perfil_id: perfilId,
         fecha,
-        texto: `Llegó ${formatoHora(porTipo.llegada)} (${tardanzaRealMin}min tarde)`,
+        texto: `Llegó ${formatoHora(horaLlegadaIso)} (${minutosIngresoEntrada}min tarde)`,
         esSalida: false,
-        minutosCompensados: Math.round(Math.min(tardanzaRealMin, minutosEntradaAutorizada)),
       });
     }
-    if (salidaTempranoRealMin > 0) {
+    if (minutosIngresoSalida > 0 && horaSalidaIso) {
       resultado.push({
         perfil_id: perfilId,
         fecha,
-        texto: `Salió ${formatoHora(porTipo.salida)} (${salidaTempranoRealMin}min antes)`,
+        texto: `Salió ${formatoHora(horaSalidaIso)} (${minutosIngresoSalida}min antes)`,
         esSalida: true,
-        minutosCompensados: Math.round(Math.min(salidaTempranoRealMin, minutosSalidaAutorizada)),
       });
     }
   }
@@ -950,7 +951,7 @@ export function Asistencia() {
     Record<string, { fecha: string; nota: string; minutosCompensados: number }[]>
   >({});
   const [historialTardanzasPorPersona, setHistorialTardanzasPorPersona] = useState<
-    Record<string, { fecha: string; texto: string; esSalida: boolean; minutosCompensados: number }[]>
+    Record<string, { fecha: string; texto: string; esSalida: boolean }[]>
   >({});
   const [ausenciasPorPersona, setAusenciasPorPersona] = useState<
     Record<string, { fecha: string; tipo: "vacaciones" | "incapacidad" | "descanso" }[]>
@@ -1418,17 +1419,9 @@ export function Asistencia() {
       }
     }
     setNotasPorPersona(notasAgrupadas);
-    const historialTardanzasAgrupado: Record<
-      string,
-      { fecha: string; texto: string; esSalida: boolean; minutosCompensados: number }[]
-    > = {};
+    const historialTardanzasAgrupado: Record<string, { fecha: string; texto: string; esSalida: boolean }[]> = {};
     for (const h of construirHistorialTardanzas(filas, notasRows)) {
-      (historialTardanzasAgrupado[h.perfil_id] ??= []).push({
-        fecha: h.fecha,
-        texto: h.texto,
-        esSalida: h.esSalida,
-        minutosCompensados: h.minutosCompensados,
-      });
+      (historialTardanzasAgrupado[h.perfil_id] ??= []).push({ fecha: h.fecha, texto: h.texto, esSalida: h.esSalida });
     }
     setHistorialTardanzasPorPersona(historialTardanzasAgrupado);
     const compensaciones = construirCompensaciones(filas, notasRows);
@@ -1524,7 +1517,7 @@ export function Asistencia() {
             })),
           ...(historialTardanzasPorPersona[fila.perfilId] ?? []).map((h) => ({
             fecha: h.fecha,
-            texto: h.texto + (h.minutosCompensados > 0 ? ` (+${h.minutosCompensados}min comp.)` : ""),
+            texto: h.texto,
             color: h.esSalida ? "#2563eb" : "#b45309",
           })),
         ].sort((a, b) => a.fecha.localeCompare(b.fecha));
@@ -2962,7 +2955,7 @@ export function Asistencia() {
                       fecha: h.fecha,
                       texto: h.texto,
                       color: h.esSalida ? "text-blue-600" : "text-amber-600",
-                      minutosCompensados: h.minutosCompensados,
+                      minutosCompensados: 0,
                     })),
                   ].sort((a, b) => a.fecha.localeCompare(b.fecha));
                   if (observaciones.length === 0) return null;
