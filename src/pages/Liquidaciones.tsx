@@ -186,6 +186,12 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+/** El % de honorarios de un doctor en particular — el suyo propio si tiene
+ *  un trato especial (doctoras.porcentaje_honorario_pct), si no el global. */
+function pctDe(doctora: Doctora, pctGlobal: number): number {
+  return doctora.porcentaje_honorario_pct != null ? Number(doctora.porcentaje_honorario_pct) : pctGlobal;
+}
+
 /** Página 1: el estado de cuenta en sí (para enviarle a la doctora) — refleja la misma ficha que se ve en pantalla. */
 function paginaLiquidacion(periodo: { inicio: string; fin: string }, pctHonorario: number, f: FilaDoctora): string {
   const bruto = f.totalVentas * (pctHonorario / 100);
@@ -585,11 +591,15 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
           const totalVentas = ventasPorDoctora[d.id] ?? 0;
           const totalLaboratorios = labsPorDoctora[d.id] ?? 0;
           const totalInsumos = insumosPorDoctora[d.id] ?? 0;
-          const bruto = totalVentas * (pct / 100);
+          // Algún doctor puede tener un trato especial distinto al % global
+          // (ej. León Agudelo: 50% en vez del 30% estándar) — ver
+          // doctoras.porcentaje_honorario_pct.
+          const pctDoctora = d.porcentaje_honorario_pct != null ? Number(d.porcentaje_honorario_pct) : pct;
+          const bruto = totalVentas * (pctDoctora / 100);
           // La retención voluntaria se calcula sobre el subtotal YA
           // descontados laboratorios/insumos (lo que realmente se le va a
           // pagar), no sobre el bruto de honorarios antes de esa deducción.
-          const subtotalAntesDeRetenciones = bruto - (totalLaboratorios + totalInsumos) * (pct / 100);
+          const subtotalAntesDeRetenciones = bruto - (totalLaboratorios + totalInsumos) * (pctDoctora / 100);
           const retencionAuto = d.retencion_voluntaria_activa
             ? subtotalAntesDeRetenciones * (Number(d.retencion_voluntaria_pct) / 100)
             : 0;
@@ -764,8 +774,9 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
 
   async function guardarFila(idx: number) {
     const f = filas[idx];
-    const bruto = f.totalVentas * (pctHonorario / 100);
-    const deduccion = (f.totalLaboratorios + f.totalInsumos) * (pctHonorario / 100);
+    const pctFila = pctDe(f.doctora, pctHonorario);
+    const bruto = f.totalVentas * (pctFila / 100);
+    const deduccion = (f.totalLaboratorios + f.totalInsumos) * (pctFila / 100);
     const retencionVoluntaria = Number(f.retencionValor) || 0;
     const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
     const totalConceptos = f.detalleConceptos.reduce((a, c) => a + c.valor, 0);
@@ -782,7 +793,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
           periodo_inicio: periodo.inicio,
           periodo_fin: periodo.fin,
           total_ventas: f.totalVentas,
-          porcentaje: pctHonorario,
+          porcentaje: pctFila,
           valor_bruto: bruto,
           total_laboratorios: f.totalLaboratorios,
           total_insumos: f.totalInsumos,
@@ -828,14 +839,15 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         favor, no la creación de estos). IBC = 40% del total a pagar (base de cotización a seguridad social).
       </p>
       {filas.map((f, idx) => {
-        const bruto = f.totalVentas * (pctHonorario / 100);
+        const pctFila = pctDe(f.doctora, pctHonorario);
+        const bruto = f.totalVentas * (pctFila / 100);
         const atrasados = f.detalleLabs.filter((d) => d.fechaInstalado && d.fechaInstalado !== d.fecha);
         const totalLabsAtrasados = atrasados.reduce((a, d) => a + d.valor, 0);
         const totalLabsNormal = f.totalLaboratorios - totalLabsAtrasados;
         const editadosDespuesDeGuardar = f.detalleLabs.filter((d) => d.actualizadoDespuesDeGuardar);
         const totalLaboratoriosInsumos = totalLabsNormal + f.totalInsumos;
-        const deduccion = totalLaboratoriosInsumos * (pctHonorario / 100);
-        const deduccionAtrasados = totalLabsAtrasados * (pctHonorario / 100);
+        const deduccion = totalLaboratoriosInsumos * (pctFila / 100);
+        const deduccionAtrasados = totalLabsAtrasados * (pctFila / 100);
         const retencionVoluntaria = Number(f.retencionValor) || 0;
         const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
         const totalConceptos = f.detalleConceptos.reduce((a, c) => a + c.valor, 0);
@@ -881,13 +893,13 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
             <div className="rounded-lg bg-gray-50 border border-gray-200 p-3 space-y-1.5 text-sm mb-3">
               <div className="flex items-center justify-between">
                 <span className="text-gray-500">
-                  Honorarios — {pctHonorario}% de {fmtCOP(f.totalVentas)} en ventas
+                  Honorarios — {pctFila}% de {fmtCOP(f.totalVentas)} en ventas
                 </span>
                 <span className="font-medium text-emerald-700">+{fmtCOP(bruto)}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-gray-500">
-                  Laboratorios + otros aparatología — {pctHonorario}% de {fmtCOP(totalLaboratoriosInsumos)}{" "}
+                  Laboratorios + otros aparatología — {pctFila}% de {fmtCOP(totalLaboratoriosInsumos)}{" "}
                   (labs {fmtCOP(totalLabsNormal)} + otros {fmtCOP(f.totalInsumos)})
                 </span>
                 <span className="font-medium text-red-600">-{fmtCOP(deduccion)}</span>
@@ -895,7 +907,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
               {totalLabsAtrasados > 0 && (
                 <div className="flex items-center justify-between">
                   <span className="text-gray-500">
-                    Laboratorios período anterior — {pctHonorario}% de {fmtCOP(totalLabsAtrasados)}
+                    Laboratorios período anterior — {pctFila}% de {fmtCOP(totalLabsAtrasados)}
                   </span>
                   <span className="font-medium text-red-600">-{fmtCOP(deduccionAtrasados)}</span>
                 </div>
@@ -978,7 +990,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
 
             <div className="flex items-center gap-3 mb-3 flex-wrap">
               <button
-                onClick={() => generarLiquidacionCompletaPDF(periodo, pctHonorario, f)}
+                onClick={() => generarLiquidacionCompletaPDF(periodo, pctFila, f)}
                 className="flex items-center gap-1 text-xs font-medium text-white bg-[var(--acento)] px-3 py-1.5 rounded-md"
               >
                 <Download size={13} /> Generar liquidación completa (PDF)

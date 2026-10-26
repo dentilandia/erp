@@ -133,6 +133,10 @@ export interface Doctora {
   retencion_voluntaria_activa: boolean;
   retencion_voluntaria_pct: number;
   activa: boolean;
+  // Porcentaje de honorarios propio de este doctor, si es distinto al
+  // global de precios_config (ej. un doctor con un trato especial al 50%
+  // en vez del 30% estándar). null = usa el global.
+  porcentaje_honorario_pct: number | null;
 }
 
 export interface Paciente {

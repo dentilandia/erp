@@ -307,6 +307,24 @@ export function Parametros() {
             <div key={d.id} className="flex items-center gap-3 py-2.5 flex-wrap">
               <span className="w-4 h-4 rounded-full shrink-0" style={{ background: d.color_pastel }} />
               <span className="font-medium text-sm flex-1 min-w-[160px]">{d.nombre}</span>
+              <label
+                className="flex items-center gap-1.5 text-xs text-gray-500"
+                title="Si lo dejas vacío usa el % global de Liquidaciones. Solo llena esto si este doctor tiene un trato distinto (ej. 50% en vez del estándar)."
+              >
+                % honorarios
+                <input
+                  type="number"
+                  step="0.1"
+                  value={d.porcentaje_honorario_pct ?? ""}
+                  onChange={(e) =>
+                    actualizarDoctora(d.id, {
+                      porcentaje_honorario_pct: e.target.value === "" ? null : Number(e.target.value),
+                    })
+                  }
+                  placeholder="Global"
+                  className="w-16 rounded-md border border-gray-300 px-2 py-1 text-xs"
+                />
+              </label>
               <label className="flex items-center gap-1.5 text-xs text-gray-500">
                 <input
                   type="checkbox"
