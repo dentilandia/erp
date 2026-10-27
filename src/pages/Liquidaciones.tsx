@@ -1378,11 +1378,70 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
   const [laboratorioId, setLaboratorioId] = useState("");
   const [filas, setFilas] = useState<FilaLab[]>([]);
   const [cargando, setCargando] = useState(true);
+  const [conceptosPorLab, setConceptosPorLab] = useState<Record<string, DetalleConcepto[]>>({});
+  const [formsConceptoLab, setFormsConceptoLab] = useState<Record<string, FormConcepto>>({});
+  const [recargarConceptos, setRecargarConceptos] = useState(0);
 
   useEffect(() => {
     supabase.from("doctoras").select("*").order("nombre").then(({ data }) => setDoctoras((data as Doctora[]) ?? []));
     supabase.from("laboratorios").select("*").order("nombre").then(({ data }) => setLaboratorios((data as Laboratorio[]) ?? []));
   }, []);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from("liquidaciones_laboratorio_conceptos")
+        .select("id, laboratorio_id, concepto, valor")
+        .eq("periodo_inicio", periodo.inicio)
+        .eq("periodo_fin", periodo.fin);
+      const porLab: Record<string, DetalleConcepto[]> = {};
+      for (const c of (data as { id: string; laboratorio_id: string; concepto: string; valor: number }[]) ?? []) {
+        (porLab[c.laboratorio_id] ??= []).push({ id: c.id, concepto: c.concepto, valor: Number(c.valor) });
+      }
+      setConceptosPorLab(porLab);
+    })();
+  }, [periodo.inicio, periodo.fin, recargarConceptos]);
+
+  const formConceptoLabVacio: FormConcepto = { abierto: false, concepto: "", valor: "", guardando: false };
+  function formConceptoLabDe(laboratorioId: string): FormConcepto {
+    return formsConceptoLab[laboratorioId] ?? formConceptoLabVacio;
+  }
+  function actualizarFormConceptoLab(laboratorioId: string, cambios: Partial<FormConcepto>) {
+    setFormsConceptoLab((prev) => ({ ...prev, [laboratorioId]: { ...formConceptoLabDe(laboratorioId), ...cambios } }));
+  }
+
+  // Ajuste administrativo libre por laboratorio (ej. una factura ya pagada
+  // en un mes anterior, un pago de más, o una retención mal aplicada) — se
+  // suma (o resta, con valor negativo) al neto a pagar de ese laboratorio.
+  async function agregarConceptoAdministrativoLab(laboratorioId: string) {
+    const form = formConceptoLabDe(laboratorioId);
+    if (!form.concepto.trim() || !Number(form.valor)) return;
+    actualizarFormConceptoLab(laboratorioId, { guardando: true });
+    const { error } = await supabase.from("liquidaciones_laboratorio_conceptos").insert({
+      laboratorio_id: laboratorioId,
+      periodo_inicio: periodo.inicio,
+      periodo_fin: periodo.fin,
+      concepto: form.concepto.trim(),
+      valor: Number(form.valor),
+    });
+    if (error) {
+      window.alert(`No se pudo agregar: ${error.message}`);
+      actualizarFormConceptoLab(laboratorioId, { guardando: false });
+      return;
+    }
+    setFormsConceptoLab((prev) => {
+      const next = { ...prev };
+      delete next[laboratorioId];
+      return next;
+    });
+    setRecargarConceptos((n) => n + 1);
+  }
+
+  async function eliminarConceptoLab(id: string) {
+    if (!window.confirm("¿Quitar este concepto administrativo del pago a laboratorio?")) return;
+    await supabase.from("liquidaciones_laboratorio_conceptos").delete().eq("id", id);
+    setRecargarConceptos((n) => n + 1);
+  }
 
   useEffect(() => {
     (async () => {
@@ -1445,18 +1504,31 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
   }
 
   const totalesPorLab = useMemo(() => {
-    const t: Record<string, { facturado: number; retencion: number }> = {};
+    const t: Record<string, { nombre: string; facturado: number; retencion: number }> = {};
     for (const f of filas) {
-      t[f.laboratorio] = t[f.laboratorio] ?? { facturado: 0, retencion: 0 };
-      t[f.laboratorio].facturado += f.valor_factura;
-      t[f.laboratorio].retencion += retencionDe(f);
+      t[f.laboratorioId] = t[f.laboratorioId] ?? { nombre: f.laboratorio, facturado: 0, retencion: 0 };
+      t[f.laboratorioId].facturado += f.valor_factura;
+      t[f.laboratorioId].retencion += retencionDe(f);
+    }
+    // Un laboratorio con solo ajustes administrativos (sin facturas en el
+    // período) también debe aparecer, para poder verlos y quitarlos.
+    for (const labId of Object.keys(conceptosPorLab)) {
+      if (!t[labId] && conceptosPorLab[labId].length > 0) {
+        t[labId] = { nombre: laboratorios.find((l) => l.id === labId)?.nombre ?? "—", facturado: 0, retencion: 0 };
+      }
     }
     return t;
-  }, [filas]);
+  }, [filas, conceptosPorLab, laboratorios]);
+
+  function totalConceptosDe(laboratorioId: string): number {
+    return (conceptosPorLab[laboratorioId] ?? []).reduce((a, c) => a + c.valor, 0);
+  }
 
   const total = filas.reduce((a, f) => a + f.valor_factura, 0);
   const totalRetencion = filas.reduce((a, f) => a + retencionDe(f), 0);
   const totalNeto = total - totalRetencion;
+  const totalConceptos = Object.values(conceptosPorLab).reduce((a, cs) => a + cs.reduce((b, c) => b + c.valor, 0), 0);
+  const totalAPagar = totalNeto + totalConceptos;
 
   function generarPDF() {
     const nombreLab = laboratorioId ? laboratorios.find((l) => l.id === laboratorioId)?.nombre : null;
@@ -1471,11 +1543,21 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
       })
       .join("");
     const filasTotalLab = Object.entries(totalesPorLab)
+      .map(([labId, t]) => {
+        const neto = t.facturado - t.retencion;
+        const conceptos = totalConceptosDe(labId);
+        return `<tr><td>${esc(t.nombre)}</td><td class="num">${esc(fmtCOP(t.facturado))}</td><td class="num">${esc(
+          fmtCOP(t.retencion),
+        )}</td><td class="num">${esc(fmtCOP(neto))}</td><td class="num">${esc(fmtCOP(conceptos))}</td><td class="num">${esc(
+          fmtCOP(neto + conceptos),
+        )}</td></tr>`;
+      })
+      .join("");
+    const conceptosHtml = Object.entries(totalesPorLab)
+      .flatMap(([labId, t]) => (conceptosPorLab[labId] ?? []).map((c) => ({ ...c, labNombre: t.nombre })))
       .map(
-        ([lab, t]) =>
-          `<tr><td>${esc(lab)}</td><td class="num">${esc(fmtCOP(t.facturado))}</td><td class="num">${esc(
-            fmtCOP(t.retencion),
-          )}</td><td class="num">${esc(fmtCOP(t.facturado - t.retencion))}</td></tr>`,
+        (c) =>
+          `<tr><td>${esc(c.labNombre)}</td><td>${esc(c.concepto)}</td><td class="num">${esc(fmtCOP(c.valor))}</td></tr>`,
       )
       .join("");
     const html = `<!doctype html>
@@ -1514,9 +1596,15 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
     )}</td><td class="num">${esc(fmtCOP(totalNeto))}</td></tr></tfoot>
   </table>
 
+  ${conceptosHtml ? `<h2>Ajustes administrativos</h2>
+  <table>
+    <thead><tr><th>Laboratorio</th><th>Concepto</th><th class="num">Valor</th></tr></thead>
+    <tbody>${conceptosHtml}</tbody>
+  </table>` : ""}
+
   <h2>Totales por laboratorio</h2>
   <table>
-    <thead><tr><th>Laboratorio</th><th class="num">Facturado</th><th class="num">Retención</th><th class="num">Neto a pagar</th></tr></thead>
+    <thead><tr><th>Laboratorio</th><th class="num">Facturado</th><th class="num">Retención</th><th class="num">Neto</th><th class="num">Ajustes</th><th class="num">Total a pagar</th></tr></thead>
     <tbody>${filasTotalLab}</tbody>
   </table>
 </body></html>`;
@@ -1610,26 +1698,86 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
         </table>
       </div>
       {Object.keys(totalesPorLab).length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-1 text-sm">
-          <div className="grid grid-cols-4 gap-2 text-xs font-semibold text-gray-400">
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3 text-sm">
+          <div className="grid grid-cols-5 gap-2 text-xs font-semibold text-gray-400">
             <span>Laboratorio</span>
             <span className="text-right">Facturado</span>
             <span className="text-right">Retención</span>
-            <span className="text-right">Neto a pagar</span>
+            <span className="text-right">Neto</span>
+            <span className="text-right">Total a pagar</span>
           </div>
-          {Object.entries(totalesPorLab).map(([lab, t]) => (
-            <div key={lab} className="grid grid-cols-4 gap-2">
-              <span className="text-gray-500">{lab}</span>
-              <span className="text-right">{fmtCOP(t.facturado)}</span>
-              <span className="text-right">{fmtCOP(t.retencion)}</span>
-              <span className="text-right font-medium">{fmtCOP(t.facturado - t.retencion)}</span>
-            </div>
-          ))}
-          <div className="grid grid-cols-4 gap-2 pt-2 mt-2 border-t border-gray-100 font-semibold">
+          {Object.entries(totalesPorLab).map(([labId, t]) => {
+            const neto = t.facturado - t.retencion;
+            const conceptos = conceptosPorLab[labId] ?? [];
+            const form = formConceptoLabDe(labId);
+            return (
+              <div key={labId} className="border-t border-gray-100 pt-2 first:border-t-0 first:pt-0">
+                <div className="grid grid-cols-5 gap-2 items-center">
+                  <span className="text-gray-500">{t.nombre}</span>
+                  <span className="text-right">{fmtCOP(t.facturado)}</span>
+                  <span className="text-right">{fmtCOP(t.retencion)}</span>
+                  <span className="text-right">{fmtCOP(neto)}</span>
+                  <span className="text-right font-medium">{fmtCOP(neto + totalConceptosDe(labId))}</span>
+                </div>
+                {conceptos.map((c) => (
+                  <div key={c.id} className="flex items-center justify-between pl-3 mt-1 text-xs text-gray-500">
+                    <span>{c.concepto}</span>
+                    <div className="flex items-center gap-2">
+                      <span className={c.valor >= 0 ? "text-emerald-700" : "text-red-600"}>
+                        {c.valor >= 0 ? "+" : ""}
+                        {fmtCOP(c.valor)}
+                      </span>
+                      <button onClick={() => eliminarConceptoLab(c.id)} className="text-gray-300 hover:text-red-500">
+                        <X size={12} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <button
+                  onClick={() => actualizarFormConceptoLab(labId, { abierto: !form.abierto })}
+                  className="text-xs font-medium text-amber-700 mt-1"
+                >
+                  {form.abierto ? "Cancelar" : "+ Agregar concepto administrativo"}
+                </button>
+                {form.abierto && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 mt-2 space-y-2">
+                    <p className="text-xs font-semibold text-amber-800">
+                      Ajuste a mano que se suma (o resta, con un valor negativo) al pago a este laboratorio — ej. una
+                      factura que ya se pagó doble en un mes anterior, un pago de más, o una retención que no era.
+                    </p>
+                    <div className="flex gap-2 flex-wrap">
+                      <input
+                        value={form.concepto}
+                        onChange={(e) => actualizarFormConceptoLab(labId, { concepto: e.target.value })}
+                        placeholder="Concepto — ej. Factura 8057 pagada doble en septiembre"
+                        className="flex-1 min-w-[220px] rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+                      />
+                      <input
+                        type="number"
+                        value={form.valor}
+                        onChange={(e) => actualizarFormConceptoLab(labId, { valor: e.target.value })}
+                        placeholder="Valor"
+                        className="w-36 rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+                      />
+                      <button
+                        onClick={() => agregarConceptoAdministrativoLab(labId)}
+                        disabled={form.guardando}
+                        className="rounded-lg bg-amber-700 text-white px-4 py-1.5 text-sm font-medium disabled:opacity-40"
+                      >
+                        {form.guardando ? "Agregando…" : "Agregar"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div className="grid grid-cols-5 gap-2 pt-2 mt-2 border-t border-gray-100 font-semibold">
             <span>Total</span>
             <span className="text-right">{fmtCOP(total)}</span>
             <span className="text-right">{fmtCOP(totalRetencion)}</span>
             <span className="text-right">{fmtCOP(totalNeto)}</span>
+            <span className="text-right">{fmtCOP(totalAPagar)}</span>
           </div>
         </div>
       )}
