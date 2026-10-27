@@ -46,6 +46,7 @@ export function CierreDiario() {
   const [gasto, setGasto] = useState("0");
   const [gastoConcepto, setGastoConcepto] = useState("");
   const [guardandoGasto, setGuardandoGasto] = useState(false);
+  const [gastoGuardadoOk, setGastoGuardadoOk] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
   const [subiendoTirilla, setSubiendoTirilla] = useState(false);
   // Evita que el efecto que guarda totales_por_medio (más abajo) escriba un
@@ -278,11 +279,17 @@ export function CierreDiario() {
 
   async function guardarManual() {
     setGuardandoGasto(true);
+    setGastoGuardadoOk(false);
     const { error } = await supabase.from("cierres_diarios").upsert(baseCierrePayload(), { onConflict: "sede_id,fecha" });
     setGuardandoGasto(false);
     if (error) {
       window.alert(`No se pudo guardar el gasto del día: ${error.message}`);
+      return;
     }
+    // Sin esto no había ninguna señal de que el guardado sí funcionó — el
+    // botón solo volvía a su color normal, igual que si hubiera fallado.
+    setGastoGuardadoOk(true);
+    setTimeout(() => setGastoGuardadoOk(false), 2500);
   }
 
   async function marcarConsignado(consignado: boolean) {
@@ -639,9 +646,11 @@ export function CierreDiario() {
             <button
               onClick={guardarManual}
               disabled={guardandoGasto}
-              className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+              className={`rounded-lg text-white px-4 py-2 text-sm font-medium disabled:opacity-40 ${
+                gastoGuardadoOk ? "bg-emerald-600" : "bg-[var(--acento)]"
+              }`}
             >
-              {guardandoGasto ? "Guardando…" : "Guardar"}
+              {guardandoGasto ? "Guardando…" : gastoGuardadoOk ? "✓ Guardado" : "Guardar"}
             </button>
           </div>
         </div>
