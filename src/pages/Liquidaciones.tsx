@@ -690,7 +690,11 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
       mes_liquidacion: periodo.inicio,
     });
     if (error) {
-      window.alert(`No se pudo agregar: ${error.message}`);
+      window.alert(
+        error.code === "23505"
+          ? `Ya existe un registro con el número "${form.facturaNumero.trim()}" para ese laboratorio — usa un consecutivo distinto.`
+          : `No se pudo agregar: ${error.message}`,
+      );
       actualizarFormAtrasado(doctoraId, { guardando: false });
       return;
     }
@@ -1058,8 +1062,9 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
             {formAtrasadoDe(f.doctora.id).abierto && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 mb-3 space-y-2">
                 <p className="text-xs font-semibold text-amber-800">
-                  Agregar aparato instalado en un período anterior — queda incluido en esta liquidación y en el pago
-                  al laboratorio de este mismo período.
+                  Agregar aparato instalado en un período anterior, o un ajuste administrativo (ej. una factura que
+                  quedó pagada doble en un mes anterior — corrígela acá con un valor negativo y su propio
+                  consecutivo). Queda incluido en esta liquidación y en el pago al laboratorio de este mismo período.
                 </p>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
@@ -1128,19 +1133,23 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Número de factura</label>
+                    <label className="block text-xs text-gray-500 mb-1">Número de factura (consecutivo administrativo)</label>
                     <input
                       value={formAtrasadoDe(f.doctora.id).facturaNumero}
                       onChange={(e) => actualizarFormAtrasado(f.doctora.id, { facturaNumero: e.target.value })}
+                      title="No puede repetirse con el mismo laboratorio — si ya existe un registro con este número para este laboratorio, el sistema lo rechaza."
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Valor de la factura</label>
+                    <label className="block text-xs text-gray-500 mb-1">
+                      Valor de la factura (negativo para corregir una ya pagada de más)
+                    </label>
                     <input
                       type="number"
                       value={formAtrasadoDe(f.doctora.id).valor}
                       onChange={(e) => actualizarFormAtrasado(f.doctora.id, { valor: e.target.value })}
+                      title="Usa un valor negativo para ajustar, ej. una factura que quedó pagada doble en un período anterior — descuéntasela acá a la doctora con su propio consecutivo, distinto al de la factura original."
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
                     />
                   </div>

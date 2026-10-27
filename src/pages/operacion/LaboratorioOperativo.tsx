@@ -250,8 +250,16 @@ export function LaboratorioOperativo() {
     if (esLaboratorioRuby(laboratorios, editLaboratorioId)) {
       cambios.fecha_cita_paciente = editSinCita ? null : editFechaCita || null;
     }
-    await supabase.from("lab_ordenes").update(cambios).eq("id", id);
+    const { error } = await supabase.from("lab_ordenes").update(cambios).eq("id", id);
     setGuardandoEdit(false);
+    if (error) {
+      window.alert(
+        error.code === "23505"
+          ? `Ya existe un registro con el número "${editFacturaNumero.trim()}" para ese laboratorio — usa un consecutivo distinto.`
+          : `No se pudo guardar: ${error.message}`,
+      );
+      return;
+    }
     setEditandoId(null);
     setMarcandoRecibido(false);
     setMarcandoEntregado(false);

@@ -112,7 +112,11 @@ export function LaboratorioExterno() {
       .eq("id", id);
     setGuardando(false);
     if (err) {
-      setError(err.message);
+      setError(
+        err.code === "23505"
+          ? `Ya existe un registro con el consecutivo "${editConsecutivo.trim()}" para este laboratorio — usa uno distinto.`
+          : err.message,
+      );
       return;
     }
     setEditandoId(null);
