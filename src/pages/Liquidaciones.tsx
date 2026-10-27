@@ -851,7 +851,12 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         const retencionVoluntaria = Number(f.retencionValor) || 0;
         const retencionDepuracion = Number(f.retencionDepuracionValor) || 0;
         const totalConceptos = f.detalleConceptos.reduce((a, c) => a + c.valor, 0);
-        const totalPago = bruto - deduccion - deduccionAtrasados + totalConceptos - retencionVoluntaria - retencionDepuracion;
+        // "Total a pagar" = el valor de la cuenta de cobro, antes de
+        // retenciones (esas son un descuento tributario de la doctora, no
+        // algo que se le pueda asignar a una sede en particular) — es la
+        // base correcta para repartir el gasto entre sedes más abajo.
+        const totalCuentaCobro = bruto - deduccion - deduccionAtrasados + totalConceptos;
+        const totalPago = totalCuentaCobro - retencionVoluntaria - retencionDepuracion;
         const ibc = totalPago * 0.4;
         return (
           <div key={f.doctora.id} className="bg-white rounded-xl border border-gray-200 p-4">
@@ -923,7 +928,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
               ))}
               <div className="flex items-center justify-between pt-1.5 border-t border-gray-200 font-bold text-base text-tinta">
                 <span>Total a pagar (valor de la cuenta de cobro)</span>
-                <span>{fmtCOP(bruto - deduccion - deduccionAtrasados + totalConceptos)}</span>
+                <span>{fmtCOP(totalCuentaCobro)}</span>
               </div>
             </div>
             <div className="flex items-end gap-4 flex-wrap mb-3">
@@ -980,7 +985,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                         <span className="text-gray-500">
                           {s.sedeNombre} <span className="text-gray-400">({(pctSede * 100).toFixed(1)}%)</span>
                         </span>
-                        <span className="font-medium">{fmtCOP(totalPago * pctSede)}</span>
+                        <span className="font-medium">{fmtCOP(totalCuentaCobro * pctSede)}</span>
                       </div>
                     );
                   })}
