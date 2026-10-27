@@ -929,19 +929,26 @@ function ModalAtencion({
                 </button>
               </div>
               <div className="flex flex-wrap gap-x-3 gap-y-1">
-                {(
-                  [
-                    ["Aparato", envioAparato, setEnvioAparato],
-                    ["Modelo superior", envioModeloSuperior, setEnvioModeloSuperior],
-                    ["Modelo inferior", envioModeloInferior, setEnvioModeloInferior],
-                    ["Registro de mordida", envioRegistroMordida, setEnvioRegistroMordida],
-                  ] as const
-                ).map(([label, checked, setChecked]) => (
-                  <label key={label} className="flex items-center gap-1.5 text-xs text-gray-600">
-                    <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
-                    {label}
-                  </label>
-                ))}
+                <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                  <input type="checkbox" checked={envioAparato} onChange={(e) => setEnvioAparato(e.target.checked)} />
+                  Aparato
+                </label>
+                {!(envioModeloSuperior && envioModeloInferior) && (
+                  <>
+                    <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                      <input type="checkbox" checked={envioModeloSuperior} onChange={(e) => setEnvioModeloSuperior(e.target.checked)} />
+                      Modelo superior
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                      <input type="checkbox" checked={envioModeloInferior} onChange={(e) => setEnvioModeloInferior(e.target.checked)} />
+                      Modelo inferior
+                    </label>
+                  </>
+                )}
+                <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                  <input type="checkbox" checked={envioRegistroMordida} onChange={(e) => setEnvioRegistroMordida(e.target.checked)} />
+                  Registro de mordida
+                </label>
                 <label className="flex items-center gap-1.5 text-xs text-gray-600">
                   <input
                     type="checkbox"
@@ -1623,19 +1630,26 @@ function ModalEditarValor({
                     </button>
                   </div>
                   <div className="flex flex-wrap gap-x-3 gap-y-1">
-                    {(
-                      [
-                        ["Aparato", envioAparato, setEnvioAparato],
-                        ["Modelo superior", envioModeloSuperior, setEnvioModeloSuperior],
-                        ["Modelo inferior", envioModeloInferior, setEnvioModeloInferior],
-                        ["Registro de mordida", envioRegistroMordida, setEnvioRegistroMordida],
-                      ] as const
-                    ).map(([label, checked, setChecked]) => (
-                      <label key={label} className="flex items-center gap-1.5 text-xs text-gray-600">
-                        <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
-                        {label}
-                      </label>
-                    ))}
+                    <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                      <input type="checkbox" checked={envioAparato} onChange={(e) => setEnvioAparato(e.target.checked)} />
+                      Aparato
+                    </label>
+                    {!(envioModeloSuperior && envioModeloInferior) && (
+                      <>
+                        <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                          <input type="checkbox" checked={envioModeloSuperior} onChange={(e) => setEnvioModeloSuperior(e.target.checked)} />
+                          Modelo superior
+                        </label>
+                        <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                          <input type="checkbox" checked={envioModeloInferior} onChange={(e) => setEnvioModeloInferior(e.target.checked)} />
+                          Modelo inferior
+                        </label>
+                      </>
+                    )}
+                    <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                      <input type="checkbox" checked={envioRegistroMordida} onChange={(e) => setEnvioRegistroMordida(e.target.checked)} />
+                      Registro de mordida
+                    </label>
                     <label className="flex items-center gap-1.5 text-xs text-gray-600">
                       <input
                         type="checkbox"

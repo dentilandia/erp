@@ -45,6 +45,7 @@ export function CierreDiario() {
   const [cierre, setCierre] = useState<CierreDiarioRow | null>(null);
   const [gasto, setGasto] = useState("0");
   const [gastoConcepto, setGastoConcepto] = useState("");
+  const [guardandoGasto, setGuardandoGasto] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
   const [subiendoTirilla, setSubiendoTirilla] = useState(false);
   // Evita que el efecto que guarda totales_por_medio (más abajo) escriba un
@@ -276,7 +277,9 @@ export function CierreDiario() {
   }
 
   async function guardarManual() {
+    setGuardandoGasto(true);
     await supabase.from("cierres_diarios").upsert(baseCierrePayload(), { onConflict: "sede_id,fecha" });
+    setGuardandoGasto(false);
   }
 
   async function marcarConsignado(consignado: boolean) {
@@ -630,6 +633,13 @@ export function CierreDiario() {
               placeholder="Concepto — a qué corresponde este gasto"
               className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm"
             />
+            <button
+              onClick={guardarManual}
+              disabled={guardandoGasto}
+              className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+            >
+              {guardandoGasto ? "Guardando…" : "Guardar"}
+            </button>
           </div>
         </div>
         <div className="flex items-center justify-between pt-2 border-t border-gray-100">
