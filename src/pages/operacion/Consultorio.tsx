@@ -781,20 +781,35 @@ function ModalAtencion({
     const lab = laboratorios.find((l) => l.id === laboratorioId);
     const doctora = doctoras.find((d) => d.id === envioDoctoraId);
     if (!lab || !doctora) return;
-    setEnviosLab((prev) => [
-      ...prev,
-      {
-        laboratorioId,
-        laboratorioNombre: lab.nombre,
-        tipoServicio,
-        doctoraId: doctora.id,
-        doctoraNombre: doctora.nombre,
-        incluyeAparato: envioAparato,
-        incluyeModeloSuperior: envioModeloSuperior,
-        incluyeModeloInferior: envioModeloInferior,
-        incluyeRegistroMordida: envioRegistroMordida,
-      },
-    ]);
+    const nuevo = {
+      laboratorioId,
+      laboratorioNombre: lab.nombre,
+      tipoServicio,
+      doctoraId: doctora.id,
+      doctoraNombre: doctora.nombre,
+      incluyeAparato: envioAparato,
+      incluyeModeloSuperior: envioModeloSuperior,
+      incluyeModeloInferior: envioModeloInferior,
+      incluyeRegistroMordida: envioRegistroMordida,
+    };
+    setEnviosLab((prev) => {
+      // Un doble clic en "Agregar" (o un doble toque en celular) metía el
+      // mismo envío dos veces en la lista, y "Guardar" creaba dos órdenes de
+      // laboratorio idénticas — el laboratorio quedaba duplicado en la
+      // liquidación de la doctora sin que nadie lo notara hasta el PDF
+      // final. Si ya está exactamente lo mismo en la lista, no se repite.
+      const yaExiste = prev.some(
+        (e) =>
+          e.laboratorioId === nuevo.laboratorioId &&
+          e.tipoServicio === nuevo.tipoServicio &&
+          e.doctoraId === nuevo.doctoraId &&
+          e.incluyeAparato === nuevo.incluyeAparato &&
+          e.incluyeModeloSuperior === nuevo.incluyeModeloSuperior &&
+          e.incluyeModeloInferior === nuevo.incluyeModeloInferior &&
+          e.incluyeRegistroMordida === nuevo.incluyeRegistroMordida,
+      );
+      return yaExiste ? prev : [...prev, nuevo];
+    });
     setEnvioAparato(false);
     setEnvioModeloSuperior(false);
     setEnvioModeloInferior(false);
