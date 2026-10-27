@@ -1524,10 +1524,14 @@ function ModalCobro({
   function agregarConcepto() {
     const valor = Number(conceptoValor);
     if (!valor) return;
-    setCargos((prev) => [
-      ...prev,
-      { categoria: "concepto_administrativo", concepto: conceptoTipo, valor, pagos: [{ medio: "efectivo", valor }] },
-    ]);
+    setCargos((prev) => {
+      // Un doble clic en "Agregar" metía el mismo concepto dos veces en la
+      // lista, y "Confirmar" lo cobraba dos veces al paciente. Si ya está
+      // exactamente lo mismo (sin guardar todavía) en la lista, no se repite.
+      const yaExiste = prev.some((c) => !c.id && c.categoria === "concepto_administrativo" && c.concepto === conceptoTipo && c.valor === valor);
+      if (yaExiste) return prev;
+      return [...prev, { categoria: "concepto_administrativo", concepto: conceptoTipo, valor, pagos: [{ medio: "efectivo" as MedioPago, valor }] }];
+    });
     setConceptoValor("");
   }
 
@@ -1543,7 +1547,14 @@ function ModalCobro({
   function agregarExcedente() {
     const valor = Number(excedenteValor);
     if (!valor) return;
-    setExcedentes((prev) => [...prev, { medio: excedenteMedio, valor, motivo: excedenteMotivo }]);
+    const nuevo = { medio: excedenteMedio, valor, motivo: excedenteMotivo };
+    setExcedentes((prev) => {
+      // Un doble clic en "Agregar" metía el mismo excedente dos veces en la
+      // lista, y "Confirmar" creaba dos saldos a favor idénticos. Si ya está
+      // exactamente lo mismo en la lista, no se repite.
+      const yaExiste = prev.some((e) => e.medio === nuevo.medio && e.valor === nuevo.valor && e.motivo === nuevo.motivo);
+      return yaExiste ? prev : [...prev, nuevo];
+    });
     setExcedenteValor("");
   }
 

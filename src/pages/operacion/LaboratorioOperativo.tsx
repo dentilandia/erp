@@ -121,7 +121,14 @@ export function LaboratorioOperativo() {
   function agregarEnvioLab() {
     const lab = laboratorios.find((l) => l.id === nuevoLaboratorioId);
     if (!lab) return;
-    setEnviosLab((prev) => [...prev, { laboratorioId: nuevoLaboratorioId, laboratorioNombre: lab.nombre, tipoServicio: nuevoTipoServicio }]);
+    const nuevo = { laboratorioId: nuevoLaboratorioId, laboratorioNombre: lab.nombre, tipoServicio: nuevoTipoServicio };
+    setEnviosLab((prev) => {
+      // Un doble clic en "Agregar" metía el mismo envío dos veces en la
+      // lista, y "Enviar a laboratorio" creaba dos órdenes idénticas. Si ya
+      // está exactamente lo mismo en la lista, no se repite.
+      const yaExiste = prev.some((e) => e.laboratorioId === nuevo.laboratorioId && e.tipoServicio === nuevo.tipoServicio);
+      return yaExiste ? prev : [...prev, nuevo];
+    });
   }
 
   function quitarEnvioLab(idx: number) {

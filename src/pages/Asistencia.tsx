@@ -1184,6 +1184,7 @@ export function Asistencia() {
   async function agregarMarcaPersona(tipo: TipoAsistencia) {
     const persona = personas.find((p) => p.id === personaAdminId);
     if (!persona) return;
+    setGuardandoAdmin(true);
     setErrorAdmin(null);
     const marcadoEn = new Date(`${fechaAdmin}T${horaNueva[tipo]}:00-05:00`).toISOString();
     const { error } = await supabase.from("asistencia_registros").insert({
@@ -1192,6 +1193,7 @@ export function Asistencia() {
       tipo,
       marcado_en: marcadoEn,
     });
+    setGuardandoAdmin(false);
     if (error) {
       setErrorAdmin(error.message);
       return;
@@ -2385,7 +2387,8 @@ export function Asistencia() {
                       />
                       <button
                         onClick={() => agregarMarcaPersona(t.value)}
-                        className="text-xs font-medium px-2.5 py-1.5 rounded-md bg-[var(--acento)] text-white"
+                        disabled={guardandoAdmin}
+                        className="text-xs font-medium px-2.5 py-1.5 rounded-md bg-[var(--acento)] text-white disabled:opacity-40"
                       >
                         Agregar
                       </button>
