@@ -449,8 +449,14 @@ export function CierreDiario() {
             </tfoot>
           </table>
           ${otrosHtml}
+          ${Number(gasto) > 0 ? `<h3>Gastos del día</h3>` : ""}
           <div class="resumen">
-            <p>Gasto del día: ${fmtCOP(Number(gasto) || 0)}${gastoConcepto.trim() ? ` — ${gastoConcepto.trim()}` : ""}</p>
+            ${
+              Number(gasto) > 0
+                ? `<p>Efectivo antes de gastos: ${fmtCOP(totalEfectivoCierre + Number(gasto))}</p>
+                   <p>Gasto del día${gastoConcepto.trim() ? ` — ${gastoConcepto.trim()}` : ""}: -${fmtCOP(Number(gasto))}</p>`
+                : ""
+            }
             <p><strong>Total efectivo (Cierre): ${fmtCOP(totalEfectivoCierre)}</strong></p>
             <p>Día consignado: ${cierre?.consignado ? "Sí" : "No"}</p>
             ${!sedeActiva.nombre.includes("Fabricato") ? `<p>Tirilla datáfono: ${cierre?.tirilla_datafono ? "Sí" : "No"}</p>` : ""}
@@ -627,7 +633,8 @@ export function CierreDiario() {
 
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
         <div>
-          <label className="block text-sm font-medium mb-1">Gasto del día</label>
+          <h3 className="text-sm font-semibold text-gray-500 mb-1">Gasto del día</h3>
+          <p className="text-xs text-gray-400 mb-2">Se resta del total efectivo del cierre.</p>
           <div className="flex gap-2">
             <input
               type="number"
@@ -654,7 +661,19 @@ export function CierreDiario() {
             </button>
           </div>
         </div>
-        <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+        {Number(gasto) > 0 && (
+          <div className="flex items-center justify-between pt-2 border-t border-gray-100 text-sm">
+            <span className="text-gray-500">Efectivo antes de gastos</span>
+            <span>{fmtCOP(totalEfectivoCierre + Number(gasto))}</span>
+          </div>
+        )}
+        {Number(gasto) > 0 && (
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-gray-500">Gasto del día{gastoConcepto.trim() ? ` — ${gastoConcepto.trim()}` : ""}</span>
+            <span className="text-red-600">-{fmtCOP(Number(gasto))}</span>
+          </div>
+        )}
+        <div className={`flex items-center justify-between ${Number(gasto) > 0 ? "" : "pt-2 border-t border-gray-100"}`}>
           <span className="text-sm text-gray-500">
             Total efectivo (Cierre)
             {cajeraFiltro && <span className="block text-xs text-gray-400">Del día completo — no cambia con el filtro de arriba.</span>}
