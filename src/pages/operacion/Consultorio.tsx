@@ -1,9 +1,28 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { CheckCircle2, X, Search, Plus, Paperclip } from "lucide-react";
+import { CheckCircle2, Check, X, Search, Plus, Paperclip } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
-import { TIPOS_INSUMO_CONSULTA, TIPOS_SERVICIO_LAB, type Sede, type Laboratorio, type Doctora } from "../../lib/types";
+import {
+  TIPOS_INSUMO_CONSULTA,
+  TIPOS_SERVICIO_LAB,
+  MEDIOS_PAGO,
+  type Sede,
+  type Laboratorio,
+  type Doctora,
+  type Paciente,
+  type MedioPago,
+} from "../../lib/types";
+import { PacienteAutocomplete } from "../../components/PacienteAutocomplete";
+
+// Lo que puede haber dado origen a un saldo a favor — los mismos medios de
+// pago de siempre, menos "saldo_favor" (no tiene sentido como origen, sería
+// circular), más "ajuste_manual" (saldos que Tomás carga a mano desde
+// Parámetros, sin que venga de un pago real).
+const MEDIOS_ORIGEN_SALDO: { value: string; label: string }[] = [
+  ...MEDIOS_PAGO.filter((m) => m.value !== "saldo_favor"),
+  { value: "ajuste_manual", label: "Ajuste manual" },
+];
 
 // Comprobante de datáfono: por ahora solo se pide en Las Américas.
 const SEDE_LAS_AMERICAS_ID = "37af479b-777c-4d32-bce1-bc0becb7c3df";
@@ -403,6 +422,8 @@ export function Consultorio() {
         )}
       </section>
 
+      <PanelCorregirDoctoraYPago doctoras={doctoras} />
+
       {atendiendoId && (
         <ModalAtencion
           visitaId={atendiendoId}
@@ -427,6 +448,247 @@ export function Consultorio() {
         />
       )}
     </div>
+  );
+}
+
+interface VisitaEditable {
+  id: string;
+  fecha: string;
+  sedeNombre: string;
+  doctoraId: string;
+  doctoraIdEdit: string;
+}
+
+interface SaldoEditable {
+  id: string;
+  fecha: string;
+  valor: number;
+  valorDisponible: number;
+  medioOrigen: string;
+  medioOrigenEdit: string;
+}
+
+/** Corrige, para un paciente puntual, quién lo atendió en una visita ya
+ *  guardada (ej. se registró con la doctora equivocada) y con qué medio de
+ *  pago quedó un saldo a favor (ej. se marcó "efectivo" pero fue tarjeta
+ *  débito) — errores de digitación que antes solo se podían corregir
+ *  directo en la base de datos. Al cambiar la doctora de una visita, se
+ *  actualiza también el cargo asociado — la liquidación lee cargos.doctora_id,
+ *  no visitas.doctora_id, así que corregir solo la visita no bastaría. */
+function PanelCorregirDoctoraYPago({ doctoras }: { doctoras: Doctora[] }) {
+  const [abierto, setAbierto] = useState(false);
+  const [paciente, setPaciente] = useState<Paciente | null>(null);
+  const [visitas, setVisitas] = useState<VisitaEditable[]>([]);
+  const [saldos, setSaldos] = useState<SaldoEditable[]>([]);
+  const [cargando, setCargando] = useState(false);
+  const [guardandoId, setGuardandoId] = useState<string | null>(null);
+  const [okId, setOkId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function limpiar() {
+    setPaciente(null);
+    setVisitas([]);
+    setSaldos([]);
+    setError(null);
+  }
+
+  async function cargarPaciente(p: Paciente) {
+    setPaciente(p);
+    setError(null);
+    setCargando(true);
+    const { data: visitasData } = await supabase
+      .from("visitas")
+      .select("id, fecha, doctora_id, sedes(nombre)")
+      .eq("paciente_id", p.id)
+      .order("fecha", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(10);
+    setVisitas(
+      ((visitasData as unknown as { id: string; fecha: string; doctora_id: string; sedes: { nombre: string } | null }[]) ?? []).map(
+        (v) => ({ id: v.id, fecha: v.fecha, sedeNombre: v.sedes?.nombre ?? "—", doctoraId: v.doctora_id, doctoraIdEdit: v.doctora_id }),
+      ),
+    );
+    const { data: saldosData } = await supabase
+      .from("saldos_favor")
+      .select("id, fecha, valor, valor_disponible, medio_origen")
+      .eq("paciente_id", p.id)
+      .order("fecha", { ascending: false })
+      .limit(10);
+    setSaldos(
+      ((saldosData as unknown as { id: string; fecha: string; valor: number; valor_disponible: number; medio_origen: string }[]) ?? []).map(
+        (s) => ({
+          id: s.id,
+          fecha: s.fecha,
+          valor: Number(s.valor),
+          valorDisponible: Number(s.valor_disponible),
+          medioOrigen: s.medio_origen,
+          medioOrigenEdit: s.medio_origen,
+        }),
+      ),
+    );
+    setCargando(false);
+  }
+
+  async function guardarVisita(v: VisitaEditable) {
+    if (v.doctoraIdEdit === v.doctoraId) return;
+    setGuardandoId(v.id);
+    setError(null);
+    const { error: errVisita } = await supabase.from("visitas").update({ doctora_id: v.doctoraIdEdit }).eq("id", v.id);
+    if (errVisita) {
+      setGuardandoId(null);
+      setError(errVisita.message);
+      return;
+    }
+    const { error: errCargos } = await supabase.from("cargos").update({ doctora_id: v.doctoraIdEdit }).eq("visita_id", v.id);
+    setGuardandoId(null);
+    if (errCargos) {
+      setError(errCargos.message);
+      return;
+    }
+    setVisitas((prev) => prev.map((x) => (x.id === v.id ? { ...x, doctoraId: v.doctoraIdEdit } : x)));
+    setOkId(v.id);
+    setTimeout(() => setOkId((prev) => (prev === v.id ? null : prev)), 1500);
+  }
+
+  async function guardarSaldo(s: SaldoEditable) {
+    if (s.medioOrigenEdit === s.medioOrigen) return;
+    setGuardandoId(s.id);
+    setError(null);
+    const { error: err } = await supabase.from("saldos_favor").update({ medio_origen: s.medioOrigenEdit }).eq("id", s.id);
+    setGuardandoId(null);
+    if (err) {
+      setError(err.message);
+      return;
+    }
+    setSaldos((prev) => prev.map((x) => (x.id === s.id ? { ...x, medioOrigen: s.medioOrigenEdit } : x)));
+    setOkId(s.id);
+    setTimeout(() => setOkId((prev) => (prev === s.id ? null : prev)), 1500);
+  }
+
+  return (
+    <section className="bg-white rounded-xl border border-gray-200 p-4">
+      {!abierto ? (
+        <button
+          onClick={() => setAbierto(true)}
+          className="flex items-center gap-2 text-sm font-medium text-[var(--acento)]"
+        >
+          <Plus size={16} /> Corregir doctora o método de pago
+        </button>
+      ) : (
+        <>
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h3 className="font-semibold text-tinta">Corregir doctora o método de pago</h3>
+            <button
+              onClick={() => {
+                setAbierto(false);
+                limpiar();
+              }}
+            >
+              <X size={16} className="text-gray-400" />
+            </button>
+          </div>
+          <p className="text-xs text-gray-400 mb-2">
+            Para un dato que quedó mal registrado (la doctora de una visita, o con qué se pagó un saldo a favor) —
+            busca al paciente para ver y corregir sus últimos 10 registros de cada uno.
+          </p>
+          {paciente ? (
+            <div className="flex items-center justify-between rounded-lg border border-[var(--acento)] bg-[var(--acento)]/5 px-3 py-2 text-sm mb-3">
+              <span>{paciente.nombre}</span>
+              <button onClick={limpiar} className="text-gray-400">
+                ×
+              </button>
+            </div>
+          ) : (
+            <PacienteAutocomplete onSelect={cargarPaciente} placeholder="Buscar paciente…" />
+          )}
+          {error && <p className="text-sm text-red-600 mb-2">{error}</p>}
+          {cargando && <p className="text-sm text-gray-400">Cargando…</p>}
+          {paciente && !cargando && (
+            <div className="space-y-4">
+              <div>
+                <p className="text-xs font-medium text-gray-500 mb-1.5">Últimas visitas — doctora que atendió</p>
+                <div className="space-y-1.5">
+                  {visitas.map((v) => (
+                    <div
+                      key={v.id}
+                      className="flex items-center justify-between gap-2 text-sm flex-wrap rounded-lg border border-gray-200 px-3 py-2"
+                    >
+                      <span className="text-gray-500">
+                        {v.fecha} · {v.sedeNombre}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={v.doctoraIdEdit}
+                          onChange={(e) =>
+                            setVisitas((prev) => prev.map((x) => (x.id === v.id ? { ...x, doctoraIdEdit: e.target.value } : x)))
+                          }
+                          className="rounded-md border border-gray-300 px-2 py-1 text-xs"
+                        >
+                          {doctoras.map((d) => (
+                            <option key={d.id} value={d.id}>
+                              {d.nombre}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => guardarVisita(v)}
+                          disabled={v.doctoraIdEdit === v.doctoraId || guardandoId === v.id}
+                          className="rounded-md bg-[var(--acento)] text-white px-3 py-1.5 text-xs font-medium disabled:opacity-40"
+                        >
+                          {okId === v.id ? <Check size={14} /> : guardandoId === v.id ? "Guardando…" : "Guardar"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {visitas.length === 0 && <p className="text-sm text-gray-400">Sin visitas registradas.</p>}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-gray-500 mb-1.5">Saldos a favor — con qué se pagó</p>
+                <div className="space-y-1.5">
+                  {saldos.map((s) => (
+                    <div
+                      key={s.id}
+                      className="flex items-center justify-between gap-2 text-sm flex-wrap rounded-lg border border-gray-200 px-3 py-2"
+                    >
+                      <span className="text-gray-500">
+                        {s.fecha} · {fmtCOP(s.valor)}
+                        {s.valorDisponible < s.valor && (
+                          <span className="text-gray-400"> (disp. {fmtCOP(s.valorDisponible)})</span>
+                        )}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={s.medioOrigenEdit}
+                          onChange={(e) =>
+                            setSaldos((prev) => prev.map((x) => (x.id === s.id ? { ...x, medioOrigenEdit: e.target.value as MedioPago } : x)))
+                          }
+                          className="rounded-md border border-gray-300 px-2 py-1 text-xs"
+                        >
+                          {MEDIOS_ORIGEN_SALDO.map((m) => (
+                            <option key={m.value} value={m.value}>
+                              {m.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => guardarSaldo(s)}
+                          disabled={s.medioOrigenEdit === s.medioOrigen || guardandoId === s.id}
+                          className="rounded-md bg-[var(--acento)] text-white px-3 py-1.5 text-xs font-medium disabled:opacity-40"
+                        >
+                          {okId === s.id ? <Check size={14} /> : guardandoId === s.id ? "Guardando…" : "Guardar"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {saldos.length === 0 && <p className="text-sm text-gray-400">Sin saldos a favor registrados.</p>}
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
