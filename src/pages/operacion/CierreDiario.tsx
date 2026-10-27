@@ -278,8 +278,11 @@ export function CierreDiario() {
 
   async function guardarManual() {
     setGuardandoGasto(true);
-    await supabase.from("cierres_diarios").upsert(baseCierrePayload(), { onConflict: "sede_id,fecha" });
+    const { error } = await supabase.from("cierres_diarios").upsert(baseCierrePayload(), { onConflict: "sede_id,fecha" });
     setGuardandoGasto(false);
+    if (error) {
+      window.alert(`No se pudo guardar el gasto del día: ${error.message}`);
+    }
   }
 
   async function marcarConsignado(consignado: boolean) {
