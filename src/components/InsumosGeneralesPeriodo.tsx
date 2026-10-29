@@ -57,6 +57,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   // igual a lo que administración dijo que envió, editable si no coincide.
   const [cantidadRecibidaEdit, setCantidadRecibidaEdit] = useState<Record<string, string>>({});
   const [diferidos, setDiferidos] = useState<DiferidoConCatalogo[]>([]);
+  const [solicitudesCajaMenorNuevas, setSolicitudesCajaMenorNuevas] = useState<SolicitudConCatalogo[]>([]);
   const [salidasRegistradas, setSalidasRegistradas] = useState<SalidaConCatalogo[]>([]);
   const [cargando, setCargando] = useState(true);
   const [categoriasAbiertas, setCategoriasAbiertas] = useState<Record<string, boolean>>({});
@@ -151,6 +152,25 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     setDiferidos((prev) => prev.filter((d) => d.id !== id));
   }
 
+  async function cargarSolicitudesCajaMenorNuevas() {
+    const { data } = await supabase
+      .from("insumos_generales_solicitudes")
+      .select("*, insumos_generales_catalogo(nombre)")
+      .eq("sede_id", sedeId)
+      .eq("estado", "caja_menor")
+      .eq("visto", false)
+      .order("entregada_en", { ascending: false });
+    setSolicitudesCajaMenorNuevas((data as unknown as SolicitudConCatalogo[]) ?? []);
+  }
+
+  // Mismo patrón que marcarDiferidoVisto — no suma a nada, solo quita el
+  // aviso grande de arriba una vez la sede ya lo leyó. Sigue viéndose abajo
+  // en "Últimas solicitudes" con su etiqueta, para no perder el rastro.
+  async function marcarCajaMenorVisto(id: string) {
+    await supabase.from("insumos_generales_solicitudes").update({ visto: true }).eq("id", id);
+    setSolicitudesCajaMenorNuevas((prev) => prev.filter((s) => s.id !== id));
+  }
+
   // Cada línea se confirma por separado — no un solo botón para todas — para
   // que la sede pueda decir exactamente cuál sí y cuál no le llegó, y en qué
   // cantidad (puede ser menos de lo que administración registró que envió).
@@ -220,6 +240,7 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
     cargarDiferidos();
     cargarSalidas();
     cargarSolicitudes();
+    cargarSolicitudesCajaMenorNuevas();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sedeId]);
 
@@ -469,6 +490,28 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                 </div>
               );
             })}
+          </div>
+        </section>
+      )}
+
+      {solicitudesCajaMenorNuevas.length > 0 && (
+        <section className="rounded-xl border-2 border-indigo-300 bg-indigo-50 p-4">
+          <p className="font-semibold text-indigo-800 mb-2">💳 Esto lo compra la sede con caja menor</p>
+          <p className="text-xs text-indigo-600 mb-2">Administración no lo va a entregar — bodega no lo tiene disponible.</p>
+          <div className="space-y-1.5">
+            {solicitudesCajaMenorNuevas.map((s) => (
+              <div key={s.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
+                <p className="text-indigo-700">
+                  {s.insumos_generales_catalogo?.nombre ?? "—"}: <span className="font-semibold">{s.cantidad}</span>
+                </p>
+                <button
+                  onClick={() => marcarCajaMenorVisto(s.id)}
+                  className="shrink-0 rounded-lg bg-indigo-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-indigo-700"
+                >
+                  Entendido
+                </button>
+              </div>
+            ))}
           </div>
         </section>
       )}

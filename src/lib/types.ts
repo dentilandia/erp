@@ -373,6 +373,7 @@ export interface InsumoGeneralSolicitud {
   created_by: string | null;
   created_at: string;
   entregada_en: string | null;
+  visto: boolean;
 }
 
 /** Aviso de que el resto de un ítem pedido (lo que administración no entregó
