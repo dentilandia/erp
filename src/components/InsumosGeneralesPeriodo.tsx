@@ -187,13 +187,29 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
   }
 
   async function cargarSolicitudes() {
-    const { data } = await supabase
-      .from("insumos_generales_solicitudes")
-      .select("*, insumos_generales_catalogo(nombre)")
-      .eq("sede_id", sedeId)
-      .order("created_at", { ascending: false })
-      .limit(10);
-    setSolicitudes((data as unknown as SolicitudConCatalogo[]) ?? []);
+    // Sin límite para lo que todavía necesita atención (pendiente o a cargo
+    // de caja menor) — una solicitud vieja (ej. migrada de un período
+    // pasado) no debe desaparecer de esta lista solo por tener muchas más
+    // recientes encima. Las entregadas sí se recortan, son solo historial.
+    const [{ data: activas }, { data: entregadas }] = await Promise.all([
+      supabase
+        .from("insumos_generales_solicitudes")
+        .select("*, insumos_generales_catalogo(nombre)")
+        .eq("sede_id", sedeId)
+        .in("estado", ["pendiente", "caja_menor"])
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("insumos_generales_solicitudes")
+        .select("*, insumos_generales_catalogo(nombre)")
+        .eq("sede_id", sedeId)
+        .eq("estado", "entregada")
+        .order("entregada_en", { ascending: false })
+        .limit(10),
+    ]);
+    const lista = [...((activas as unknown as SolicitudConCatalogo[]) ?? []), ...((entregadas as unknown as SolicitudConCatalogo[]) ?? [])].sort(
+      (a, b) => new Date(b.entregada_en ?? b.created_at).getTime() - new Date(a.entregada_en ?? a.created_at).getTime(),
+    );
+    setSolicitudes(lista);
   }
 
   useEffect(() => {
