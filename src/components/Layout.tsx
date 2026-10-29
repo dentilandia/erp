@@ -20,6 +20,7 @@ import {
   PiggyBank,
   Warehouse,
   Clock,
+  Headset,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -34,6 +35,7 @@ const TABS = [
   { to: "/operacion/comprobantes", label: "Financiación", icon: Paperclip, restringidoEnClinica: true },
   { to: "/operacion/historial", label: "Historial", icon: History },
   { to: "/operacion/caja-menor", label: "Caja menor", icon: PiggyBank, soloCajaMenor: true, restringidoEnClinica: true },
+  { to: "/operacion/servicio-al-cliente", label: "Servicio al cliente", icon: Headset, restringidoEnClinica: true },
 ];
 
 const SECCIONES = [

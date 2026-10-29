@@ -626,3 +626,39 @@ export interface CierreCajaSemana {
   error_ia: string | null;
   created_at: string;
 }
+
+/** Servicio al cliente > Recuperación de pacientes — paciente que asistió en
+ *  algún momento de 2026 y hoy no tiene cita programada, candidato a que
+ *  alguien de recepción lo retome por WhatsApp. Importado desde la agenda
+ *  histórica; el seguimiento de cada intento de contacto va en
+ *  RecuperacionSeguimiento, no acá (acá solo queda el último estado conocido
+ *  de la cita original). */
+export interface RecuperacionPaciente {
+  id: string;
+  documento: string | null;
+  nombre: string;
+  celular: string | null;
+  doctora_id: string | null;
+  doctora_nombre_original: string | null;
+  fecha_ultima_cita: string | null;
+  motivo_ultima_cita: string | null;
+  estado_ultima_cita: string | null;
+  estado_recuperacion: "pendiente" | "en_proceso" | "recuperado" | "descartado";
+  paciente_id: string | null;
+  created_at: string;
+}
+
+/** Un intento de contacto (retoma) sobre un RecuperacionPaciente — puede haber
+ *  varios en el tiempo hasta que se recupera o se descarta. registrado_por se
+ *  llena solo con el perfil de quien está logueado, nunca a mano. */
+export interface RecuperacionSeguimiento {
+  id: string;
+  recuperacion_id: string;
+  fecha_contacto: string;
+  canal: string;
+  observacion: string | null;
+  agendo_cita: boolean;
+  registrado_por: string | null;
+  registrado_por_nombre: string | null;
+  created_at: string;
+}

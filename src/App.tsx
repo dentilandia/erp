@@ -14,6 +14,7 @@ import { Inventario } from "./pages/operacion/Inventario";
 import { Historial } from "./pages/operacion/Historial";
 import { ComprobantesFinanciacion } from "./pages/operacion/ComprobantesFinanciacion";
 import { CajaMenor } from "./pages/operacion/CajaMenor";
+import { ServicioAlCliente } from "./pages/operacion/ServicioAlCliente";
 import { Liquidaciones } from "./pages/Liquidaciones";
 import { Financiacion } from "./pages/Financiacion";
 import { CierreCaja } from "./pages/CierreCaja";
@@ -280,6 +281,7 @@ function App() {
               <Route path="operacion/historial" element={<Historial />} />
               <Route path="operacion/comprobantes" element={<BloqueadoEnClinica><ComprobantesFinanciacion /></BloqueadoEnClinica>} />
               <Route path="operacion/caja-menor" element={<BloqueadoEnClinica><SoloCajaMenor><CajaMenor /></SoloCajaMenor></BloqueadoEnClinica>} />
+              <Route path="operacion/servicio-al-cliente" element={<BloqueadoEnClinica><ServicioAlCliente /></BloqueadoEnClinica>} />
               <Route path="administracion/liquidaciones" element={<SoloAdmin><Liquidaciones /></SoloAdmin>} />
               <Route path="administracion/financiacion" element={<SoloAdmin><Financiacion /></SoloAdmin>} />
               <Route path="administracion/cierre-caja" element={<SoloAdmin><CierreCaja /></SoloAdmin>} />
