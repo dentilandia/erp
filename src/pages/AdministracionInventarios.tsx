@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Check, Bell, Clock, ChevronDown, ChevronRight, Download } from "lucide-react";
+import { Plus, Check, Bell, Clock, ChevronDown, ChevronRight, Download, Wallet } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
 import { useAuth } from "../auth/AuthContext";
@@ -349,6 +349,25 @@ export function AdministracionInventarios() {
     if (sedeIdHistorial === "todas" || sedeIdHistorial === s.sede_id) cargarHistorial();
   }
 
+  // No sale de la bodega administrativa en absoluto — queda a cargo de la
+  // propia sede, que la compra con su caja menor. La sede lo ve reflejado
+  // en "Últimas solicitudes" (Insumos generales) con su propia etiqueta,
+  // para no confundirlo con una entrega real de bodega.
+  async function comprarConCajaMenorSolicitud(s: SolicitudConDetalle) {
+    setEntregandoSolicitudId(s.id);
+    setErrorEntrega(null);
+    const { error } = await supabase
+      .from("insumos_generales_solicitudes")
+      .update({ estado: "caja_menor", entregada_en: new Date().toISOString() })
+      .eq("id", s.id);
+    setEntregandoSolicitudId(null);
+    if (error) {
+      setErrorEntrega(error.message);
+      return;
+    }
+    setSolicitudesPendientes((prev) => prev.filter((x) => x.id !== s.id));
+  }
+
   async function registrarEntrega() {
     if (!sedeIdEntrega || !catalogoIdEntrega || !Number(cantidadEntrega)) return;
     setGuardandoEntrega(true);
@@ -644,6 +663,14 @@ export function AdministracionInventarios() {
                     className="flex items-center gap-1 rounded-lg border border-amber-400 text-amber-800 px-3 py-1.5 text-xs font-medium hover:bg-amber-100 disabled:opacity-40"
                   >
                     <Clock size={14} /> Resto en el próximo pedido
+                  </button>
+                  <button
+                    onClick={() => comprarConCajaMenorSolicitud(s)}
+                    disabled={entregandoSolicitudId === s.id}
+                    title="Bodega no la entrega — queda a cargo de la sede, que la compra con su caja menor"
+                    className="flex items-center gap-1 rounded-lg border border-indigo-400 text-indigo-800 px-3 py-1.5 text-xs font-medium hover:bg-indigo-100 disabled:opacity-40"
+                  >
+                    <Wallet size={14} /> Comprar con caja menor
                   </button>
                 </div>
               </div>

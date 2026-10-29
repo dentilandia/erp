@@ -605,10 +605,14 @@ export function InsumosGeneralesPeriodo({ sedeId }: { sedeId: string }) {
                 </span>
                 <span
                   className={`shrink-0 rounded-full px-2 py-0.5 font-medium ${
-                    s.estado === "entregada" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+                    s.estado === "entregada"
+                      ? "bg-emerald-50 text-emerald-700"
+                      : s.estado === "caja_menor"
+                        ? "bg-indigo-50 text-indigo-700"
+                        : "bg-amber-50 text-amber-700"
                   }`}
                 >
-                  {s.estado === "entregada" ? "Entregada" : "Pendiente"}
+                  {s.estado === "entregada" ? "Entregada" : s.estado === "caja_menor" ? "Cómpralo con caja menor" : "Pendiente"}
                 </span>
               </div>
             ))}
