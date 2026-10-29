@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { Download, Paperclip, FileText } from "lucide-react";
+import { Download, Paperclip, FileText, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
 import { MEDIOS_PAGO, type Sede, type MedioPago, type CierreDiario as CierreDiarioRow } from "../../lib/types";
@@ -31,6 +31,12 @@ interface Cajera {
   nombre: string;
 }
 
+interface GastoDia {
+  id: string;
+  concepto: string;
+  valor: number;
+}
+
 const SIN_ASIGNAR = "__sin_asignar__";
 
 const ETIQUETAS_MEDIO: Record<string, string> = Object.fromEntries(MEDIOS_PAGO.map((m) => [m.value, m.label]));
@@ -43,6 +49,7 @@ export function CierreDiario() {
   const [otrosSaldosRaw, setOtrosSaldosRaw] = useState<OtroIngresoAuto[]>([]);
   const [cajeraFiltro, setCajeraFiltro] = useState("");
   const [cierre, setCierre] = useState<CierreDiarioRow | null>(null);
+  const [gastos, setGastos] = useState<GastoDia[]>([]);
   const [gasto, setGasto] = useState("0");
   const [gastoConcepto, setGastoConcepto] = useState("");
   const [guardandoGasto, setGuardandoGasto] = useState(false);
@@ -116,8 +123,16 @@ export function CierreDiario() {
         .eq("fecha", fecha)
         .maybeSingle();
       setCierre((cierreRow as CierreDiarioRow) ?? null);
-      setGasto(String(cierreRow?.gasto ?? 0));
-      setGastoConcepto(cierreRow?.gasto_concepto ?? "");
+
+      const { data: gastosData } = await supabase
+        .from("cierres_diarios_gastos")
+        .select("id, concepto, valor")
+        .eq("sede_id", sedeActiva.id)
+        .eq("fecha", fecha)
+        .order("created_at", { ascending: true });
+      setGastos((gastosData as GastoDia[])?.map((g) => ({ ...g, valor: Number(g.valor) })) ?? []);
+      setGasto("0");
+      setGastoConcepto("");
       setCargado(true);
     })();
   }, [sedeActiva.id, fecha]);
@@ -228,8 +243,10 @@ export function CierreDiario() {
     return totales;
   }, [otrosCargosRaw, otrosSaldosRaw]);
 
+  const totalGastos = useMemo(() => gastos.reduce((a, g) => a + g.valor, 0), [gastos]);
+
   const totalEfectivoCierre =
-    (totalPorMedioTodos["efectivo"] ?? 0) + (totalOtrosAutoPorMedioTodos["efectivo"] ?? 0) - Number(gasto || 0);
+    (totalPorMedioTodos["efectivo"] ?? 0) + (totalOtrosAutoPorMedioTodos["efectivo"] ?? 0) - totalGastos;
 
   // Total facturado por medio de pago, del día completo (sin importar el
   // filtro de cajera) — es lo que consume Cierre de Caja (admin) como fuente
@@ -245,7 +262,7 @@ export function CierreDiario() {
   // Se guarda solo, cada vez que Recepción abre este día — sin depender de
   // que alguien haga clic en un botón de "guardar" aparte para esto. El
   // upsert solo toca estas dos columnas (gracias a onConflict), así que no
-  // pisa gasto/consignado/etc. si el día ya existía.
+  // pisa consignado/entregado_admin/etc. si el día ya existía.
   useEffect(() => {
     if (!cargado) return;
     supabase
@@ -264,8 +281,6 @@ export function CierreDiario() {
     return {
       sede_id: sedeActiva.id,
       fecha,
-      gasto: Number(gasto) || 0,
-      gasto_concepto: gastoConcepto.trim() || null,
       consignado: cierre?.consignado ?? false,
       comprobante_url: cierre?.comprobante_url ?? null,
       fecha_consignacion: cierre?.fecha_consignacion ?? null,
@@ -277,19 +292,43 @@ export function CierreDiario() {
     };
   }
 
-  async function guardarManual() {
+  // Cada clic en "Guardar" agrega un gasto nuevo a la lista del día — no
+  // reemplaza uno existente — y limpia los campos para el siguiente. Antes
+  // había un solo valor/concepto por día, así que un segundo gasto (ej. un
+  // reembolso además del almuerzo) borraba el primero sin dejar rastro.
+  async function agregarGasto() {
+    const valor = Number(gasto);
+    if (!valor) return;
     setGuardandoGasto(true);
     setGastoGuardadoOk(false);
-    const { error } = await supabase.from("cierres_diarios").upsert(baseCierrePayload(), { onConflict: "sede_id,fecha" });
+    const { error } = await supabase.from("cierres_diarios_gastos").insert({
+      sede_id: sedeActiva.id,
+      fecha,
+      concepto: gastoConcepto.trim() || "Gasto del día",
+      valor,
+    });
     setGuardandoGasto(false);
     if (error) {
-      window.alert(`No se pudo guardar el gasto del día: ${error.message}`);
+      window.alert(`No se pudo guardar el gasto: ${error.message}`);
       return;
     }
-    // Sin esto no había ninguna señal de que el guardado sí funcionó — el
-    // botón solo volvía a su color normal, igual que si hubiera fallado.
+    setGasto("0");
+    setGastoConcepto("");
+    const { data } = await supabase
+      .from("cierres_diarios_gastos")
+      .select("id, concepto, valor")
+      .eq("sede_id", sedeActiva.id)
+      .eq("fecha", fecha)
+      .order("created_at", { ascending: true });
+    setGastos((data as GastoDia[])?.map((g) => ({ ...g, valor: Number(g.valor) })) ?? []);
     setGastoGuardadoOk(true);
     setTimeout(() => setGastoGuardadoOk(false), 2500);
+  }
+
+  async function eliminarGasto(id: string) {
+    if (!window.confirm("¿Quitar este gasto del cierre del día?")) return;
+    await supabase.from("cierres_diarios_gastos").delete().eq("id", id);
+    setGastos((prev) => prev.filter((g) => g.id !== id));
   }
 
   async function marcarConsignado(consignado: boolean) {
@@ -449,12 +488,20 @@ export function CierreDiario() {
             </tfoot>
           </table>
           ${otrosHtml}
-          ${Number(gasto) > 0 ? `<h3>Gastos del día</h3>` : ""}
+          ${
+            gastos.length > 0
+              ? `<h3>Gastos del día</h3>
+                 <table>
+                   <thead><tr><th>Concepto</th><th style="text-align:right">Valor</th></tr></thead>
+                   <tbody>${gastos.map((g) => `<tr><td>${g.concepto}</td><td style="text-align:right">-${fmtCOP(g.valor)}</td></tr>`).join("")}</tbody>
+                 </table>`
+              : ""
+          }
           <div class="resumen">
             ${
-              Number(gasto) > 0
-                ? `<p>Efectivo antes de gastos: ${fmtCOP(totalEfectivoCierre + Number(gasto))}</p>
-                   <p>Gasto del día${gastoConcepto.trim() ? ` — ${gastoConcepto.trim()}` : ""}: -${fmtCOP(Number(gasto))}</p>`
+              totalGastos > 0
+                ? `<p>Efectivo antes de gastos: ${fmtCOP(totalEfectivoCierre + totalGastos)}</p>
+                   <p>Total gastos del día: -${fmtCOP(totalGastos)}</p>`
                 : ""
             }
             <p><strong>Total efectivo (Cierre): ${fmtCOP(totalEfectivoCierre)}</strong></p>
@@ -633,25 +680,38 @@ export function CierreDiario() {
 
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
         <div>
-          <h3 className="text-sm font-semibold text-gray-500 mb-1">Gasto del día</h3>
-          <p className="text-xs text-gray-400 mb-2">Se resta del total efectivo del cierre.</p>
+          <h3 className="text-sm font-semibold text-gray-500 mb-1">Gastos del día</h3>
+          <p className="text-xs text-gray-400 mb-2">Cada uno se resta del total efectivo del cierre — puedes agregar más de uno.</p>
+          {gastos.length > 0 && (
+            <div className="mb-2 space-y-1">
+              {gastos.map((g) => (
+                <div key={g.id} className="flex items-center justify-between text-sm">
+                  <span className="text-gray-500">{g.concepto}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-red-600">-{fmtCOP(g.valor)}</span>
+                    <button onClick={() => eliminarGasto(g.id)} className="text-gray-300 hover:text-red-500">
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="flex gap-2">
             <input
               type="number"
               value={gasto}
               onChange={(e) => setGasto(e.target.value)}
-              onBlur={guardarManual}
               className="w-32 rounded-lg border border-gray-300 px-3 py-2 text-sm"
             />
             <input
               value={gastoConcepto}
               onChange={(e) => setGastoConcepto(e.target.value)}
-              onBlur={guardarManual}
               placeholder="Concepto — a qué corresponde este gasto"
               className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm"
             />
             <button
-              onClick={guardarManual}
+              onClick={agregarGasto}
               disabled={guardandoGasto}
               className={`rounded-lg text-white px-4 py-2 text-sm font-medium disabled:opacity-40 ${
                 gastoGuardadoOk ? "bg-emerald-600" : "bg-[var(--acento)]"
@@ -661,19 +721,13 @@ export function CierreDiario() {
             </button>
           </div>
         </div>
-        {Number(gasto) > 0 && (
+        {totalGastos > 0 && (
           <div className="flex items-center justify-between pt-2 border-t border-gray-100 text-sm">
             <span className="text-gray-500">Efectivo antes de gastos</span>
-            <span>{fmtCOP(totalEfectivoCierre + Number(gasto))}</span>
+            <span>{fmtCOP(totalEfectivoCierre + totalGastos)}</span>
           </div>
         )}
-        {Number(gasto) > 0 && (
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-gray-500">Gasto del día{gastoConcepto.trim() ? ` — ${gastoConcepto.trim()}` : ""}</span>
-            <span className="text-red-600">-{fmtCOP(Number(gasto))}</span>
-          </div>
-        )}
-        <div className={`flex items-center justify-between ${Number(gasto) > 0 ? "" : "pt-2 border-t border-gray-100"}`}>
+        <div className={`flex items-center justify-between ${totalGastos > 0 ? "" : "pt-2 border-t border-gray-100"}`}>
           <span className="text-sm text-gray-500">
             Total efectivo (Cierre)
             {cajeraFiltro && <span className="block text-xs text-gray-400">Del día completo — no cambia con el filtro de arriba.</span>}
