@@ -54,6 +54,11 @@ export function AdministracionInventarios() {
   const [cantidadesEntregaSolicitud, setCantidadesEntregaSolicitud] = useState<Record<string, string>>({});
   const [entregandoSolicitudId, setEntregandoSolicitudId] = useState<string | null>(null);
   const [sedeIdPedidoPdf, setSedeIdPedidoPdf] = useState("");
+  // Qué ítems pendientes sí van en el PDF para el proveedor — marcados por
+  // defecto, se destilda lo que no se le va a pedir a los almacenes
+  // dentales (ej. porque ya se resolvió por otro lado que no queda
+  // registrado acá, o simplemente no toca pedirlo todavía).
+  const [solicitudesParaPedido, setSolicitudesParaPedido] = useState<Set<string>>(new Set());
 
   const [notasPedidoPorSede, setNotasPedidoPorSede] = useState<{ sedeNombre: string; etiqueta: string; nota: string }[]>([]);
 
@@ -138,6 +143,18 @@ export function AdministracionInventarios() {
     const lista = (data as unknown as SolicitudConDetalle[]) ?? [];
     setSolicitudesPendientes(lista);
     setCantidadesEntregaSolicitud(Object.fromEntries(lista.map((s) => [s.id, String(s.cantidad)])));
+    // Toda solicitud pendiente nueva arranca marcada para el pedido al
+    // proveedor — conserva lo que ya se haya destildado antes.
+    setSolicitudesParaPedido((prev) => new Set([...prev, ...lista.map((s) => s.id)]));
+  }
+
+  function alternarSolicitudParaPedido(id: string) {
+    setSolicitudesParaPedido((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   // Para que Administración no pierda de vista lo que marcó "caja menor" —
@@ -484,7 +501,7 @@ export function AdministracionInventarios() {
       string,
       { categoria: string; nombre: string; total: number; porSede: { sedeNombre: string; cantidad: number }[] }
     >();
-    for (const s of solicitudesPendientes) {
+    for (const s of solicitudesPendientes.filter((s) => solicitudesParaPedido.has(s.id))) {
       if (!porCatalogo.has(s.catalogo_id)) {
         porCatalogo.set(s.catalogo_id, {
           categoria: s.insumos_generales_catalogo?.categoria ?? "—",
@@ -505,7 +522,7 @@ export function AdministracionInventarios() {
     return Array.from(porCategoria.entries())
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([categoria, items]) => ({ categoria, items: items.sort((a, b) => a.nombre.localeCompare(b.nombre)) }));
-  }, [solicitudesPendientes]);
+  }, [solicitudesPendientes, solicitudesParaPedido]);
 
   function descargarPedidoConsolidadoPdf() {
     const filas = pedidoConsolidado
@@ -563,7 +580,7 @@ export function AdministracionInventarios() {
     const sede = sedes.find((s) => s.id === sedeId);
     const porCategoria = new Map<string, { nombre: string; cantidad: number; nota: string | null }[]>();
     for (const s of solicitudesPendientes) {
-      if (s.sede_id !== sedeId) continue;
+      if (s.sede_id !== sedeId || !solicitudesParaPedido.has(s.id)) continue;
       const categoria = s.insumos_generales_catalogo?.categoria ?? "—";
       if (!porCategoria.has(categoria)) porCategoria.set(categoria, []);
       porCategoria.get(categoria)!.push({ nombre: s.insumos_generales_catalogo?.nombre ?? "—", cantidad: s.cantidad, nota: s.nota });
@@ -739,12 +756,22 @@ export function AdministracionInventarios() {
               </button>
             </div>
           </div>
+          <p className="text-xs text-amber-700 mb-2">
+            Destilda lo que no va en el pedido a los almacenes dentales — ambos PDF solo incluyen lo marcado.
+          </p>
           <div className="space-y-1.5">
             {solicitudesPendientes
               .filter((s) => !sedeIdPedidoPdf || s.sede_id === sedeIdPedidoPdf)
               .map((s) => (
               <div key={s.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
                 <span className="text-amber-700 flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={solicitudesParaPedido.has(s.id)}
+                    onChange={() => alternarSolicitudParaPedido(s.id)}
+                    title="Si está marcado, sale en el PDF del pedido a proveedor"
+                    className="shrink-0"
+                  />
                   <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorSede(s.sede_id) }} />
                   <span className="font-medium">{s.sedes?.nombre ?? "—"}</span> · {s.insumos_generales_catalogo?.nombre ?? "—"}:{" "}
                   <span className="font-semibold">pedir {s.cantidad}</span>
