@@ -714,7 +714,7 @@ export function AdministracionInventarios() {
                 onChange={(e) => setSedeIdPedidoPdf(e.target.value)}
                 className="rounded-lg border border-amber-300 px-2 py-1.5 text-xs bg-white"
               >
-                <option value="">Elige una sede…</option>
+                <option value="">Todas las sedes</option>
                 {Array.from(new Set(solicitudesPendientes.map((s) => s.sede_id)))
                   .map((id) => sedes.find((sd) => sd.id === id))
                   .filter((sd): sd is Sede => !!sd)
@@ -740,7 +740,9 @@ export function AdministracionInventarios() {
             </div>
           </div>
           <div className="space-y-1.5">
-            {solicitudesPendientes.map((s) => (
+            {solicitudesPendientes
+              .filter((s) => !sedeIdPedidoPdf || s.sede_id === sedeIdPedidoPdf)
+              .map((s) => (
               <div key={s.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
                 <span className="text-amber-700 flex items-center gap-1.5">
                   <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorSede(s.sede_id) }} />
