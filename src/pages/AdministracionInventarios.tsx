@@ -50,8 +50,10 @@ export function AdministracionInventarios() {
   const [entregaOk, setEntregaOk] = useState(false);
   const [errorEntrega, setErrorEntrega] = useState<string | null>(null);
   const [solicitudesPendientes, setSolicitudesPendientes] = useState<SolicitudConDetalle[]>([]);
+  const [solicitudesCajaMenor, setSolicitudesCajaMenor] = useState<SolicitudConDetalle[]>([]);
   const [cantidadesEntregaSolicitud, setCantidadesEntregaSolicitud] = useState<Record<string, string>>({});
   const [entregandoSolicitudId, setEntregandoSolicitudId] = useState<string | null>(null);
+  const [sedeIdPedidoPdf, setSedeIdPedidoPdf] = useState("");
 
   const [notasPedidoPorSede, setNotasPedidoPorSede] = useState<{ sedeNombre: string; etiqueta: string; nota: string }[]>([]);
 
@@ -138,8 +140,22 @@ export function AdministracionInventarios() {
     setCantidadesEntregaSolicitud(Object.fromEntries(lista.map((s) => [s.id, String(s.cantidad)])));
   }
 
+  // Para que Administración no pierda de vista lo que marcó "caja menor" —
+  // sin esto, una vez sale de "pendientes" solo quedaba visible del lado de
+  // la sede, en Insumos generales.
+  async function cargarSolicitudesCajaMenor() {
+    const { data } = await supabase
+      .from("insumos_generales_solicitudes")
+      .select("*, insumos_generales_catalogo(categoria, nombre), sedes(nombre)")
+      .eq("estado", "caja_menor")
+      .order("entregada_en", { ascending: false })
+      .limit(30);
+    setSolicitudesCajaMenor((data as unknown as SolicitudConDetalle[]) ?? []);
+  }
+
   useEffect(() => {
     cargarSolicitudesPendientes();
+    cargarSolicitudesCajaMenor();
   }, []);
 
   // Observaciones de pedido escritas por las sedes (texto libre, para algún
@@ -366,6 +382,13 @@ export function AdministracionInventarios() {
       return;
     }
     setSolicitudesPendientes((prev) => prev.filter((x) => x.id !== s.id));
+    setSolicitudesCajaMenor((prev) => [{ ...s, estado: "caja_menor" }, ...prev]);
+  }
+
+  async function revertirCajaMenorSolicitud(s: SolicitudConDetalle) {
+    await supabase.from("insumos_generales_solicitudes").update({ estado: "pendiente", entregada_en: null }).eq("id", s.id);
+    setSolicitudesCajaMenor((prev) => prev.filter((x) => x.id !== s.id));
+    cargarSolicitudesPendientes();
   }
 
   async function registrarEntrega() {
@@ -536,6 +559,65 @@ export function AdministracionInventarios() {
     ventana.focus();
   }
 
+  function descargarPedidoPorSedePdf(sedeId: string) {
+    const sede = sedes.find((s) => s.id === sedeId);
+    const porCategoria = new Map<string, { nombre: string; cantidad: number; nota: string | null }[]>();
+    for (const s of solicitudesPendientes) {
+      if (s.sede_id !== sedeId) continue;
+      const categoria = s.insumos_generales_catalogo?.categoria ?? "—";
+      if (!porCategoria.has(categoria)) porCategoria.set(categoria, []);
+      porCategoria.get(categoria)!.push({ nombre: s.insumos_generales_catalogo?.nombre ?? "—", cantidad: s.cantidad, nota: s.nota });
+    }
+    const filas = Array.from(porCategoria.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(
+        ([categoria, items]) =>
+          `<tr><td colspan="3" class="categoria">${escPdf(categoria)}</td></tr>` +
+          items
+            .sort((a, b) => a.nombre.localeCompare(b.nombre))
+            .map((it) => `<tr><td>${escPdf(it.nombre)}</td><td class="num">${it.cantidad}</td><td class="nota">${escPdf(it.nota ?? "")}</td></tr>`)
+            .join(""),
+      )
+      .join("");
+    const html = `<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>Pedido - ${escPdf(sede?.nombre ?? "")} - ${escPdf(today())}</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; color: #2E253A; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  p.fecha { color: #666; font-size: 12px; margin: 0 0 22px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { border: 1px solid #ddd; padding: 5px 7px; text-align: left; }
+  th { background: #f5f5f5; }
+  .categoria { background: #f0f0f0; font-weight: 600; }
+  .num { text-align: right; width: 80px; }
+  .nota { color: #888; font-size: 10px; }
+  .btn-imprimir {
+    position: fixed; top: 14px; right: 14px; background: #2E253A; color: #fff; border: none;
+    border-radius: 8px; padding: 8px 14px; font-size: 13px; font-family: inherit; cursor: pointer;
+  }
+  @media print { body { padding: 0; } .btn-imprimir { display: none; } }
+</style>
+</head>
+<body>
+  <button class="btn-imprimir" onclick="window.print()">Imprimir / Guardar como PDF</button>
+  <h1>Dentilandia — Pedido de insumos${sede ? ` — ${escPdf(sede.nombre)}` : ""}</h1>
+  <p class="fecha">Generado el ${escPdf(today())}</p>
+  <table>
+    <thead><tr><th>Ítem</th><th class="num">Cantidad</th><th>Nota</th></tr></thead>
+    <tbody>${filas || `<tr><td colspan="3">Sin pedidos pendientes de esta sede.</td></tr>`}</tbody>
+  </table>
+</body></html>`;
+    const ventana = window.open("", "_blank");
+    if (!ventana) {
+      window.alert("El navegador bloqueó la ventana de impresión — permite ventanas emergentes para este sitio e inténtalo de nuevo.");
+      return;
+    }
+    ventana.document.write(html);
+    ventana.document.close();
+    ventana.focus();
+  }
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <BodegaAdminTabla editable refreshKey={refreshBodega} />
@@ -626,12 +708,36 @@ export function AdministracionInventarios() {
         <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
           <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
             <p className="font-semibold text-amber-800">📋 Solicitudes pendientes de las sedes</p>
-            <button
-              onClick={descargarPedidoConsolidadoPdf}
-              className="flex items-center gap-1.5 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700"
-            >
-              <Download size={14} /> Pedido consolidado (PDF, todas las sedes)
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={sedeIdPedidoPdf}
+                onChange={(e) => setSedeIdPedidoPdf(e.target.value)}
+                className="rounded-lg border border-amber-300 px-2 py-1.5 text-xs bg-white"
+              >
+                <option value="">Elige una sede…</option>
+                {Array.from(new Set(solicitudesPendientes.map((s) => s.sede_id)))
+                  .map((id) => sedes.find((sd) => sd.id === id))
+                  .filter((sd): sd is Sede => !!sd)
+                  .map((sd) => (
+                    <option key={sd.id} value={sd.id}>
+                      {sd.nombre}
+                    </option>
+                  ))}
+              </select>
+              <button
+                onClick={() => sedeIdPedidoPdf && descargarPedidoPorSedePdf(sedeIdPedidoPdf)}
+                disabled={!sedeIdPedidoPdf}
+                className="flex items-center gap-1.5 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700 disabled:opacity-40"
+              >
+                <Download size={14} /> Pedido por sede (PDF)
+              </button>
+              <button
+                onClick={descargarPedidoConsolidadoPdf}
+                className="flex items-center gap-1.5 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-amber-700"
+              >
+                <Download size={14} /> Pedido consolidado (PDF, todas las sedes)
+              </button>
+            </div>
           </div>
           <div className="space-y-1.5">
             {solicitudesPendientes.map((s) => (
@@ -673,6 +779,34 @@ export function AdministracionInventarios() {
                     <Wallet size={14} /> Comprar con caja menor
                   </button>
                 </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {solicitudesCajaMenor.length > 0 && (
+        <section className="rounded-xl border-2 border-indigo-300 bg-indigo-50 p-4">
+          <p className="font-semibold text-indigo-800 mb-2">🔵 A cargo de la sede (caja menor)</p>
+          <p className="text-xs text-indigo-700 mb-2">
+            Bodega no las entrega — quedan a cargo de cada sede, que las compra con su propia caja menor.
+          </p>
+          <div className="space-y-1.5">
+            {solicitudesCajaMenor.map((s) => (
+              <div key={s.id} className="flex items-center justify-between gap-2 text-sm flex-wrap">
+                <span className="text-indigo-700 flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorSede(s.sede_id) }} />
+                  <span className="font-medium">{s.sedes?.nombre ?? "—"}</span> · {s.insumos_generales_catalogo?.nombre ?? "—"}:{" "}
+                  <span className="font-semibold">{s.cantidad}</span>
+                  {s.nota ? ` · ${s.nota}` : ""}
+                </span>
+                <button
+                  onClick={() => revertirCajaMenorSolicitud(s)}
+                  title="Devolverla a solicitudes pendientes de bodega"
+                  className="shrink-0 rounded-lg border border-indigo-400 text-indigo-800 px-3 py-1.5 text-xs font-medium hover:bg-indigo-100"
+                >
+                  Deshacer
+                </button>
               </div>
             ))}
           </div>
