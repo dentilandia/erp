@@ -635,6 +635,7 @@ export interface CierreCajaSemana {
  *  de la cita original). */
 export interface RecuperacionPaciente {
   id: string;
+  sede_id: string;
   documento: string | null;
   nombre: string;
   celular: string | null;
@@ -654,8 +655,9 @@ export interface RecuperacionPaciente {
 export interface RecuperacionSeguimiento {
   id: string;
   recuperacion_id: string;
+  sede_id: string;
   fecha_contacto: string;
-  canal: string;
+  canal: "llamada" | "b2chat";
   observacion: string | null;
   agendo_cita: boolean;
   registrado_por: string | null;

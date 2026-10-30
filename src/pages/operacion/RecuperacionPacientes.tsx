@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, MessageCircle, Check } from "lucide-react";
+import { ChevronDown, ChevronRight, Phone, MessageSquare, Check } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { today } from "../../lib/format";
 import { useAuth } from "../../auth/AuthContext";
@@ -22,6 +22,7 @@ interface PacienteRecuperacion {
 interface Seguimiento {
   id: string;
   fecha_contacto: string;
+  canal: "llamada" | "b2chat";
   observacion: string | null;
   agendo_cita: boolean;
   created_at: string;
@@ -35,15 +36,12 @@ const ESTADOS_RECUPERACION: { value: PacienteRecuperacion["estado_recuperacion"]
   { value: "descartado", label: "Descartado", color: "bg-gray-100 text-gray-500" },
 ];
 
-function whatsappUrl(celular: string | null): string | null {
-  if (!celular) return null;
-  const digitos = celular.replace(/\D/g, "");
-  if (!digitos) return null;
-  const numero = digitos.length === 10 ? `57${digitos}` : digitos;
-  return `https://wa.me/${numero}`;
-}
+const CANALES: { value: Seguimiento["canal"]; label: string }[] = [
+  { value: "llamada", label: "📞 Llamó" },
+  { value: "b2chat", label: "💬 Retomó por B2chat" },
+];
 
-export function RecuperacionPacientes() {
+export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
   const { perfil } = useAuth();
   const [pacientes, setPacientes] = useState<PacienteRecuperacion[]>([]);
   const [doctoras, setDoctoras] = useState<Doctora[]>([]);
@@ -58,6 +56,7 @@ export function RecuperacionPacientes() {
   const [seguimientosPorPaciente, setSeguimientosPorPaciente] = useState<Record<string, Seguimiento[]>>({});
 
   const [formFecha, setFormFecha] = useState<Record<string, string>>({});
+  const [formCanal, setFormCanal] = useState<Record<string, Seguimiento["canal"]>>({});
   const [formObservacion, setFormObservacion] = useState<Record<string, string>>({});
   const [formAgendo, setFormAgendo] = useState<Record<string, boolean>>({});
   const [guardandoId, setGuardandoId] = useState<string | null>(null);
@@ -71,13 +70,15 @@ export function RecuperacionPacientes() {
       .select("*")
       .order("nombre")
       .then(({ data }) => setDoctoras((data as Doctora[]) ?? []));
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sedeId]);
 
   async function cargarPacientes() {
     setCargando(true);
     const { data } = await supabase
       .from("recuperacion_pacientes")
       .select("*, doctoras(nombre)")
+      .eq("sede_id", sedeId)
       .order("fecha_ultima_cita", { ascending: false });
     setPacientes((data as unknown as PacienteRecuperacion[]) ?? []);
     setCargando(false);
@@ -86,7 +87,7 @@ export function RecuperacionPacientes() {
   async function cargarSeguimientos(id: string) {
     const { data } = await supabase
       .from("recuperacion_pacientes_seguimientos")
-      .select("id, fecha_contacto, observacion, agendo_cita, created_at, registrado_por_nombre")
+      .select("id, fecha_contacto, canal, observacion, agendo_cita, created_at, registrado_por_nombre")
       .eq("recuperacion_id", id)
       .order("created_at", { ascending: false });
     setSeguimientosPorPaciente((prev) => ({ ...prev, [id]: (data as Seguimiento[]) ?? [] }));
@@ -122,13 +123,14 @@ export function RecuperacionPacientes() {
 
   async function guardarSeguimiento(id: string) {
     const observacion = (formObservacion[id] ?? "").trim();
-    if (!observacion) return;
     setGuardandoId(id);
     const agendo = formAgendo[id] ?? false;
     const { error } = await supabase.from("recuperacion_pacientes_seguimientos").insert({
       recuperacion_id: id,
+      sede_id: sedeId,
       fecha_contacto: formFecha[id] || today(),
-      observacion,
+      canal: formCanal[id] ?? "llamada",
+      observacion: observacion || null,
       agendo_cita: agendo,
       registrado_por: perfil?.id ?? null,
       registrado_por_nombre: perfil?.nombre ?? null,
@@ -145,6 +147,7 @@ export function RecuperacionPacientes() {
       await supabase.from("recuperacion_pacientes").update({ estado_recuperacion: "en_proceso" }).eq("id", id);
     }
     setFormFecha((prev) => ({ ...prev, [id]: "" }));
+    setFormCanal((prev) => ({ ...prev, [id]: "llamada" }));
     setFormObservacion((prev) => ({ ...prev, [id]: "" }));
     setFormAgendo((prev) => ({ ...prev, [id]: false }));
     setGuardandoId(null);
@@ -181,8 +184,8 @@ export function RecuperacionPacientes() {
       <div>
         <h1 className="text-lg font-semibold text-tinta">Recuperación de pacientes</h1>
         <p className="text-xs text-gray-400">
-          Pacientes que asistieron durante 2026 y hoy no tienen cita programada — retómalos por WhatsApp y deja la
-          observación de cada intento.
+          Pacientes que asistieron durante 2026 y hoy no tienen cita programada — primero llama, luego retómalo por
+          B2chat, y deja la observación de cada intento.
         </p>
       </div>
 
@@ -247,7 +250,6 @@ export function RecuperacionPacientes() {
       <div className="space-y-2">
         {pacientesFiltrados.map((p) => {
           const estadoInfo = ESTADOS_RECUPERACION.find((e) => e.value === p.estado_recuperacion)!;
-          const wa = whatsappUrl(p.celular);
           const abierto = !!abiertos[p.id];
           return (
             <div key={p.id} className="bg-white rounded-xl border border-gray-200 p-4">
@@ -264,29 +266,17 @@ export function RecuperacionPacientes() {
                   </p>
                   {p.motivo_ultima_cita && <p className="text-xs text-gray-500 mt-1 ml-[22px] max-w-xl">{p.motivo_ultima_cita}</p>}
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {wa && (
-                    <a
-                      href={wa}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center gap-1 rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-emerald-700"
-                    >
-                      <MessageCircle size={14} /> WhatsApp
-                    </a>
-                  )}
-                  <select
-                    value={p.estado_recuperacion}
-                    onChange={(e) => cambiarEstado(p.id, e.target.value as PacienteRecuperacion["estado_recuperacion"])}
-                    className={`rounded-lg px-2 py-1.5 text-xs font-medium border-0 ${estadoInfo.color}`}
-                  >
-                    {ESTADOS_RECUPERACION.map((e) => (
-                      <option key={e.value} value={e.value}>
-                        {e.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <select
+                  value={p.estado_recuperacion}
+                  onChange={(e) => cambiarEstado(p.id, e.target.value as PacienteRecuperacion["estado_recuperacion"])}
+                  className={`shrink-0 rounded-lg px-2 py-1.5 text-xs font-medium border-0 ${estadoInfo.color}`}
+                >
+                  {ESTADOS_RECUPERACION.map((e) => (
+                    <option key={e.value} value={e.value}>
+                      {e.label}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {abierto && (
@@ -295,7 +285,8 @@ export function RecuperacionPacientes() {
                     <div className="space-y-1.5">
                       {seguimientosPorPaciente[p.id].map((s) => (
                         <div key={s.id} className="text-xs bg-gray-50 rounded-lg px-3 py-2">
-                          <p className="text-gray-400">
+                          <p className="text-gray-400 flex items-center gap-1">
+                            {s.canal === "llamada" ? <Phone size={12} /> : <MessageSquare size={12} />}
                             {s.fecha_contacto} · {s.registrado_por_nombre ?? "—"}
                             {s.agendo_cita && <span className="text-emerald-600 font-medium"> · agendó cita</span>}
                           </p>
@@ -315,10 +306,21 @@ export function RecuperacionPacientes() {
                         onChange={(e) => setFormFecha((prev) => ({ ...prev, [p.id]: e.target.value }))}
                         className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
                       />
+                      <select
+                        value={formCanal[p.id] ?? "llamada"}
+                        onChange={(e) => setFormCanal((prev) => ({ ...prev, [p.id]: e.target.value as Seguimiento["canal"] }))}
+                        className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+                      >
+                        {CANALES.map((c) => (
+                          <option key={c.value} value={c.value}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </select>
                       <input
                         value={formObservacion[p.id] ?? ""}
                         onChange={(e) => setFormObservacion((prev) => ({ ...prev, [p.id]: e.target.value }))}
-                        placeholder="¿Qué pasó en el contacto de hoy?"
+                        placeholder="¿Qué pasó en el contacto de hoy? (opcional)"
                         className="flex-1 min-w-[200px] rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
                       />
                     </div>
@@ -333,7 +335,7 @@ export function RecuperacionPacientes() {
                       </label>
                       <button
                         onClick={() => guardarSeguimiento(p.id)}
-                        disabled={guardandoId === p.id || !(formObservacion[p.id] ?? "").trim()}
+                        disabled={guardandoId === p.id}
                         className="flex items-center gap-1.5 rounded-lg bg-[var(--acento)] text-white px-4 py-1.5 text-sm font-medium disabled:opacity-40"
                       >
                         <Check size={14} /> {guardandoId === p.id ? "Guardando…" : "Guardar seguimiento"}

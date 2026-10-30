@@ -1,10 +1,13 @@
 import { useState } from "react";
+import { useOutletContext } from "react-router-dom";
 import { RecuperacionPacientes } from "./RecuperacionPacientes";
+import type { Sede } from "../../lib/types";
 
 const TABS = [{ value: "recuperacion", label: "Recuperación de pacientes" }] as const;
 type Tab = (typeof TABS)[number]["value"];
 
 export function ServicioAlCliente() {
+  const { sedeActiva } = useOutletContext<{ sedeActiva: Sede }>();
   const [tab, setTab] = useState<Tab>("recuperacion");
 
   return (
@@ -25,7 +28,7 @@ export function ServicioAlCliente() {
         </div>
       )}
 
-      {tab === "recuperacion" && <RecuperacionPacientes />}
+      {tab === "recuperacion" && <RecuperacionPacientes sedeId={sedeActiva.id} />}
     </div>
   );
 }
