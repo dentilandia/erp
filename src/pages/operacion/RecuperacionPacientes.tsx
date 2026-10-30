@@ -22,7 +22,8 @@ interface PacienteRecuperacion {
 interface Seguimiento {
   id: string;
   fecha_contacto: string;
-  canal: "llamada" | "b2chat";
+  llamo: boolean;
+  retomo_b2chat: boolean;
   observacion: string | null;
   agendo_cita: boolean;
   created_at: string;
@@ -36,11 +37,6 @@ const ESTADOS_RECUPERACION: { value: PacienteRecuperacion["estado_recuperacion"]
   { value: "descartado", label: "Descartado", color: "bg-gray-100 text-gray-500" },
 ];
 
-const CANALES: { value: Seguimiento["canal"]; label: string }[] = [
-  { value: "llamada", label: "📞 Llamó" },
-  { value: "b2chat", label: "💬 Retomó por B2chat" },
-];
-
 export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
   const { perfil } = useAuth();
   const [pacientes, setPacientes] = useState<PacienteRecuperacion[]>([]);
@@ -51,12 +47,14 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
   const [filtroEstadoCita, setFiltroEstadoCita] = useState("");
   const [filtroEstadoRecuperacion, setFiltroEstadoRecuperacion] = useState<string>("pendiente,en_proceso");
   const [busqueda, setBusqueda] = useState("");
+  const [filtroMotivo, setFiltroMotivo] = useState("");
 
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({});
   const [seguimientosPorPaciente, setSeguimientosPorPaciente] = useState<Record<string, Seguimiento[]>>({});
 
   const [formFecha, setFormFecha] = useState<Record<string, string>>({});
-  const [formCanal, setFormCanal] = useState<Record<string, Seguimiento["canal"]>>({});
+  const [formLlamo, setFormLlamo] = useState<Record<string, boolean>>({});
+  const [formRetomoB2chat, setFormRetomoB2chat] = useState<Record<string, boolean>>({});
   const [formObservacion, setFormObservacion] = useState<Record<string, string>>({});
   const [formAgendo, setFormAgendo] = useState<Record<string, boolean>>({});
   const [guardandoId, setGuardandoId] = useState<string | null>(null);
@@ -87,7 +85,7 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
   async function cargarSeguimientos(id: string) {
     const { data } = await supabase
       .from("recuperacion_pacientes_seguimientos")
-      .select("id, fecha_contacto, canal, observacion, agendo_cita, created_at, registrado_por_nombre")
+      .select("id, fecha_contacto, llamo, retomo_b2chat, observacion, agendo_cita, created_at, registrado_por_nombre")
       .eq("recuperacion_id", id)
       .order("created_at", { ascending: false });
     setSeguimientosPorPaciente((prev) => ({ ...prev, [id]: (data as Seguimiento[]) ?? [] }));
@@ -123,13 +121,20 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
 
   async function guardarSeguimiento(id: string) {
     const observacion = (formObservacion[id] ?? "").trim();
+    const llamo = formLlamo[id] ?? false;
+    const retomoB2chat = formRetomoB2chat[id] ?? false;
+    if (!llamo && !retomoB2chat) {
+      window.alert("Marca si llamó, si retomó por B2chat, o ambos.");
+      return;
+    }
     setGuardandoId(id);
     const agendo = formAgendo[id] ?? false;
     const { error } = await supabase.from("recuperacion_pacientes_seguimientos").insert({
       recuperacion_id: id,
       sede_id: sedeId,
       fecha_contacto: formFecha[id] || today(),
-      canal: formCanal[id] ?? "llamada",
+      llamo,
+      retomo_b2chat: retomoB2chat,
       observacion: observacion || null,
       agendo_cita: agendo,
       registrado_por: perfil?.id ?? null,
@@ -147,7 +152,8 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
       await supabase.from("recuperacion_pacientes").update({ estado_recuperacion: "en_proceso" }).eq("id", id);
     }
     setFormFecha((prev) => ({ ...prev, [id]: "" }));
-    setFormCanal((prev) => ({ ...prev, [id]: "llamada" }));
+    setFormLlamo((prev) => ({ ...prev, [id]: false }));
+    setFormRetomoB2chat((prev) => ({ ...prev, [id]: false }));
     setFormObservacion((prev) => ({ ...prev, [id]: "" }));
     setFormAgendo((prev) => ({ ...prev, [id]: false }));
     setGuardandoId(null);
@@ -168,14 +174,16 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
   const pacientesFiltrados = useMemo(() => {
     const estadosRecuperacion = filtroEstadoRecuperacion ? filtroEstadoRecuperacion.split(",") : null;
     const q = busqueda.trim().toLowerCase();
+    const m = filtroMotivo.trim().toLowerCase();
     return pacientes.filter((p) => {
       if (estadosRecuperacion && !estadosRecuperacion.includes(p.estado_recuperacion)) return false;
       if (filtroDoctora && p.doctora_id !== filtroDoctora) return false;
       if (filtroEstadoCita && p.estado_ultima_cita !== filtroEstadoCita) return false;
       if (q && !p.nombre.toLowerCase().includes(q) && !(p.celular ?? "").includes(q) && !(p.documento ?? "").includes(q)) return false;
+      if (m && !(p.motivo_ultima_cita ?? "").toLowerCase().includes(m)) return false;
       return true;
     });
-  }, [pacientes, filtroEstadoRecuperacion, filtroDoctora, filtroEstadoCita, busqueda]);
+  }, [pacientes, filtroEstadoRecuperacion, filtroDoctora, filtroEstadoCita, busqueda, filtroMotivo]);
 
   if (cargando) return <p className="text-sm text-gray-400">Cargando…</p>;
 
@@ -243,6 +251,12 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
             ))}
             <option value="">Todos</option>
           </select>
+          <input
+            value={filtroMotivo}
+            onChange={(e) => setFiltroMotivo(e.target.value)}
+            placeholder="Buscar en el motivo de la última cita…"
+            className="flex-1 min-w-[220px] rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          />
         </div>
         <p className="text-xs text-gray-400 mt-2">{pacientesFiltrados.length} pacientes con este filtro.</p>
       </div>
@@ -286,7 +300,8 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
                       {seguimientosPorPaciente[p.id].map((s) => (
                         <div key={s.id} className="text-xs bg-gray-50 rounded-lg px-3 py-2">
                           <p className="text-gray-400 flex items-center gap-1">
-                            {s.canal === "llamada" ? <Phone size={12} /> : <MessageSquare size={12} />}
+                            {s.llamo && <Phone size={12} />}
+                            {s.retomo_b2chat && <MessageSquare size={12} />}
                             {s.fecha_contacto} · {s.registrado_por_nombre ?? "—"}
                             {s.agendo_cita && <span className="text-emerald-600 font-medium"> · agendó cita</span>}
                           </p>
@@ -306,17 +321,22 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
                         onChange={(e) => setFormFecha((prev) => ({ ...prev, [p.id]: e.target.value }))}
                         className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
                       />
-                      <select
-                        value={formCanal[p.id] ?? "llamada"}
-                        onChange={(e) => setFormCanal((prev) => ({ ...prev, [p.id]: e.target.value as Seguimiento["canal"] }))}
-                        className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
-                      >
-                        {CANALES.map((c) => (
-                          <option key={c.value} value={c.value}>
-                            {c.label}
-                          </option>
-                        ))}
-                      </select>
+                      <label className="flex items-center gap-1.5 text-sm text-gray-600 rounded-lg border border-gray-300 px-2 py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={formLlamo[p.id] ?? false}
+                          onChange={(e) => setFormLlamo((prev) => ({ ...prev, [p.id]: e.target.checked }))}
+                        />
+                        📞 Llamó
+                      </label>
+                      <label className="flex items-center gap-1.5 text-sm text-gray-600 rounded-lg border border-gray-300 px-2 py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={formRetomoB2chat[p.id] ?? false}
+                          onChange={(e) => setFormRetomoB2chat((prev) => ({ ...prev, [p.id]: e.target.checked }))}
+                        />
+                        💬 Retomó por B2chat
+                      </label>
                       <input
                         value={formObservacion[p.id] ?? ""}
                         onChange={(e) => setFormObservacion((prev) => ({ ...prev, [p.id]: e.target.value }))}

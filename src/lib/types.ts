@@ -657,7 +657,8 @@ export interface RecuperacionSeguimiento {
   recuperacion_id: string;
   sede_id: string;
   fecha_contacto: string;
-  canal: "llamada" | "b2chat";
+  llamo: boolean;
+  retomo_b2chat: boolean;
   observacion: string | null;
   agendo_cita: boolean;
   registrado_por: string | null;
