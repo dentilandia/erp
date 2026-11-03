@@ -1354,6 +1354,12 @@ function umbralRetencionLab(fecha: string): number {
 }
 const PCT_RETENCION_LAB = 0.04;
 
+/** Órdenes duplicadas que se dejaron en $0 con "DUPLICADO" en la factura
+ *  para anularlas — no se le muestran al laboratorio en la liquidación. */
+function esDuplicadoEnCero(f: { valor_factura: number; factura_numero: string | null }): boolean {
+  return f.valor_factura === 0 && /duplicad/i.test(f.factura_numero ?? "");
+}
+
 interface FilaLab {
   id: string;
   fecha: string | null;
@@ -1396,11 +1402,14 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
         .eq("periodo_fin", periodo.fin);
       const porLab: Record<string, DetalleConcepto[]> = {};
       for (const c of (data as { id: string; laboratorio_id: string; concepto: string; valor: number }[]) ?? []) {
+        // Con un laboratorio filtrado, solo sus ajustes — los de los demás
+        // laboratorios no deben salir en su liquidación.
+        if (laboratorioId && c.laboratorio_id !== laboratorioId) continue;
         (porLab[c.laboratorio_id] ??= []).push({ id: c.id, concepto: c.concepto, valor: Number(c.valor) });
       }
       setConceptosPorLab(porLab);
     })();
-  }, [periodo.inicio, periodo.fin, recargarConceptos]);
+  }, [periodo.inicio, periodo.fin, recargarConceptos, laboratorioId]);
 
   const formConceptoLabVacio: FormConcepto = { abierto: false, concepto: "", valor: "", guardando: false };
   function formConceptoLabDe(laboratorioId: string): FormConcepto {
@@ -1533,6 +1542,7 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
   function generarPDF() {
     const nombreLab = laboratorioId ? laboratorios.find((l) => l.id === laboratorioId)?.nombre : null;
     const filasHtml = filas
+      .filter((f) => !esDuplicadoEnCero(f))
       .map((f) => {
         const ret = retencionDe(f);
         return `<tr><td>${esc(f.fechaFactura ?? "—")}</td><td>${esc(f.fechaInstalado ?? "—")}</td><td>${esc(f.paciente)}</td><td>${esc(f.doctora)}${
