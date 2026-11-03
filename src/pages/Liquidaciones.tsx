@@ -449,6 +449,11 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
   const [recargar, setRecargar] = useState(0);
   const [formsAtrasado, setFormsAtrasado] = useState<Record<string, FormAtrasado>>({});
   const [formsConcepto, setFormsConcepto] = useState<Record<string, FormConcepto>>({});
+  // Doctoras activas, para poder agregar a la liquidación a una que no tuvo
+  // movimientos en el período (ej. no fue a trabajar) y así ponerle un
+  // concepto administrativo. Una vez tiene un concepto, aparece sola.
+  const [todasDoctoras, setTodasDoctoras] = useState<Doctora[]>([]);
+  const [doctorasExtra, setDoctorasExtra] = useState<string[]>([]);
 
   useEffect(() => {
     supabase.from("laboratorios").select("*").order("nombre").then(({ data }) => setLaboratorios((data as Laboratorio[]) ?? []));
@@ -462,6 +467,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
       setPctHonorario(pct);
 
       const { data: doctoras } = await supabase.from("doctoras").select("*").order("nombre");
+      setTodasDoctoras((doctoras as Doctora[]) ?? []);
       const sedeNombre: Record<string, string> = Object.fromEntries(sedes.map((s) => [s.id, s.nombre]));
       const doctoraNombrePorId: Record<string, string> = Object.fromEntries(
         ((doctoras as Doctora[]) ?? []).map((d) => [d.id, d.nombre]),
@@ -651,7 +657,8 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
             (ventasPorDoctora[d.id] ?? 0) > 0 ||
             (labsPorDoctora[d.id] ?? 0) > 0 ||
             (insumosPorDoctora[d.id] ?? 0) > 0 ||
-            (detalleConceptosPorDoctora[d.id]?.length ?? 0) > 0,
+            (detalleConceptosPorDoctora[d.id]?.length ?? 0) > 0 ||
+            doctorasExtra.includes(d.id),
         )
         .map((d) => {
           const totalVentas = ventasPorDoctora[d.id] ?? 0;
@@ -710,7 +717,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
       setFilas(nuevasFilas);
       setCargando(false);
     })();
-  }, [periodo.inicio, periodo.fin, sedeId, sedes, recargar]);
+  }, [periodo.inicio, periodo.fin, sedeId, sedes, recargar, doctorasExtra]);
 
   function actualizarFila(idx: number, cambios: Partial<FilaDoctora>) {
     setFilas((prev) => prev.map((f, i) => (i === idx ? { ...f, ...cambios } : f)));
@@ -914,6 +921,27 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         Período {periodo.inicio} a {periodo.fin}. Solo cuenta lo efectivamente cobrado (incluye pagos con saldo a
         favor, no la creación de estos). IBC = 40% del total a pagar (base de cotización a seguridad social).
       </p>
+      {(() => {
+        const sinMovimientos = todasDoctoras.filter((d) => d.activa && !filas.some((f) => f.doctora.id === d.id));
+        if (sinMovimientos.length === 0) return null;
+        return (
+          <div className="flex items-center gap-2 flex-wrap text-xs text-gray-500">
+            <span>¿Falta una doctora que no tuvo movimientos en este período?</span>
+            <select
+              value=""
+              onChange={(e) => e.target.value && setDoctorasExtra((prev) => [...prev, e.target.value])}
+              className="rounded-lg border border-gray-300 px-2 py-1 text-xs bg-white"
+            >
+              <option value="">Agregar doctora a la liquidación…</option>
+              {sinMovimientos.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.nombre}
+                </option>
+              ))}
+            </select>
+          </div>
+        );
+      })()}
       {filas.map((f, idx) => {
         const pctFila = pctDe(f.doctora, pctHonorario);
         const bruto = f.totalVentas * (pctFila / 100);
