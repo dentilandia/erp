@@ -117,6 +117,45 @@ interface DetalleLab {
   actualizadoDespuesDeGuardar: boolean;
 }
 
+/** Lo facturado (pagos de procedimientos) por la doctora en un día y sede. */
+interface VentaDia {
+  fecha: string;
+  sedeNombre: string;
+  ventas: number;
+  pacientes: number;
+}
+
+/** Fila del resumen por día: facturado + laboratorios instalados ese día. */
+interface ResumenDia {
+  fecha: string;
+  sedeNombre: string;
+  pacientes: number;
+  ventas: number;
+  labsCantidad: number;
+  labsValor: number;
+}
+
+/** Junta lo facturado por día con los laboratorios instalados ese día (misma
+ *  fecha con la que el aparato entra a esta liquidación), por fecha y sede.
+ *  Los totales cuadran con totalVentas y totalLaboratorios. */
+function resumenDiario(f: FilaDoctora): ResumenDia[] {
+  const porClave: Record<string, ResumenDia> = {};
+  const fila = (fecha: string, sedeNombre: string) =>
+    (porClave[`${fecha}|${sedeNombre}`] ??= { fecha, sedeNombre, pacientes: 0, ventas: 0, labsCantidad: 0, labsValor: 0 });
+  for (const v of f.ventasDia) {
+    const r = fila(v.fecha, v.sedeNombre);
+    r.ventas += v.ventas;
+    r.pacientes += v.pacientes;
+  }
+  for (const d of f.detalleLabs) {
+    if (!d.fecha) continue;
+    const r = fila(d.fecha, d.sedeNombre);
+    r.labsCantidad += 1;
+    r.labsValor += d.valor;
+  }
+  return Object.values(porClave).sort((a, b) => (a.fecha === b.fecha ? a.sedeNombre.localeCompare(b.sedeNombre) : a.fecha.localeCompare(b.fecha)));
+}
+
 interface DetalleInsumo {
   fecha: string;
   sedeNombre: string;
@@ -142,6 +181,7 @@ interface FilaDoctora {
   detalleLabs: DetalleLab[];
   detalleInsumos: DetalleInsumo[];
   detalleConceptos: DetalleConcepto[];
+  ventasDia: VentaDia[];
   retencionValor: string;
   retencionDepuracionValor: string;
   guardando: boolean;
@@ -288,9 +328,26 @@ function paginaDetalleMes(periodo: { inicio: string; fin: string }, f: FilaDocto
         `<tr><td>${esc(d.fecha)}</td><td>${esc(d.sedeNombre)}</td><td>${esc(d.paciente)}</td><td>${esc(d.tipo)}</td><td class="num">${esc(fmtCOP(d.valor))}</td></tr>`,
     )
     .join("");
+  const resumen = resumenDiario(f);
+  const filasResumen = resumen
+    .map(
+      (r) =>
+        `<tr><td>${esc(r.fecha)}</td><td>${esc(r.sedeNombre)}</td><td class="num">${r.pacientes}</td><td class="num">${esc(fmtCOP(r.ventas))}</td><td class="num">${r.labsCantidad}</td><td class="num">${esc(fmtCOP(r.labsValor))}</td></tr>`,
+    )
+    .join("");
+  const totPacientes = resumen.reduce((a, r) => a + r.pacientes, 0);
+  const totVentas = resumen.reduce((a, r) => a + r.ventas, 0);
+  const totLabsCant = resumen.reduce((a, r) => a + r.labsCantidad, 0);
   return `
   <h1>Detalle de laboratorios y aparatología — ${esc(f.doctora.nombre)}</h1>
   <p class="periodo">Período ${periodo.inicio} a ${periodo.fin}</p>
+
+  <h2>Resumen por día</h2>
+  <table>
+    <thead><tr><th>Fecha</th><th>Sede</th><th class="num">Pacientes</th><th class="num">Facturado</th><th class="num">Labs instalados</th><th class="num">Valor labs</th></tr></thead>
+    <tbody>${filasResumen || `<tr><td colspan="6">Sin días atendidos en este período.</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="2">Total (${resumen.length} día${resumen.length === 1 ? "" : "s"})</td><td class="num">${totPacientes}</td><td class="num">${esc(fmtCOP(totVentas))}</td><td class="num">${totLabsCant}</td><td class="num">${esc(fmtCOP(totalLabs))}</td></tr></tfoot>
+  </table>
 
   <h2>Laboratorios (aparatos) instalados este período</h2>
   <table>
@@ -410,21 +467,30 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         ((doctoras as Doctora[]) ?? []).map((d) => [d.id, d.nombre]),
       );
 
-      const pagosData = await fetchTodasLasFilas<{ valor: number; cargos: { doctora_id: string; sede_id: string } }>((desde, hasta) => {
+      type PagoRowLiq = { valor: number; cargos: { doctora_id: string; sede_id: string; fecha: string; visita_id: string | null } };
+      const pagosData = await fetchTodasLasFilas<PagoRowLiq>((desde, hasta) => {
         let q = supabase
           .from("cargo_pagos")
-          .select("valor, cargos!inner(categoria, doctora_id, sede_id, fecha)")
+          .select("valor, cargos!inner(categoria, doctora_id, sede_id, fecha, visita_id)")
           .eq("cargos.categoria", "procedimiento")
           .gte("cargos.fecha", periodo.inicio)
           .lte("cargos.fecha", periodo.fin)
           .range(desde, hasta);
         if (sedeId) q = q.eq("cargos.sede_id", sedeId);
-        return q as unknown as PromiseLike<{ data: { valor: number; cargos: { doctora_id: string; sede_id: string } }[] | null }>;
+        return q as unknown as PromiseLike<{ data: PagoRowLiq[] | null }>;
       });
       const ventasPorDoctora: Record<string, number> = {};
       const ventasPorDoctoraSede: Record<string, Record<string, number>> = {};
+      // Resumen por día (fecha + sede): lo facturado y cuántos pacientes
+      // (visitas distintas) se atendieron ese día.
+      const ventasDiaPorDoctora: Record<string, Record<string, { fecha: string; sedeId: string; ventas: number; visitas: Set<string> }>> = {};
       for (const p of pagosData) {
-        const { doctora_id, sede_id } = p.cargos;
+        const { doctora_id, sede_id, fecha, visita_id } = p.cargos;
+        const dia = ((ventasDiaPorDoctora[doctora_id] ??= {})[`${fecha}|${sede_id}`] ??= {
+          fecha, sedeId: sede_id, ventas: 0, visitas: new Set<string>(),
+        });
+        dia.ventas += Number(p.valor);
+        if (visita_id) dia.visitas.add(visita_id);
         ventasPorDoctora[doctora_id] = (ventasPorDoctora[doctora_id] ?? 0) + Number(p.valor);
         ventasPorDoctoraSede[doctora_id] = ventasPorDoctoraSede[doctora_id] ?? {};
         ventasPorDoctoraSede[doctora_id][sede_id] = (ventasPorDoctoraSede[doctora_id][sede_id] ?? 0) + Number(p.valor);
@@ -626,6 +692,12 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
             detalleLabs: detalleLabsPorDoctora[d.id] ?? [],
             detalleInsumos: detalleInsumosPorDoctora[d.id] ?? [],
             detalleConceptos: detalleConceptosPorDoctora[d.id] ?? [],
+            ventasDia: Object.values(ventasDiaPorDoctora[d.id] ?? {}).map((v) => ({
+              fecha: v.fecha,
+              sedeNombre: sedeNombre[v.sedeId] ?? "—",
+              ventas: v.ventas,
+              pacientes: v.visitas.size,
+            })),
             retencionValor: retencionVoluntariaValor ? String(Math.round(retencionVoluntariaValor)) : "",
             retencionDepuracionValor: guardada?.retencionDepuracion ? String(Math.round(guardada.retencionDepuracion)) : "",
             guardando: false,
@@ -1008,7 +1080,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                 onClick={() => actualizarFila(idx, { detalleAbierto: !f.detalleAbierto })}
                 className="text-xs font-medium text-[var(--acento)]"
               >
-                {f.detalleAbierto ? "Ocultar detalle" : "Ver detalle (laboratorios e insumos)"}
+                {f.detalleAbierto ? "Ocultar detalle" : "Ver detalle (resumen por día, laboratorios e insumos)"}
               </button>
               <button onClick={() => alternarHistorial(idx)} className="text-xs font-medium text-gray-500">
                 {f.historialAbierto ? "Ocultar historial" : "Ver historial de liquidaciones guardadas"}
@@ -1225,6 +1297,60 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
                     </div>
                   </div>
                 )}
+                {(() => {
+                  const resumen = resumenDiario(f);
+                  return (
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 mb-1">
+                        Resumen por día ({resumen.length} día{resumen.length === 1 ? "" : "s"})
+                      </p>
+                      <div className="rounded-lg border border-gray-200 overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="bg-gray-50 text-left text-gray-500">
+                              <th className="px-2 py-1.5">Fecha</th>
+                              <th className="px-2 py-1.5">Sede</th>
+                              <th className="px-2 py-1.5 text-right">Pacientes</th>
+                              <th className="px-2 py-1.5 text-right">Facturado</th>
+                              <th className="px-2 py-1.5 text-right">Labs instalados</th>
+                              <th className="px-2 py-1.5 text-right">Valor labs</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {resumen.map((r) => (
+                              <tr key={`${r.fecha}|${r.sedeNombre}`} className="border-t border-gray-100">
+                                <td className="px-2 py-1.5">{r.fecha}</td>
+                                <td className="px-2 py-1.5">{r.sedeNombre}</td>
+                                <td className="px-2 py-1.5 text-right">{r.pacientes}</td>
+                                <td className="px-2 py-1.5 text-right">{fmtCOP(r.ventas)}</td>
+                                <td className="px-2 py-1.5 text-right">{r.labsCantidad}</td>
+                                <td className="px-2 py-1.5 text-right">{fmtCOP(r.labsValor)}</td>
+                              </tr>
+                            ))}
+                            {resumen.length === 0 && (
+                              <tr>
+                                <td colSpan={6} className="px-2 py-2 text-center text-gray-400">
+                                  Sin días atendidos en este período.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                          {resumen.length > 0 && (
+                            <tfoot>
+                              <tr className="border-t border-gray-200 bg-gray-50 font-semibold">
+                                <td className="px-2 py-1.5" colSpan={2}>Total</td>
+                                <td className="px-2 py-1.5 text-right">{resumen.reduce((a, r) => a + r.pacientes, 0)}</td>
+                                <td className="px-2 py-1.5 text-right">{fmtCOP(resumen.reduce((a, r) => a + r.ventas, 0))}</td>
+                                <td className="px-2 py-1.5 text-right">{resumen.reduce((a, r) => a + r.labsCantidad, 0)}</td>
+                                <td className="px-2 py-1.5 text-right">{fmtCOP(resumen.reduce((a, r) => a + r.labsValor, 0))}</td>
+                              </tr>
+                            </tfoot>
+                          )}
+                        </table>
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div>
                   <p className="text-xs font-semibold text-gray-500 mb-1">
                     Aparatos instalados / enviados a laboratorio ({f.detalleLabs.length})
