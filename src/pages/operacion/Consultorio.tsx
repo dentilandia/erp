@@ -449,6 +449,10 @@ function ModalAtencion({
   const [saldoFavor, setSaldoFavor] = useState(0);
   const [tratamiento, setTratamiento] = useState("");
   const [valorTratamiento, setValorTratamiento] = useState("");
+  // "El paciente no paga" — en vez de valor de venta se pone el motivo, que
+  // queda en visitas.motivo_valor_cero y Recepción lo ve al cobrar.
+  const [noPaga, setNoPaga] = useState(false);
+  const [motivoNoPaga, setMotivoNoPaga] = useState("");
   const [observacion, setObservacion] = useState("");
   const [alertaSaldoFavor, setAlertaSaldoFavor] = useState(false);
   const [proximaCita, setProximaCita] = useState("");
@@ -563,6 +567,10 @@ function ModalAtencion({
       setError("Marcaste \"Comprobante de datáfono\" pero falta adjuntar el archivo.");
       return;
     }
+    if (noPaga && !motivoNoPaga.trim()) {
+      setError('Marcaste "El paciente no paga" — escribe el motivo.');
+      return;
+    }
     // Marcar el check y llenar laboratorio/tipo de servicio no agrega nada
     // por sí solo — hay que tocar el botón "Agregar" de esa sección para que
     // quede en la lista que sí se guarda. Sin este aviso, quedaba pasando
@@ -594,7 +602,7 @@ function ModalAtencion({
       comprobanteDatafonoUrl = path;
     }
 
-    if (Number(valorTratamiento) > 0) {
+    if (!noPaga && Number(valorTratamiento) > 0) {
       await supabase.from("cargos").insert({
         visita_id: visitaId,
         categoria: "procedimiento",
@@ -690,6 +698,7 @@ function ModalAtencion({
         proxima_cita: proximaCita || null,
         observacion: observacion.trim() || null,
         alerta_saldo_favor: alertaSaldoFavor,
+        motivo_valor_cero: noPaga ? motivoNoPaga.trim() : null,
         remision_especialidad: remitido ? remisionEspecialidad.trim() || null : null,
         ...(comprobanteDatafonoUrl ? { comprobante_datafono_url: comprobanteDatafonoUrl } : {}),
         updated_at: new Date().toISOString(),
@@ -747,15 +756,18 @@ function ModalAtencion({
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
           />
         </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Valor de venta</label>
-          <input
-            type="number"
-            value={valorTratamiento}
-            onChange={(e) => setValorTratamiento(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-          />
-        </div>
+        <CamposNoPaga noPaga={noPaga} setNoPaga={setNoPaga} motivo={motivoNoPaga} setMotivo={setMotivoNoPaga} />
+        {!noPaga && (
+          <div>
+            <label className="block text-sm font-medium mb-1">Valor de venta</label>
+            <input
+              type="number"
+              value={valorTratamiento}
+              onChange={(e) => setValorTratamiento(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          </div>
+        )}
 
         <div>
           <label className="block text-sm font-medium mb-1">Próxima cita</label>
@@ -1004,6 +1016,8 @@ function ModalEditarValor({
   const [alertaSaldoFavor, setAlertaSaldoFavor] = useState(false);
   const [cargoId, setCargoId] = useState<string | null>(null);
   const [valor, setValor] = useState("");
+  const [noPaga, setNoPaga] = useState(false);
+  const [motivoNoPaga, setMotivoNoPaga] = useState("");
   const [cargando, setCargando] = useState(true);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1065,7 +1079,7 @@ function ModalEditarValor({
       const { data: v } = await supabase
         .from("visitas")
         .select(
-          "tratamiento, proxima_cita, observacion, alerta_saldo_favor, sede_id, doctora_id, paciente_id, fecha, remision_especialidad, comprobante_datafono_url, pacientes(nombre)",
+          "tratamiento, proxima_cita, observacion, alerta_saldo_favor, motivo_valor_cero, sede_id, doctora_id, paciente_id, fecha, remision_especialidad, comprobante_datafono_url, pacientes(nombre)",
         )
         .eq("id", visitaId)
         .single();
@@ -1074,6 +1088,7 @@ function ModalEditarValor({
         proxima_cita: string | null;
         observacion: string | null;
         alerta_saldo_favor: boolean;
+        motivo_valor_cero: string | null;
         sede_id: string;
         doctora_id: string;
         paciente_id: string;
@@ -1087,6 +1102,10 @@ function ModalEditarValor({
       setProximaCita(visita?.proxima_cita ?? "");
       setObservacion(visita?.observacion ?? "");
       setAlertaSaldoFavor(visita?.alerta_saldo_favor ?? false);
+      if (visita?.motivo_valor_cero) {
+        setNoPaga(true);
+        setMotivoNoPaga(visita.motivo_valor_cero);
+      }
       if (visita?.remision_especialidad) {
         setRemitido(true);
         setRemisionEspecialidad(visita.remision_especialidad);
@@ -1214,6 +1233,10 @@ function ModalEditarValor({
       setError('Marcaste "Comprobante de datáfono" pero falta adjuntar el archivo.');
       return;
     }
+    if (noPaga && !motivoNoPaga.trim()) {
+      setError('Marcaste "El paciente no paga" — escribe el motivo.');
+      return;
+    }
     setGuardando(true);
     setError(null);
 
@@ -1236,6 +1259,7 @@ function ModalEditarValor({
         proxima_cita: proximaCita.trim() || null,
         observacion: observacion.trim() || null,
         alerta_saldo_favor: alertaSaldoFavor,
+        motivo_valor_cero: noPaga ? motivoNoPaga.trim() : null,
         remision_especialidad: remitido ? remisionEspecialidad.trim() || null : null,
         comprobante_datafono_url: comprobanteDatafonoUrl,
         updated_at: new Date().toISOString(),
@@ -1248,8 +1272,26 @@ function ModalEditarValor({
     }
 
     // Procedimiento (tratamiento/valor) — actualiza el cargo si ya existe,
-    // lo crea si se le está poniendo valor por primera vez.
-    if (cargoId) {
+    // lo crea si se le está poniendo valor por primera vez. Si ahora el
+    // paciente "no paga", se borra el cargo del procedimiento (solo si
+    // Recepción todavía no le registró pagos).
+    if (noPaga && cargoId) {
+      const { count } = await supabase.from("cargo_pagos").select("id", { count: "exact", head: true }).eq("cargo_id", cargoId);
+      if ((count ?? 0) > 0) {
+        setGuardando(false);
+        setError("Este procedimiento ya tiene pagos registrados en Recepción — pídele a Recepción que los corrija antes de marcarlo como \"no paga\".");
+        return;
+      }
+      const { error: errorCargo } = await supabase.from("cargos").delete().eq("id", cargoId);
+      if (errorCargo) {
+        setGuardando(false);
+        setError(errorCargo.message);
+        return;
+      }
+      setCargoId(null);
+    } else if (noPaga) {
+      // Nada que hacer: no hay cargo de procedimiento y no se crea.
+    } else if (cargoId) {
       const { error: errorCargo } = await supabase
         .from("cargos")
         .update({ concepto: tratamiento || "Procedimiento", valor: Number(valor) || 0 })
@@ -1430,15 +1472,18 @@ function ModalEditarValor({
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Valor de venta</label>
-              <input
-                type="number"
-                value={valor}
-                onChange={(e) => setValor(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-              />
-            </div>
+            <CamposNoPaga noPaga={noPaga} setNoPaga={setNoPaga} motivo={motivoNoPaga} setMotivo={setMotivoNoPaga} />
+            {!noPaga && (
+              <div>
+                <label className="block text-sm font-medium mb-1">Valor de venta</label>
+                <input
+                  type="number"
+                  value={valor}
+                  onChange={(e) => setValor(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                />
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium mb-1">Próxima cita</label>
               <input
@@ -1680,6 +1725,39 @@ function ModalEditarValor({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Check "El paciente no paga" + motivo — reemplaza el valor de venta. */
+function CamposNoPaga({
+  noPaga,
+  setNoPaga,
+  motivo,
+  setMotivo,
+}: {
+  noPaga: boolean;
+  setNoPaga: (v: boolean) => void;
+  motivo: string;
+  setMotivo: (v: string) => void;
+}) {
+  return (
+    <div className={noPaga ? "rounded-lg bg-amber-50 border border-amber-300 p-3 space-y-2" : ""}>
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <input type="checkbox" checked={noPaga} onChange={(e) => setNoPaga(e.target.checked)} />
+        El paciente no paga
+      </label>
+      {noPaga && (
+        <>
+          <input
+            value={motivo}
+            onChange={(e) => setMotivo(e.target.value)}
+            placeholder="Motivo — ej: control incluido en el tratamiento, garantía"
+            className="w-full rounded-lg border border-amber-300 px-3 py-2 text-sm bg-white"
+          />
+          <p className="text-xs text-amber-700">En Recepción va a salir "NO PAGA" con este motivo al programar la próxima cita.</p>
+        </>
+      )}
     </div>
   );
 }
