@@ -1508,6 +1508,12 @@ function umbralRetencionLab(fecha: string): number {
 }
 const PCT_RETENCION_LAB = 0.04;
 
+/** Órdenes duplicadas que se dejaron en $0 con "DUPLICADO" en la factura
+ *  para anularlas — no se le muestran al laboratorio en la liquidación. */
+function esDuplicadoEnCero(f: { valor_factura: number; factura_numero: string | null }): boolean {
+  return f.valor_factura === 0 && /duplicad/i.test(f.factura_numero ?? "");
+}
+
 interface FilaLab {
   id: string;
   fecha: string | null;
@@ -1550,11 +1556,14 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
         .eq("periodo_fin", periodo.fin);
       const porLab: Record<string, DetalleConcepto[]> = {};
       for (const c of (data as { id: string; laboratorio_id: string; concepto: string; valor: number }[]) ?? []) {
+        // Con un laboratorio filtrado, solo sus ajustes — los de los demás
+        // laboratorios no deben salir en su liquidación.
+        if (laboratorioId && c.laboratorio_id !== laboratorioId) continue;
         (porLab[c.laboratorio_id] ??= []).push({ id: c.id, concepto: c.concepto, valor: Number(c.valor) });
       }
       setConceptosPorLab(porLab);
     })();
-  }, [periodo.inicio, periodo.fin, recargarConceptos]);
+  }, [periodo.inicio, periodo.fin, recargarConceptos, laboratorioId]);
 
   const formConceptoLabVacio: FormConcepto = { abierto: false, concepto: "", valor: "", guardando: false };
   function formConceptoLabDe(laboratorioId: string): FormConcepto {
@@ -1686,34 +1695,59 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
 
   function generarPDF() {
     const nombreLab = laboratorioId ? laboratorios.find((l) => l.id === laboratorioId)?.nombre : null;
-    const filasHtml = filas
-      .map((f) => {
-        const ret = retencionDe(f);
-        return `<tr><td>${esc(f.fechaFactura ?? "—")}</td><td>${esc(f.fechaInstalado ?? "—")}</td><td>${esc(f.paciente)}</td><td>${esc(f.doctora)}${
-          f.doctoraInstala ? ` <span class="nota">+ ${esc(f.doctoraInstala)} (50/50)</span>` : ""
-        }</td><td>${esc(f.laboratorio)}</td><td>${esc(f.factura_numero ?? "—")}</td><td class="num">${esc(
-          fmtCOP(f.valor_factura),
-        )}</td><td class="num">${esc(fmtCOP(ret))}</td><td class="num">${esc(fmtCOP(f.valor_factura - ret))}</td></tr>`;
-      })
-      .join("");
-    const filasTotalLab = Object.entries(totalesPorLab)
-      .map(([labId, t]) => {
-        const neto = t.facturado - t.retencion;
-        const conceptos = totalConceptosDe(labId);
-        return `<tr><td>${esc(t.nombre)}</td><td class="num">${esc(fmtCOP(t.facturado))}</td><td class="num">${esc(
-          fmtCOP(t.retencion),
-        )}</td><td class="num">${esc(fmtCOP(neto))}</td><td class="num">${esc(fmtCOP(conceptos))}</td><td class="num">${esc(
-          fmtCOP(neto + conceptos),
-        )}</td></tr>`;
-      })
-      .join("");
-    const conceptosHtml = Object.entries(totalesPorLab)
-      .flatMap(([labId, t]) => (conceptosPorLab[labId] ?? []).map((c) => ({ ...c, labNombre: t.nombre })))
-      .map(
-        (c) =>
-          `<tr><td>${esc(c.labNombre)}</td><td>${esc(c.concepto)}</td><td class="num">${esc(fmtCOP(c.valor))}</td></tr>`,
-      )
-      .join("");
+    // Una liquidación por laboratorio (cada una en su página, con SUS
+    // facturas, SUS ajustes administrativos y SU total) — así se le puede
+    // enviar a cada laboratorio solo lo suyo, aunque no se haya filtrado.
+    const labIds = laboratorioId ? [laboratorioId] : Object.keys(totalesPorLab);
+    const seccionLab = (labId: string): string => {
+      const t = totalesPorLab[labId] ?? { nombre: laboratorios.find((l) => l.id === labId)?.nombre ?? "—", facturado: 0, retencion: 0 };
+      const filasLab = filas.filter((f) => f.laboratorioId === labId && !esDuplicadoEnCero(f));
+      const filasHtml = filasLab
+        .map((f) => {
+          const ret = retencionDe(f);
+          return `<tr><td>${esc(f.fechaFactura ?? "—")}</td><td>${esc(f.fechaInstalado ?? "—")}</td><td>${esc(f.paciente)}</td><td>${esc(f.doctora)}${
+            f.doctoraInstala ? ` <span class="nota">+ ${esc(f.doctoraInstala)} (50/50)</span>` : ""
+          }</td><td>${esc(f.factura_numero ?? "—")}</td><td class="num">${esc(
+            fmtCOP(f.valor_factura),
+          )}</td><td class="num">${esc(fmtCOP(ret))}</td><td class="num">${esc(fmtCOP(f.valor_factura - ret))}</td></tr>`;
+        })
+        .join("");
+      const conceptos = conceptosPorLab[labId] ?? [];
+      const totalAjustes = conceptos.reduce((a, c) => a + c.valor, 0);
+      const neto = t.facturado - t.retencion;
+      const conceptosHtml = conceptos
+        .map((c) => `<tr><td>${esc(c.concepto)}</td><td class="num">${esc(fmtCOP(c.valor))}</td></tr>`)
+        .join("");
+      return `
+  <h1>Liquidación de laboratorios — ${esc(t.nombre)}</h1>
+  <p class="periodo">Período ${periodo.inicio} a ${periodo.fin} — retención del ${PCT_RETENCION_LAB * 100}% aplicada a facturas
+  que superan la cuantía mínima vigente en su fecha.</p>
+
+  <h2>Facturas</h2>
+  <table>
+    <thead><tr><th>Fecha factura</th><th>Fecha instalación</th><th>Paciente</th><th>Doctora</th><th>Factura</th><th class="num">Valor</th><th class="num">Retención</th><th class="num">Neto</th></tr></thead>
+    <tbody>${filasHtml || `<tr><td colspan="8">Sin facturas en este período.</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="5">Total</td><td class="num">${esc(fmtCOP(t.facturado))}</td><td class="num">${esc(
+      fmtCOP(t.retencion),
+    )}</td><td class="num">${esc(fmtCOP(neto))}</td></tr></tfoot>
+  </table>
+
+  ${conceptosHtml ? `<h2>Ajustes administrativos</h2>
+  <table>
+    <thead><tr><th>Concepto</th><th class="num">Valor</th></tr></thead>
+    <tbody>${conceptosHtml}</tbody>
+    <tfoot><tr><td>Total ajustes</td><td class="num">${esc(fmtCOP(totalAjustes))}</td></tr></tfoot>
+  </table>` : ""}
+
+  <h2>Total a pagar</h2>
+  <table>
+    <thead><tr><th class="num">Facturado</th><th class="num">Retención</th><th class="num">Neto</th><th class="num">Ajustes</th><th class="num">Total a pagar</th></tr></thead>
+    <tbody><tr class="total"><td class="num">${esc(fmtCOP(t.facturado))}</td><td class="num">${esc(fmtCOP(t.retencion))}</td><td class="num">${esc(
+      fmtCOP(neto),
+    )}</td><td class="num">${esc(fmtCOP(totalAjustes))}</td><td class="num">${esc(fmtCOP(neto + totalAjustes))}</td></tr></tbody>
+  </table>`;
+    };
+    const paginas = labIds.map(seccionLab);
     const html = `<!doctype html>
 <html><head><meta charset="utf-8" />
 <title>Liquidación laboratorios${nombreLab ? ` - ${esc(nombreLab)}` : ""} - ${mes}</title>
@@ -1732,35 +1766,13 @@ function LiquidacionLaboratorios({ mes, sedeId }: { mes: string; sedeId: string 
     position: fixed; top: 14px; right: 14px; background: #2E253A; color: #fff; border: none;
     border-radius: 8px; padding: 8px 14px; font-size: 13px; font-family: inherit; cursor: pointer;
   }
+  .pagina:not(:last-child) { page-break-after: always; }
   @media print { body { padding: 0; } .btn-imprimir { display: none; } }
 </style>
 </head>
 <body>
   <button class="btn-imprimir" onclick="window.print()">Imprimir / Guardar como PDF</button>
-  <h1>Liquidación de laboratorios${nombreLab ? ` — ${esc(nombreLab)}` : ""}</h1>
-  <p class="periodo">Período ${periodo.inicio} a ${periodo.fin} — retención del ${PCT_RETENCION_LAB * 100}% aplicada a facturas
-  que superan la cuantía mínima vigente en su fecha.</p>
-
-  <h2>Facturas</h2>
-  <table>
-    <thead><tr><th>Fecha factura</th><th>Fecha instalación</th><th>Paciente</th><th>Doctora</th><th>Laboratorio</th><th>Factura</th><th class="num">Valor</th><th class="num">Retención</th><th class="num">Neto</th></tr></thead>
-    <tbody>${filasHtml || `<tr><td colspan="9">Sin facturas en este período.</td></tr>`}</tbody>
-    <tfoot><tr><td colspan="6">Total</td><td class="num">${esc(fmtCOP(total))}</td><td class="num">${esc(
-      fmtCOP(totalRetencion),
-    )}</td><td class="num">${esc(fmtCOP(totalNeto))}</td></tr></tfoot>
-  </table>
-
-  ${conceptosHtml ? `<h2>Ajustes administrativos</h2>
-  <table>
-    <thead><tr><th>Laboratorio</th><th>Concepto</th><th class="num">Valor</th></tr></thead>
-    <tbody>${conceptosHtml}</tbody>
-  </table>` : ""}
-
-  <h2>Totales por laboratorio</h2>
-  <table>
-    <thead><tr><th>Laboratorio</th><th class="num">Facturado</th><th class="num">Retención</th><th class="num">Neto</th><th class="num">Ajustes</th><th class="num">Total a pagar</th></tr></thead>
-    <tbody>${filasTotalLab}</tbody>
-  </table>
+  ${paginas.map((p) => `<div class="pagina">${p}</div>`).join("\n") || `<p>Sin facturas ni ajustes en este período.</p>`}
 </body></html>`;
     const ventana = window.open("", "_blank");
     if (!ventana) {
