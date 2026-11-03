@@ -31,6 +31,7 @@ interface VisitaRow {
   paciente_id: string;
   doctora_id: string;
   es_venta_producto: boolean;
+  motivo_valor_cero: string | null;
   pacientes: { nombre: string };
   doctoras: { nombre: string; color_pastel: string };
 }
@@ -100,7 +101,7 @@ export function Recepcion() {
   async function cargarVisitas() {
     const { data } = await supabase
       .from("visitas")
-      .select("id, estado, fecha, paciente_id, doctora_id, es_venta_producto, pacientes(nombre), doctoras(nombre, color_pastel)")
+      .select("id, estado, fecha, paciente_id, doctora_id, es_venta_producto, motivo_valor_cero, pacientes(nombre), doctoras(nombre, color_pastel)")
       .eq("sede_id", sedeActiva.id)
       .eq("fecha", fecha)
       .order("created_at", { ascending: false });
@@ -618,7 +619,14 @@ function VisitaCard({
         disabled={!onClick}
         className={`flex-1 flex items-center justify-between text-left ${onClick ? "hover:opacity-80" : ""}`}
       >
-        <span className="font-medium text-tinta">{v.pacientes?.nombre}</span>
+        <span className="font-medium text-tinta">
+          {v.pacientes?.nombre}
+          {v.motivo_valor_cero && v.estado !== "espera" && (
+            <span className="ml-2 text-xs font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800" title={v.motivo_valor_cero}>
+              NO PAGA
+            </span>
+          )}
+        </span>
         <span
           className="text-xs font-medium px-2 py-0.5 rounded-full"
           style={{ background: v.doctoras?.color_pastel + "40" }}
@@ -1371,6 +1379,8 @@ function ModalCobro({
   const [conceptoValor, setConceptoValor] = useState("");
   const [precios, setPrecios] = useState<Record<string, number>>({});
   const [motivoCero, setMotivoCero] = useState("");
+  // Motivo con el que consultorio marcó "El paciente no paga".
+  const [motivoNoPaga, setMotivoNoPaga] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [cargandoModal, setCargandoModal] = useState(true);
@@ -1409,6 +1419,7 @@ function ModalCobro({
       setObservacion(v.observacion ?? "");
       setAlertaSaldoFavor(v.alerta_saldo_favor ?? false);
       setMotivoCero(v.motivo_valor_cero ?? "");
+      setMotivoNoPaga(v.motivo_valor_cero?.trim() || null);
 
       const { data: cargosData } = await supabase
         .from("cargos")
@@ -1707,7 +1718,9 @@ function ModalCobro({
         .from("visitas")
         .update({
           estado: "cobrado",
-          motivo_valor_cero: cargos.length === 0 ? motivoCero.trim() : null,
+          // Si hay otros cargos (ej. RX) se conserva el "no paga" que puso
+          // consultorio para el tratamiento.
+          motivo_valor_cero: cargos.length === 0 ? motivoCero.trim() : motivoNoPaga,
           proxima_cita: proximaCita || null,
           cobrado_por: perfil?.id ?? null,
           updated_at: new Date().toISOString(),
@@ -1828,6 +1841,15 @@ function ModalCobro({
                 )}
               </div>
             </div>
+
+            {motivoNoPaga && (
+              <div className="rounded-lg border-2 border-amber-400 bg-amber-50 px-3 py-2.5 mb-3">
+                <p className="text-base font-bold text-amber-800">🚫 NO PAGA</p>
+                <p className="text-sm text-amber-800">
+                  <span className="font-semibold">Motivo (consultorio):</span> {motivoNoPaga}
+                </p>
+              </div>
+            )}
 
             {alertaSaldoFavor && (
               <p className="rounded-lg border-2 border-red-400 bg-red-50 px-3 py-2.5 text-base font-bold text-red-700 mb-3">
