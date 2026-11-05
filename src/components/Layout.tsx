@@ -25,6 +25,7 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
 import type { Sede } from "../lib/types";
+import { ChatSede } from "./ChatSede";
 
 const TABS = [
   { to: "/operacion/recepcion", label: "Recepción", icon: ClipboardList, restringidoEnClinica: true },
@@ -294,6 +295,10 @@ export function Layout() {
           <p className="text-gray-500 text-sm">Cargando sede…</p>
         )}
       </main>
+
+      {sedeActiva && perfil && (
+        <ChatSede sedeId={sedeActiva.id} sedeNombre={sedeActiva.nombre} sedeColor={sedeActiva.color_acento} />
+      )}
     </div>
   );
 }

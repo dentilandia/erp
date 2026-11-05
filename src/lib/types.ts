@@ -665,3 +665,15 @@ export interface RecuperacionSeguimiento {
   registrado_por_nombre: string | null;
   created_at: string;
 }
+
+/** Un mensaje del chat interno de una sede — autor_nombre queda guardado al
+ *  momento de enviar (no se resuelve por join) por la misma razón que el
+ *  resto del ERP: RLS de perfiles no deja ver perfiles de otra sede. */
+export interface MensajeChat {
+  id: string;
+  sede_id: string;
+  autor_id: string | null;
+  autor_nombre: string | null;
+  contenido: string;
+  created_at: string;
+}
