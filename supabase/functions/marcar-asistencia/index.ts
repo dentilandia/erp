@@ -150,15 +150,27 @@ Deno.serve(async (req: Request) => {
   // Las frases avanzan en orden PERSONAL, no por día del calendario — así
   // cada quien vive el mismo hilo conductor desde su primera marca EN LA ERA
   // DE LAS FRASES, sin importar si se saltó días por vacaciones/incapacidad
-  // o si es nueva. Arranca el lunes 21 de septiembre de 2026 — antes de esa
-  // fecha no se muestra ninguna frase, aunque ya estén cargadas.
+  // o si es nueva. La fecha de la columna "Fecha" del archivo de frases NO
+  // se usa en ningún lado: lo único que manda es el número de la frase
+  // (frases_motivacionales.orden = columna "No" del archivo).
+  //
+  // AJUSTE 19-oct-2026: se reinició el punto de partida para todo el equipo.
+  // Desde el lunes 19 de octubre la primera marca de cada persona muestra la
+  // frase No. FRASE_INICIAL, y de ahí en adelante avanza de a una por marca.
+  // Antes de esa fecha no se muestra ninguna frase.
+  //
+  // AJUSTE 5-nov-2026: tabla frases_ajuste (perfil_id, tipo, ajuste). Si la
+  // lista se acabó y volvió a empezar mientras se cargaban frases nuevas, el
+  // ajuste resta esas marcas "repetidas" para que la persona continúe con la
+  // frase que le seguía, sin saltarse ninguna. Sin fila = ajuste 0.
   //
   // El conteo que decide el índice SOLO mira marcas desde esa fecha en
   // adelante — la mayoría del equipo ya tenía marcas viejas cargadas por
   // admin de períodos anteriores (retroactivo, para nómina), y si esas
   // contaran, la primera marca real de hoy le tocaría a cada quien en la
-  // mitad de la historia en vez de en la frase #1.
-  const FECHA_INICIO_FRASES = "2026-09-21";
+  // mitad de la historia en vez de en el punto de partida.
+  const FECHA_INICIO_FRASES = "2026-10-19";
+  const FRASE_INICIAL = 25;
   const INICIO_FRASES_ISO = `${FECHA_INICIO_FRASES}T00:00:00-05:00`;
   const hoyBogota = new Date().toLocaleDateString("en-CA", { timeZone: "America/Bogota" });
   let frase: string | null = null;
@@ -176,7 +188,15 @@ Deno.serve(async (req: Request) => {
         .eq("perfil_id", perfil.id)
         .eq("tipo", body.tipo)
         .gte("marcado_en", INICIO_FRASES_ISO);
-      const indice = Math.max(0, (count ?? 1) - 1) % frases.length;
+      const { data: filaAjuste } = await admin
+        .from("frases_ajuste")
+        .select("ajuste")
+        .eq("perfil_id", perfil.id)
+        .eq("tipo", body.tipo)
+        .maybeSingle();
+      const ajuste = filaAjuste?.ajuste ?? 0;
+      const base = FRASE_INICIAL - 1 + Math.max(0, (count ?? 1) - 1) - ajuste;
+      const indice = ((base % frases.length) + frases.length) % frases.length;
       frase = frases[indice].texto;
     }
   }
