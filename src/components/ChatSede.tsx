@@ -6,6 +6,22 @@ import type { MensajeChat } from "../lib/types";
 
 const CLAVE_ULTIMA_LECTURA = "erp_chat_ultima_lectura_";
 
+// Paleta fija tipo "grupos de WhatsApp": cada persona siempre sale del mismo
+// color, calculado a partir de su id (estable aunque cambie el orden de los
+// mensajes o quien esté mirando el chat).
+const COLORES_AUTOR = ["#D32F2F", "#1976D2", "#388E3C", "#F57C00", "#7B1FA2", "#00796B", "#C2185B", "#5D4037"];
+
+function colorAutor(autorId: string | null, autorNombre: string | null): string {
+  const clave = autorId ?? autorNombre ?? "";
+  let hash = 0;
+  for (let i = 0; i < clave.length; i++) hash = (hash * 31 + clave.charCodeAt(i)) % 1_000_000;
+  return COLORES_AUTOR[hash % COLORES_AUTOR.length];
+}
+
+function primerNombre(nombre: string | null): string {
+  return nombre?.trim().split(/\s+/)[0] || "—";
+}
+
 export function ChatSede({ sedeId, sedeNombre, sedeColor }: { sedeId: string; sedeNombre: string; sedeColor: string }) {
   const { perfil } = useAuth();
   const [abierto, setAbierto] = useState(false);
@@ -98,7 +114,11 @@ export function ChatSede({ sedeId, sedeNombre, sedeColor }: { sedeId: string; se
               const esPropio = m.autor_id === perfil?.id;
               return (
                 <div key={m.id} className={`flex flex-col ${esPropio ? "items-end" : "items-start"}`}>
-                  {!esPropio && <span className="text-[10px] text-gray-400 px-1">{m.autor_nombre ?? "—"}</span>}
+                  {!esPropio && (
+                    <span className="text-[11px] font-semibold px-1" style={{ color: colorAutor(m.autor_id, m.autor_nombre) }}>
+                      {primerNombre(m.autor_nombre)}
+                    </span>
+                  )}
                   <div
                     className={`max-w-[85%] rounded-xl px-3 py-1.5 text-sm whitespace-pre-wrap break-words ${
                       esPropio ? "text-white rounded-br-sm" : "bg-gray-100 text-gray-700 rounded-bl-sm"
