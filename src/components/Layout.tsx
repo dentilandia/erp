@@ -26,6 +26,7 @@ import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
 import type { Sede } from "../lib/types";
 import { ChatSede } from "./ChatSede";
+import { BuzonNotificaciones } from "./BuzonNotificaciones";
 
 const TABS = [
   { to: "/operacion/recepcion", label: "Recepción", icon: ClipboardList, restringidoEnClinica: true },
@@ -164,6 +165,7 @@ export function Layout() {
               </span>
             )
           )}
+          {perfil && <BuzonNotificaciones perfilId={perfil.id} />}
           <span className="text-sm text-gris">{perfil?.nombre}</span>
           <button onClick={signOut} title="Cerrar sesión" className="text-gris hover:text-white">
             <LogOut size={18} />
