@@ -101,6 +101,21 @@ function pendienteAddi(c: CierreCajaRow, financiacion: Record<string, Financiaci
   return null;
 }
 
+/** Las 3 casillas de transferencia comparten una sola nota (nota_transf_extra)
+ *  — por eso se reportan como un solo pendiente, no uno por casilla, para no
+ *  repetir la misma nota tres veces en el panel. */
+function pendienteTransferencia(c: CierreCajaRow): { tipo: string; descripcion: string } | null {
+  if (!c.transf_por_verificar && !c.transf_sin_banco && !c.urgente_transf) return null;
+  const etiquetas: string[] = [];
+  if (c.urgente_transf) etiquetas.push("urgente");
+  if (c.transf_por_verificar) etiquetas.push("por verificar");
+  if (c.transf_sin_banco) etiquetas.push("sin banco");
+  return {
+    tipo: c.urgente_transf ? "Urgente transferencia" : "Transferencia por verificar",
+    descripcion: c.nota_transf_extra || `Transferencia ${etiquetas.join(", ")} — falta confirmar contra el banco.`,
+  };
+}
+
 function tienePendientes(c: CierreCajaRow, financiacion: Record<string, FinanciacionDia>, fuenteDatafono: Record<string, boolean>) {
   return (
     !c.cuadra ||
@@ -109,7 +124,8 @@ function tienePendientes(c: CierreCajaRow, financiacion: Record<string, Financia
     faltaCierreFisico(c) ||
     (!!c.dif_dataf_bruta && !c.dataf_explicado) ||
     pendienteAddi(c, financiacion) !== null ||
-    !!c.nota_consignacion_pendiente
+    !!c.nota_consignacion_pendiente ||
+    pendienteTransferencia(c) !== null
   );
 }
 
@@ -175,6 +191,16 @@ function pendientesDe(
       sede: c.sede,
       tipo: "Consignación",
       descripcion: c.nota_consignacion_pendiente,
+    });
+  }
+  const transferencia = pendienteTransferencia(c);
+  if (transferencia) {
+    items.push({
+      clave: `${base}|Transferencia`,
+      fecha: c.fecha,
+      sede: c.sede,
+      tipo: transferencia.tipo,
+      descripcion: transferencia.descripcion,
     });
   }
   return items;
