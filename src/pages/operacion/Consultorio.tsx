@@ -477,6 +477,10 @@ function ModalAtencion({
   const [interconsultaEspecialidad, setInterconsultaEspecialidad] = useState("");
   const [comprobanteDatafono, setComprobanteDatafono] = useState(false);
   const [archivoDatafono, setArchivoDatafono] = useState<File | null>(null);
+  const [seEntregoPresupuesto, setSeEntregoPresupuesto] = useState(false);
+  const [seRecomendoSedacion, setSeRecomendoSedacion] = useState(false);
+  const [esPrimeraVez, setEsPrimeraVez] = useState(false);
+  const [seMandoRadiografia, setSeMandoRadiografia] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -700,6 +704,10 @@ function ModalAtencion({
         alerta_saldo_favor: alertaSaldoFavor,
         motivo_valor_cero: noPaga ? motivoNoPaga.trim() : null,
         remision_especialidad: remitido ? remisionEspecialidad.trim() || null : null,
+        se_entrego_presupuesto: seEntregoPresupuesto,
+        se_recomendo_sedacion: seRecomendoSedacion,
+        es_primera_vez: esPrimeraVez,
+        se_mando_radiografia: seMandoRadiografia,
         ...(comprobanteDatafonoUrl ? { comprobante_datafono_url: comprobanteDatafonoUrl } : {}),
         updated_at: new Date().toISOString(),
       })
@@ -796,10 +804,25 @@ function ModalAtencion({
           </p>
         </div>
 
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={rxTomada} onChange={(e) => setRxTomada(e.target.checked)} />
-          RX tomada {precios["rx"] ? `(${fmtCOP(precios["rx"])})` : ""}
-        </label>
+        <div className="rounded-lg border border-gray-200 p-3 space-y-2.5">
+          <p className="text-sm font-semibold text-tinta">Otros cobros</p>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={rxTomada} onChange={(e) => setRxTomada(e.target.checked)} />
+            RX periapical {precios["rx"] ? `(${fmtCOP(precios["rx"])})` : ""}
+          </label>
+          <div>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={botonTraccion} onChange={(e) => setBotonTraccion(e.target.checked)} />
+              Botón de tracción {precios["boton_traccion"] ? `(${fmtCOP(precios["boton_traccion"])})` : ""}
+            </label>
+            {botonTraccion && (
+              <label className="flex items-center gap-2 text-sm mt-1.5 ml-6 text-gray-500">
+                <input type="checkbox" checked={botonConCadeneta} onChange={(e) => setBotonConCadeneta(e.target.checked)} />
+                Con cadeneta
+              </label>
+            )}
+          </div>
+        </div>
 
         {sedeId === SEDE_LAS_AMERICAS_ID && (
           <div>
@@ -829,50 +852,40 @@ function ModalAtencion({
           </div>
         )}
 
-        <div>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={botonTraccion} onChange={(e) => setBotonTraccion(e.target.checked)} />
-            Botón de tracción entregado {precios["boton_traccion"] ? `(${fmtCOP(precios["boton_traccion"])})` : ""}
-          </label>
-          {botonTraccion && (
-            <label className="flex items-center gap-2 text-sm mt-1.5 ml-6 text-gray-500">
-              <input type="checkbox" checked={botonConCadeneta} onChange={(e) => setBotonConCadeneta(e.target.checked)} />
-              Con cadeneta
+        <div className="rounded-lg border border-gray-200 p-3 space-y-2.5">
+          <p className="text-sm font-semibold text-tinta">Remisiones e interconsultas</p>
+          <div>
+            <label className="flex items-center gap-2 text-sm mb-2">
+              <input type="checkbox" checked={remitido} onChange={(e) => setRemitido(e.target.checked)} />
+              Remisión a otra especialidad
             </label>
-          )}
-        </div>
+            {remitido && (
+              <input
+                value={remisionEspecialidad}
+                onChange={(e) => setRemisionEspecialidad(e.target.value)}
+                placeholder="Ej: Endodoncia, Ortodoncia interceptiva…"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            )}
+          </div>
 
-        <div>
-          <label className="flex items-center gap-2 text-sm mb-2">
-            <input type="checkbox" checked={remitido} onChange={(e) => setRemitido(e.target.checked)} />
-            Remisión a otra especialidad
-          </label>
-          {remitido && (
-            <input
-              value={remisionEspecialidad}
-              onChange={(e) => setRemisionEspecialidad(e.target.value)}
-              placeholder="Ej: Endodoncia, Ortodoncia interceptiva…"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            />
-          )}
-        </div>
-
-        <div>
-          <label className="flex items-center gap-2 text-sm mb-2">
-            <input type="checkbox" checked={interconsulta} onChange={(e) => setInterconsulta(e.target.checked)} />
-            Interconsulta con otra especialidad
-          </label>
-          {interconsulta && (
-            <input
-              value={interconsultaEspecialidad}
-              onChange={(e) => setInterconsultaEspecialidad(e.target.value)}
-              placeholder="Especialidad a la que se remite"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            />
-          )}
-          <p className="text-xs text-gray-400 mt-1">
-            Queda registrada en Recepción para hacerle seguimiento hasta que llegue la respuesta.
-          </p>
+          <div>
+            <label className="flex items-center gap-2 text-sm mb-2">
+              <input type="checkbox" checked={interconsulta} onChange={(e) => setInterconsulta(e.target.checked)} />
+              Interconsulta con otra especialidad
+            </label>
+            {interconsulta && (
+              <input
+                value={interconsultaEspecialidad}
+                onChange={(e) => setInterconsultaEspecialidad(e.target.value)}
+                placeholder="Especialidad a la que se remite"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            )}
+            <p className="text-xs text-gray-400 mt-1">
+              Queda registrada en Recepción para hacerle seguimiento hasta que llegue la respuesta.
+            </p>
+          </div>
         </div>
 
         <div>
@@ -891,7 +904,8 @@ function ModalAtencion({
           </div>
         </div>
 
-        <div>
+        <div className="rounded-lg border-2 border-indigo-200 bg-indigo-50/50 p-3">
+          <p className="text-sm font-semibold text-indigo-800 mb-2">Laboratorio</p>
           <label className="flex items-center gap-2 text-sm mb-2">
             <input type="checkbox" checked={enviarLab} onChange={(e) => setEnviarLab(e.target.checked)} />
             Enviar aparato a laboratorio
@@ -982,6 +996,30 @@ function ModalAtencion({
           )}
         </div>
 
+        <div className="rounded-lg border border-gray-200 p-3 space-y-1.5">
+          <p className="text-sm font-semibold text-tinta mb-1">Servicio al cliente</p>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={seEntregoPresupuesto}
+              onChange={(e) => setSeEntregoPresupuesto(e.target.checked)}
+            />
+            Se le entregó presupuesto
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={seRecomendoSedacion} onChange={(e) => setSeRecomendoSedacion(e.target.checked)} />
+            Se le recomendó sedación
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={esPrimeraVez} onChange={(e) => setEsPrimeraVez(e.target.checked)} />
+            Es primera vez
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={seMandoRadiografia} onChange={(e) => setSeMandoRadiografia(e.target.checked)} />
+            Se le mandó radiografía
+          </label>
+        </div>
+
         {error && <p className="text-sm text-red-600">{error}</p>}
         <button
           onClick={guardar}
@@ -1059,6 +1097,10 @@ function ModalEditarValor({
   const [comprobanteDatafono, setComprobanteDatafono] = useState(false);
   const [comprobanteDatafonoUrlExistente, setComprobanteDatafonoUrlExistente] = useState<string | null>(null);
   const [archivoDatafono, setArchivoDatafono] = useState<File | null>(null);
+  const [seEntregoPresupuesto, setSeEntregoPresupuesto] = useState(false);
+  const [seRecomendoSedacion, setSeRecomendoSedacion] = useState(false);
+  const [esPrimeraVez, setEsPrimeraVez] = useState(false);
+  const [seMandoRadiografia, setSeMandoRadiografia] = useState(false);
 
   async function cargarLabOrdenes() {
     const { data } = await supabase
@@ -1079,7 +1121,7 @@ function ModalEditarValor({
       const { data: v } = await supabase
         .from("visitas")
         .select(
-          "tratamiento, proxima_cita, observacion, alerta_saldo_favor, motivo_valor_cero, sede_id, doctora_id, paciente_id, fecha, remision_especialidad, comprobante_datafono_url, pacientes(nombre)",
+          "tratamiento, proxima_cita, observacion, alerta_saldo_favor, motivo_valor_cero, sede_id, doctora_id, paciente_id, fecha, remision_especialidad, comprobante_datafono_url, se_entrego_presupuesto, se_recomendo_sedacion, es_primera_vez, se_mando_radiografia, pacientes(nombre)",
         )
         .eq("id", visitaId)
         .single();
@@ -1095,6 +1137,10 @@ function ModalEditarValor({
         fecha: string;
         remision_especialidad: string | null;
         comprobante_datafono_url: string | null;
+        se_entrego_presupuesto: boolean;
+        se_recomendo_sedacion: boolean;
+        es_primera_vez: boolean;
+        se_mando_radiografia: boolean;
         pacientes: { nombre: string };
       } | null;
       setPacienteNombre(visita?.pacientes?.nombre ?? "");
@@ -1102,6 +1148,10 @@ function ModalEditarValor({
       setProximaCita(visita?.proxima_cita ?? "");
       setObservacion(visita?.observacion ?? "");
       setAlertaSaldoFavor(visita?.alerta_saldo_favor ?? false);
+      setSeEntregoPresupuesto(visita?.se_entrego_presupuesto ?? false);
+      setSeRecomendoSedacion(visita?.se_recomendo_sedacion ?? false);
+      setEsPrimeraVez(visita?.es_primera_vez ?? false);
+      setSeMandoRadiografia(visita?.se_mando_radiografia ?? false);
       if (visita?.motivo_valor_cero) {
         setNoPaga(true);
         setMotivoNoPaga(visita.motivo_valor_cero);
@@ -1262,6 +1312,10 @@ function ModalEditarValor({
         motivo_valor_cero: noPaga ? motivoNoPaga.trim() : null,
         remision_especialidad: remitido ? remisionEspecialidad.trim() || null : null,
         comprobante_datafono_url: comprobanteDatafonoUrl,
+        se_entrego_presupuesto: seEntregoPresupuesto,
+        se_recomendo_sedacion: seRecomendoSedacion,
+        es_primera_vez: esPrimeraVez,
+        se_mando_radiografia: seMandoRadiografia,
         updated_at: new Date().toISOString(),
       })
       .eq("id", visitaId);
@@ -1510,10 +1564,25 @@ function ModalEditarValor({
               </p>
             </div>
 
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={rxTomada} onChange={(e) => setRxTomada(e.target.checked)} />
-              RX tomada {precios["rx"] ? `(${fmtCOP(precios["rx"])})` : ""}
-            </label>
+            <div className="rounded-lg border border-gray-200 p-3 space-y-2.5">
+              <p className="text-sm font-semibold text-tinta">Otros cobros</p>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={rxTomada} onChange={(e) => setRxTomada(e.target.checked)} />
+                RX periapical {precios["rx"] ? `(${fmtCOP(precios["rx"])})` : ""}
+              </label>
+              <div>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={botonTraccion} onChange={(e) => setBotonTraccion(e.target.checked)} />
+                  Botón de tracción {precios["boton_traccion"] ? `(${fmtCOP(precios["boton_traccion"])})` : ""}
+                </label>
+                {botonTraccion && (
+                  <label className="flex items-center gap-2 text-sm mt-1.5 ml-6 text-gray-500">
+                    <input type="checkbox" checked={botonConCadeneta} onChange={(e) => setBotonConCadeneta(e.target.checked)} />
+                    Con cadeneta
+                  </label>
+                )}
+              </div>
+            </div>
 
             {visitaDatos?.sede_id === SEDE_LAS_AMERICAS_ID && (
               <div>
@@ -1546,35 +1615,23 @@ function ModalEditarValor({
               </div>
             )}
 
-            <div>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={botonTraccion} onChange={(e) => setBotonTraccion(e.target.checked)} />
-                Botón de tracción entregado {precios["boton_traccion"] ? `(${fmtCOP(precios["boton_traccion"])})` : ""}
-              </label>
-              {botonTraccion && (
-                <label className="flex items-center gap-2 text-sm mt-1.5 ml-6 text-gray-500">
-                  <input type="checkbox" checked={botonConCadeneta} onChange={(e) => setBotonConCadeneta(e.target.checked)} />
-                  Con cadeneta
+            <div className="rounded-lg border border-gray-200 p-3 space-y-2.5">
+              <p className="text-sm font-semibold text-tinta">Remisiones e interconsultas</p>
+              <div>
+                <label className="flex items-center gap-2 text-sm mb-2">
+                  <input type="checkbox" checked={remitido} onChange={(e) => setRemitido(e.target.checked)} />
+                  Remisión a otra especialidad
                 </label>
-              )}
-            </div>
+                {remitido && (
+                  <input
+                    value={remisionEspecialidad}
+                    onChange={(e) => setRemisionEspecialidad(e.target.value)}
+                    placeholder="Ej: Endodoncia, Ortodoncia interceptiva…"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  />
+                )}
+              </div>
 
-            <div>
-              <label className="flex items-center gap-2 text-sm mb-2">
-                <input type="checkbox" checked={remitido} onChange={(e) => setRemitido(e.target.checked)} />
-                Remisión a otra especialidad
-              </label>
-              {remitido && (
-                <input
-                  value={remisionEspecialidad}
-                  onChange={(e) => setRemisionEspecialidad(e.target.value)}
-                  placeholder="Ej: Endodoncia, Ortodoncia interceptiva…"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                />
-              )}
-            </div>
-
-            <div>
               {interconsultaId ? (
                 <p className="text-sm">
                   <span className="font-medium">Interconsulta:</span>{" "}
@@ -1625,8 +1682,8 @@ function ModalEditarValor({
               </div>
             </div>
 
-            <div>
-              <p className="text-sm font-medium mb-1">Envío a laboratorio</p>
+            <div className="rounded-lg border-2 border-indigo-200 bg-indigo-50/50 p-3">
+              <p className="text-sm font-semibold text-indigo-800 mb-2">Laboratorio</p>
               {labOrdenes.length > 0 && (
                 <div className="space-y-1 mb-2">
                   {labOrdenes.map((o) => (
@@ -1714,6 +1771,31 @@ function ModalEditarValor({
                 </button>
               )}
             </div>
+
+            <div className="rounded-lg border border-gray-200 p-3 space-y-1.5">
+              <p className="text-sm font-semibold text-tinta mb-1">Servicio al cliente</p>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={seEntregoPresupuesto}
+                  onChange={(e) => setSeEntregoPresupuesto(e.target.checked)}
+                />
+                Se le entregó presupuesto
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={seRecomendoSedacion} onChange={(e) => setSeRecomendoSedacion(e.target.checked)} />
+                Se le recomendó sedación
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={esPrimeraVez} onChange={(e) => setEsPrimeraVez(e.target.checked)} />
+                Es primera vez
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={seMandoRadiografia} onChange={(e) => setSeMandoRadiografia(e.target.checked)} />
+                Se le mandó radiografía
+              </label>
+            </div>
+
             {error && <p className="text-sm text-red-600">{error}</p>}
             <button
               onClick={guardar}

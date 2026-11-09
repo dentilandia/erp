@@ -1358,6 +1358,7 @@ function ModalCobro({
   const [estadoVisita, setEstadoVisita] = useState<"espera" | "consulta" | "cobrado">("consulta");
   const [visitaFecha, setVisitaFecha] = useState(today());
   const [proximaCita, setProximaCita] = useState("");
+  const [noAgendoProximaCita, setNoAgendoProximaCita] = useState(false);
   const [observacion, setObservacion] = useState("");
   const [alertaSaldoFavor, setAlertaSaldoFavor] = useState(false);
   const [insumos, setInsumos] = useState<Record<string, boolean>>({});
@@ -1394,7 +1395,7 @@ function ModalCobro({
       const { data: visita } = await supabase
         .from("visitas")
         .select(
-          "id, estado, fecha, paciente_id, motivo_valor_cero, tratamiento, proxima_cita, observacion, alerta_saldo_favor, pacientes(nombre)",
+          "id, estado, fecha, paciente_id, motivo_valor_cero, tratamiento, proxima_cita, observacion, alerta_saldo_favor, no_agendo_proxima_cita, pacientes(nombre)",
         )
         .eq("id", visitaId)
         .single();
@@ -1409,6 +1410,7 @@ function ModalCobro({
         proxima_cita: string | null;
         observacion: string | null;
         alerta_saldo_favor: boolean;
+        no_agendo_proxima_cita: boolean;
         pacientes: { nombre: string };
       };
       setPacienteId(v.paciente_id);
@@ -1418,6 +1420,7 @@ function ModalCobro({
       setProximaCita(v.proxima_cita ?? "");
       setObservacion(v.observacion ?? "");
       setAlertaSaldoFavor(v.alerta_saldo_favor ?? false);
+      setNoAgendoProximaCita(v.no_agendo_proxima_cita ?? false);
       setMotivoCero(v.motivo_valor_cero ?? "");
       setMotivoNoPaga(v.motivo_valor_cero?.trim() || null);
 
@@ -1722,6 +1725,7 @@ function ModalCobro({
           // consultorio para el tratamiento.
           motivo_valor_cero: cargos.length === 0 ? motivoCero.trim() : motivoNoPaga,
           proxima_cita: proximaCita || null,
+          no_agendo_proxima_cita: noAgendoProximaCita,
           cobrado_por: perfil?.id ?? null,
           updated_at: new Date().toISOString(),
         })
@@ -1938,7 +1942,7 @@ function ModalCobro({
             </div>
 
             <div className="rounded-lg border border-dashed border-gray-300 p-3 mb-4">
-              <p className="text-xs font-medium text-gray-500 mb-2">Agregar concepto administrativo</p>
+              <p className="text-xs font-medium text-gray-500 mb-2">Otros cobros</p>
               <div className="flex gap-2">
                 <select
                   value={conceptoTipo}
@@ -2022,6 +2026,15 @@ function ModalCobro({
                 </select>
               </div>
             </div>
+
+            <label className="flex items-center gap-2 text-sm mb-3">
+              <input
+                type="checkbox"
+                checked={noAgendoProximaCita}
+                onChange={(e) => setNoAgendoProximaCita(e.target.checked)}
+              />
+              El paciente no agendó su próxima cita
+            </label>
 
             <div className="flex items-center justify-between text-sm mb-3">
               <span className="text-gray-500">Total a cobrar</span>

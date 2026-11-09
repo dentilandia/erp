@@ -163,6 +163,11 @@ export interface Visita {
   atendido_por: string | null;
   es_venta_producto: boolean;
   comprobante_datafono_url: string | null;
+  se_entrego_presupuesto: boolean;
+  se_recomendo_sedacion: boolean;
+  es_primera_vez: boolean;
+  se_mando_radiografia: boolean;
+  no_agendo_proxima_cita: boolean;
   created_at: string;
   updated_at: string;
 }
