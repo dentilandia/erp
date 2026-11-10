@@ -4,6 +4,7 @@ import { CheckCircle2, X, Search, Plus, Paperclip } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { fmtCOP, today } from "../../lib/format";
 import { TIPOS_INSUMO_CONSULTA, TIPOS_SERVICIO_LAB, type Sede, type Laboratorio, type Doctora } from "../../lib/types";
+import { MOTIVOS_CITA, MOTIVO_PRIMERA_VEZ, MOTIVOS_CON_SEGUIMIENTO, componerTratamiento } from "../../lib/fidelizacion";
 
 // Comprobante de datáfono: por ahora solo se pide en Las Américas.
 const SEDE_LAS_AMERICAS_ID = "37af479b-777c-4d32-bce1-bc0becb7c3df";
@@ -448,6 +449,13 @@ function ModalAtencion({
   const [fechaObservacionAnterior, setFechaObservacionAnterior] = useState<string | null>(null);
   const [saldoFavor, setSaldoFavor] = useState(0);
   const [tratamiento, setTratamiento] = useState("");
+  // Tratamiento en dos fases: motivo(s) de la lista + aclaración libre. El
+  // texto de `tratamiento` se arma solo a partir de los dos.
+  const [motivos, setMotivos] = useState<string[]>([]);
+  const [detalleTratamiento, setDetalleTratamiento] = useState("");
+  useEffect(() => {
+    setTratamiento(componerTratamiento(motivos, detalleTratamiento));
+  }, [motivos, detalleTratamiento]);
   const [valorTratamiento, setValorTratamiento] = useState("");
   // "El paciente no paga" — en vez de valor de venta se pone el motivo, que
   // queda en visitas.motivo_valor_cero y Recepción lo ve al cobrar.
@@ -567,6 +575,10 @@ function ModalAtencion({
   }
 
   async function guardar() {
+    if (motivos.length === 0) {
+      setError("Elige el motivo de la cita en Tratamiento.");
+      return;
+    }
     if (comprobanteDatafono && !archivoDatafono) {
       setError("Marcaste \"Comprobante de datáfono\" pero falta adjuntar el archivo.");
       return;
@@ -699,6 +711,8 @@ function ModalAtencion({
       .update({
         estado: "consulta",
         tratamiento,
+        motivos_cita: motivos,
+        tratamiento_detalle: detalleTratamiento.trim() || null,
         proxima_cita: proximaCita || null,
         observacion: observacion.trim() || null,
         alerta_saldo_favor: alertaSaldoFavor,
@@ -756,14 +770,15 @@ function ModalAtencion({
           </p>
         )}
 
-        <div>
-          <label className="block text-sm font-medium mb-1">Tratamiento</label>
-          <input
-            value={tratamiento}
-            onChange={(e) => setTratamiento(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-          />
-        </div>
+        <SelectorTratamiento
+          motivos={motivos}
+          setMotivos={(m) => {
+            setMotivos(m);
+            if (m.includes(MOTIVO_PRIMERA_VEZ) && !motivos.includes(MOTIVO_PRIMERA_VEZ)) setEsPrimeraVez(true);
+          }}
+          detalle={detalleTratamiento}
+          setDetalle={setDetalleTratamiento}
+        />
         <CamposNoPaga noPaga={noPaga} setNoPaga={setNoPaga} motivo={motivoNoPaga} setMotivo={setMotivoNoPaga} />
         {!noPaga && (
           <div>
@@ -1049,6 +1064,13 @@ function ModalEditarValor({
 }) {
   const [pacienteNombre, setPacienteNombre] = useState("");
   const [tratamiento, setTratamiento] = useState("");
+  // Tratamiento en dos fases: motivo(s) de la lista + aclaración libre. El
+  // texto de `tratamiento` se arma solo a partir de los dos.
+  const [motivos, setMotivos] = useState<string[]>([]);
+  const [detalleTratamiento, setDetalleTratamiento] = useState("");
+  useEffect(() => {
+    setTratamiento(componerTratamiento(motivos, detalleTratamiento));
+  }, [motivos, detalleTratamiento]);
   const [proximaCita, setProximaCita] = useState("");
   const [observacion, setObservacion] = useState("");
   const [alertaSaldoFavor, setAlertaSaldoFavor] = useState(false);
@@ -1121,12 +1143,14 @@ function ModalEditarValor({
       const { data: v } = await supabase
         .from("visitas")
         .select(
-          "tratamiento, proxima_cita, observacion, alerta_saldo_favor, motivo_valor_cero, sede_id, doctora_id, paciente_id, fecha, remision_especialidad, comprobante_datafono_url, se_entrego_presupuesto, se_recomendo_sedacion, es_primera_vez, se_mando_radiografia, pacientes(nombre)",
+          "tratamiento, motivos_cita, tratamiento_detalle, proxima_cita, observacion, alerta_saldo_favor, motivo_valor_cero, sede_id, doctora_id, paciente_id, fecha, remision_especialidad, comprobante_datafono_url, se_entrego_presupuesto, se_recomendo_sedacion, es_primera_vez, se_mando_radiografia, pacientes(nombre)",
         )
         .eq("id", visitaId)
         .single();
       const visita = v as unknown as {
         tratamiento: string | null;
+        motivos_cita: string[] | null;
+        tratamiento_detalle: string | null;
         proxima_cita: string | null;
         observacion: string | null;
         alerta_saldo_favor: boolean;
@@ -1145,6 +1169,14 @@ function ModalEditarValor({
       } | null;
       setPacienteNombre(visita?.pacientes?.nombre ?? "");
       setTratamiento(visita?.tratamiento ?? "");
+      // Atenciones anteriores a la lista de motivos: lo que escribieron queda
+      // como aclaración, para no perderlo.
+      if (visita?.motivos_cita && visita.motivos_cita.length > 0) {
+        setMotivos(visita.motivos_cita);
+        setDetalleTratamiento(visita.tratamiento_detalle ?? "");
+      } else {
+        setDetalleTratamiento(visita?.tratamiento ?? "");
+      }
       setProximaCita(visita?.proxima_cita ?? "");
       setObservacion(visita?.observacion ?? "");
       setAlertaSaldoFavor(visita?.alerta_saldo_favor ?? false);
@@ -1306,6 +1338,8 @@ function ModalEditarValor({
       .from("visitas")
       .update({
         tratamiento,
+        motivos_cita: motivos,
+        tratamiento_detalle: detalleTratamiento.trim() || null,
         proxima_cita: proximaCita.trim() || null,
         observacion: observacion.trim() || null,
         alerta_saldo_favor: alertaSaldoFavor,
@@ -1518,14 +1552,15 @@ function ModalEditarValor({
           <p className="text-sm text-gray-400">Cargando…</p>
         ) : (
           <>
-            <div>
-              <label className="block text-sm font-medium mb-1">Tratamiento</label>
-              <input
-                value={tratamiento}
-                onChange={(e) => setTratamiento(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-              />
-            </div>
+            <SelectorTratamiento
+              motivos={motivos}
+              setMotivos={(m) => {
+                setMotivos(m);
+                if (m.includes(MOTIVO_PRIMERA_VEZ) && !motivos.includes(MOTIVO_PRIMERA_VEZ)) setEsPrimeraVez(true);
+              }}
+              detalle={detalleTratamiento}
+              setDetalle={setDetalleTratamiento}
+            />
             <CamposNoPaga noPaga={noPaga} setNoPaga={setNoPaga} motivo={motivoNoPaga} setMotivo={setMotivoNoPaga} />
             {!noPaga && (
               <div>
@@ -1839,6 +1874,67 @@ function CamposNoPaga({
           />
           <p className="text-xs text-amber-700">En Recepción va a salir "NO PAGA" con este motivo al programar la próxima cita.</p>
         </>
+      )}
+    </div>
+  );
+}
+
+/** Tratamiento en dos fases: motivo(s) de la cita de una lista cerrada +
+ *  una aclaración libre. Los procedimientos con seguimiento alimentan la
+ *  lista "Seguimiento de procedimientos" de Servicio al cliente. */
+function SelectorTratamiento({
+  motivos,
+  setMotivos,
+  detalle,
+  setDetalle,
+}: {
+  motivos: string[];
+  setMotivos: (m: string[]) => void;
+  detalle: string;
+  setDetalle: (v: string) => void;
+}) {
+  const disponibles = MOTIVOS_CITA.filter((m) => !motivos.includes(m));
+  const conSeguimiento = motivos.filter((m) => MOTIVOS_CON_SEGUIMIENTO.includes(m));
+  return (
+    <div className="space-y-2">
+      <label className="block text-sm font-medium">Tratamiento — motivo de la cita</label>
+      {motivos.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {motivos.map((m) => (
+            <span
+              key={m}
+              className="inline-flex items-center gap-1 rounded-full bg-[var(--acento)]/10 text-[var(--acento)] px-2.5 py-1 text-xs font-medium"
+            >
+              {m}
+              <button type="button" onClick={() => setMotivos(motivos.filter((x) => x !== m))} aria-label={`Quitar ${m}`}>
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <select
+        value=""
+        onChange={(e) => e.target.value && setMotivos([...motivos, e.target.value])}
+        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
+      >
+        <option value="">{motivos.length === 0 ? "Elige el motivo…" : "+ Agregar otro motivo…"}</option>
+        {disponibles.map((m) => (
+          <option key={m} value={m}>
+            {m}
+          </option>
+        ))}
+      </select>
+      <input
+        value={detalle}
+        onChange={(e) => setDetalle(e.target.value)}
+        placeholder="Aclaración (opcional) — ej: resina diente 55"
+        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+      />
+      {conSeguimiento.length > 0 && (
+        <p className="text-xs text-gray-500">
+          Servicio al cliente le hará seguimiento post-tratamiento ({conSeguimiento.join(", ")}).
+        </p>
       )}
     </div>
   );
