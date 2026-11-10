@@ -66,7 +66,7 @@ Deno.serve(async (req: Request) => {
   const admin = createClient(supabaseUrl, serviceRoleKey);
   const { data: perfil, error: perfilError } = await admin
     .from("perfiles")
-    .select("id, sede_id, rol, nombre, restriccion_ip")
+    .select("id, sede_id, rol, nombre, restriccion_ip, created_at")
     .eq("id", userData.user.id)
     .single();
   if (perfilError || !perfil) {
@@ -164,6 +164,14 @@ Deno.serve(async (req: Request) => {
   // ajuste resta esas marcas "repetidas" para que la persona continúe con la
   // frase que le seguía, sin saltarse ninguna. Sin fila = ajuste 0.
   //
+  // AJUSTE 10-nov-2026: a alguien nuevo (el perfil se creó DESPUÉS del
+  // reinicio del 19-oct) no le aplica el punto de partida compartido del
+  // equipo — empieza su propia cronología desde la frase No. 1, no desde la
+  // FRASE_INICIAL donde ya iba todo el mundo. Se decide comparando
+  // perfil.created_at contra FECHA_INICIO_FRASES, así que aplica solo con
+  // crear el perfil, sin tener que acordarse de nada más para cada persona
+  // nueva que se vaya sumando.
+  //
   // El conteo que decide el índice SOLO mira marcas desde esa fecha en
   // adelante — la mayoría del equipo ya tenía marcas viejas cargadas por
   // admin de períodos anteriores (retroactivo, para nómina), y si esas
@@ -195,7 +203,9 @@ Deno.serve(async (req: Request) => {
         .eq("tipo", body.tipo)
         .maybeSingle();
       const ajuste = filaAjuste?.ajuste ?? 0;
-      const base = FRASE_INICIAL - 1 + Math.max(0, (count ?? 1) - 1) - ajuste;
+      const esPerfilNuevo = new Date(perfil.created_at).toISOString().slice(0, 10) >= FECHA_INICIO_FRASES;
+      const fraseInicialEfectiva = esPerfilNuevo ? 1 : FRASE_INICIAL;
+      const base = fraseInicialEfectiva - 1 + Math.max(0, (count ?? 1) - 1) - ajuste;
       const indice = ((base % frases.length) + frases.length) % frases.length;
       frase = frases[indice].texto;
     }
