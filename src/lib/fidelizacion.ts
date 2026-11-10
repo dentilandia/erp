@@ -62,6 +62,16 @@ export const LISTAS_FIDELIZACION: { tipo: TipoFidelizacion; label: string; descr
   },
 ];
 
+/** Días máximos para el primer contacto, desde la fecha de la atención.
+ *  Mantener igual a fn_fidelizacion_sincronizar_visita() en la base de datos. */
+export const PLAZO_DIAS: Record<TipoFidelizacion, number> = {
+  presupuesto: 7,
+  sedacion: 7,
+  primera_vez: 7,
+  seguimiento_procedimiento: 7,
+  radiografia: 15,
+};
+
 export const ESTADOS_CASO: Record<string, { label: string; color: string; cerrado: boolean }> = {
   pendiente: { label: "Pendiente", color: "bg-amber-50 text-amber-700", cerrado: false },
   en_proceso: { label: "En proceso", color: "bg-sky-50 text-sky-700", cerrado: false },

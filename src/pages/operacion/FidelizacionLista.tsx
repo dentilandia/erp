@@ -7,6 +7,7 @@ import {
   ESTADOS_CASO,
   LISTAS_FIDELIZACION,
   MEDIOS_CONTACTO,
+  PLAZO_DIAS,
   RESULTADOS_CONTACTO,
   type TipoFidelizacion,
 } from "../../lib/fidelizacion";
@@ -59,10 +60,14 @@ function semaforo(c: Caso, hoy: string): { texto: string; clase: string } | null
     if (d === 0) return { texto: "Compromiso: hoy", clase: "bg-amber-100 text-amber-800" };
     return { texto: `Compromiso: ${c.proximo_contacto}`, clase: "bg-sky-50 text-sky-700" };
   }
+  // Verde mientras quedan más de 2 días del plazo, amarillo en los últimos
+  // días, rojo vencido (7 días: verde 0-4, amarillo 5-7; 15 días: verde
+  // 0-12, amarillo 13-15).
+  const plazo = PLAZO_DIAS[c.tipo];
   const dias = diasEntre(c.fecha_atencion, hoy);
-  if (dias > 7) return { texto: `Vencido — ${dias} días sin contacto`, clase: "bg-red-100 text-red-700" };
-  if (dias >= 5) return { texto: `Día ${dias} de 7`, clase: "bg-amber-100 text-amber-800" };
-  return { texto: `Día ${dias} de 7`, clase: "bg-emerald-50 text-emerald-700" };
+  if (dias > plazo) return { texto: `Vencido — ${dias} días sin contacto`, clase: "bg-red-100 text-red-700" };
+  if (dias >= plazo - 2) return { texto: `Día ${dias} de ${plazo}`, clase: "bg-amber-100 text-amber-800" };
+  return { texto: `Día ${dias} de ${plazo}`, clase: "bg-emerald-50 text-emerald-700" };
 }
 
 /** ¿Hay que contactarlo hoy? Abierto y con su compromiso (o, sin compromiso, su atención) ya cumplido. */
@@ -193,7 +198,7 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
     <div className="space-y-3">
       <div className="bg-white rounded-xl border border-gray-200 p-4">
         <h1 className="text-lg font-semibold text-tinta">{lista.label}</h1>
-        <p className="text-sm text-gray-500">{lista.descripcion} Plazo máximo para el primer contacto: 7 días desde la atención.</p>
+        <p className="text-sm text-gray-500">{lista.descripcion} Plazo máximo para el primer contacto: {PLAZO_DIAS[tipo]} días desde la atención.</p>
         <div className="flex flex-wrap items-center gap-2 mt-3">
           {FILTROS.map((f) => (
             <button

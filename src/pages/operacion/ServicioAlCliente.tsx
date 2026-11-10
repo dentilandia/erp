@@ -47,7 +47,7 @@ export function ServicioAlCliente() {
             {LISTAS_FIDELIZACION.filter((l) => paraHoy[l.tipo]?.total)
               .map((l) => `${l.label}: ${paraHoy[l.tipo].total}`)
               .join(" · ")}
-            {totalVencidos > 0 && ` — ⚠ ${totalVencidos} ya pasaron la semana sin contacto`}
+            {totalVencidos > 0 && ` — ⚠ ${totalVencidos} ya pasaron su plazo sin contacto`}
           </p>
         </div>
       )}
