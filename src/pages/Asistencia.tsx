@@ -992,6 +992,112 @@ export function Asistencia() {
   >([]);
   const [personaAdminId, setPersonaAdminId] = useState("");
   const [fechaAdmin, setFechaAdmin] = useState(() => fechaBogota(new Date().toISOString()));
+
+  // Reporte de tardanzas por sede — para procesos disciplinarios. Reusa
+  // construirHistorialTardanzas (misma lógica que ya se ve en el reporte de
+  // horas, con horas autorizadas y jornada de sábado ya tenidas en cuenta),
+  // nunca una cuenta aparte que pudiera no cuadrar con lo que la persona ya
+  // vio reflejado en su liquidación.
+  const [sedeTardanzas, setSedeTardanzas] = useState("Clínica Las Américas");
+  const [inicioTardanzas, setInicioTardanzas] = useState(() => sumarDias(fechaBogota(new Date().toISOString()), -30));
+  const [finTardanzas, setFinTardanzas] = useState(() => fechaBogota(new Date().toISOString()));
+  const [cargandoTardanzas, setCargandoTardanzas] = useState(false);
+  const [resumenTardanzas, setResumenTardanzas] = useState<
+    { perfilId: string; nombre: string; veces: number; detalle: { fecha: string; texto: string }[] }[]
+  >([]);
+
+  async function cargarResumenTardanzas() {
+    setCargandoTardanzas(true);
+    const desde = `${inicioTardanzas}T00:00:00-05:00`;
+    const hasta = `${sumarDias(finTardanzas, 1)}T00:00:00-05:00`;
+    const { data: marcasData } = await supabase
+      .from("asistencia_registros")
+      .select("perfil_id, tipo, marcado_en")
+      .gte("marcado_en", desde)
+      .lt("marcado_en", hasta)
+      .order("marcado_en");
+    const { data: notasData } = await supabase
+      .from("asistencia_notas_dia")
+      .select("perfil_id, fecha, minutos_compensados, hora_entrada_autorizada, hora_salida_autorizada")
+      .gte("fecha", inicioTardanzas)
+      .lte("fecha", finTardanzas);
+    const filas = (marcasData as { perfil_id: string; tipo: TipoAsistencia; marcado_en: string }[]) ?? [];
+    const notasRows =
+      (notasData as {
+        perfil_id: string;
+        fecha: string;
+        minutos_compensados: number;
+        hora_entrada_autorizada: string | null;
+        hora_salida_autorizada: string | null;
+      }[]) ?? [];
+    const historial = construirHistorialTardanzas(filas, notasRows);
+    const idsDeLaSede = new Set(personas.filter((p) => p.sedeNombre === sedeTardanzas).map((p) => p.id));
+    const porPersona = new Map<string, { fecha: string; texto: string }[]>();
+    for (const h of historial) {
+      if (h.esSalida) continue; // solo llegadas tarde, no salidas tempranas
+      if (!idsDeLaSede.has(h.perfil_id)) continue;
+      if (h.fecha < inicioTardanzas || h.fecha > finTardanzas) continue;
+      (porPersona.get(h.perfil_id) ?? porPersona.set(h.perfil_id, []).get(h.perfil_id)!).push({ fecha: h.fecha, texto: h.texto });
+    }
+    const nombrePorId = new Map(personas.map((p) => [p.id, p.nombre]));
+    const resumen = Array.from(porPersona.entries())
+      .map(([perfilId, detalle]) => ({
+        perfilId,
+        nombre: nombrePorId.get(perfilId) ?? "—",
+        veces: detalle.length,
+        detalle: detalle.sort((a, b) => a.fecha.localeCompare(b.fecha)),
+      }))
+      .sort((a, b) => b.veces - a.veces);
+    setResumenTardanzas(resumen);
+    setCargandoTardanzas(false);
+  }
+
+  function imprimirResumenTardanzas() {
+    const filas = resumenTardanzas
+      .map(
+        (r) => `<tr>
+          <td>${escPdf(r.nombre)}</td>
+          <td class="num">${r.veces}</td>
+          <td>${r.detalle.map((d) => `${formatFechaLarga(d.fecha)}: ${escPdf(d.texto)}`).join("<br/>")}</td>
+        </tr>`,
+      )
+      .join("");
+    const html = `<!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Reporte de tardanzas — ${escPdf(sedeTardanzas)}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 24px; color: #2a2438; }
+            h1 { font-size: 18px; margin-bottom: 4px; }
+            .subtitulo { color: #777; font-size: 12px; margin-bottom: 20px; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
+            th { color: #888; font-weight: 500; }
+            td.num { text-align: center; font-weight: 600; }
+            .btn-imprimir { margin-bottom: 16px; }
+            @media print { .btn-imprimir { display: none; } }
+          </style>
+        </head>
+        <body>
+          <button class="btn-imprimir" onclick="window.print()">Imprimir / Guardar PDF</button>
+          <h1>Reporte de tardanzas — ${escPdf(sedeTardanzas)}</h1>
+          <p class="subtitulo">Del ${formatFechaLarga(inicioTardanzas)} al ${formatFechaLarga(finTardanzas)}</p>
+          <table>
+            <thead><tr><th>Nombre</th><th>Veces tarde</th><th>Detalle</th></tr></thead>
+            <tbody>${filas || `<tr><td colspan="3">Sin tardanzas en este rango.</td></tr>`}</tbody>
+          </table>
+        </body>
+      </html>`;
+    const ventana = window.open("", "_blank");
+    if (!ventana) {
+      window.alert("El navegador bloqueó la ventana emergente. Habilítala para poder descargar el PDF.");
+      return;
+    }
+    ventana.document.write(html);
+    ventana.document.close();
+    ventana.focus();
+  }
   // Evita que una carga vieja (de un día/persona que ya se dejó de ver)
   // pise en el formulario los datos del día que se está viendo ahora si
   // llega tarde — ver cargarMarcasPersona.
@@ -2981,6 +3087,81 @@ export function Asistencia() {
           </div>
         )}
       </div>
+
+      {perfil?.rol === "admin" && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          <h2 className="font-semibold text-tinta">Reporte de tardanzas</h2>
+          <p className="text-xs text-gray-400">
+            Cuántas veces ha llegado tarde (sin autorización) cada persona de una sede en un rango de fechas — para
+            procesos disciplinarios. Mismo cálculo que ya se ve en "Horas trabajadas por período" arriba.
+          </p>
+          <div className="flex items-end gap-2 flex-wrap">
+            <label className="text-xs text-gray-500">
+              Sede
+              <select
+                value={sedeTardanzas}
+                onChange={(e) => setSedeTardanzas(e.target.value)}
+                className="block mt-0.5 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              >
+                {Array.from(new Set(personas.map((p) => p.sedeNombre).filter((s): s is string => !!s))).map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs text-gray-500">
+              Desde
+              <input
+                type="date"
+                value={inicioTardanzas}
+                onChange={(e) => setInicioTardanzas(e.target.value)}
+                className="block mt-0.5 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="text-xs text-gray-500">
+              Hasta
+              <input
+                type="date"
+                value={finTardanzas}
+                onChange={(e) => setFinTardanzas(e.target.value)}
+                className="block mt-0.5 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            </label>
+            <button
+              onClick={cargarResumenTardanzas}
+              disabled={cargandoTardanzas}
+              className="rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+            >
+              {cargandoTardanzas ? "Calculando…" : "Generar reporte"}
+            </button>
+            {resumenTardanzas.length > 0 && (
+              <button onClick={imprimirResumenTardanzas} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium">
+                Imprimir / PDF
+              </button>
+            )}
+          </div>
+          {resumenTardanzas.length > 0 && (
+            <div className="divide-y divide-gray-100">
+              {resumenTardanzas.map((r) => (
+                <div key={r.perfilId} className="py-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium">{r.nombre}</span>
+                    <span className="font-semibold text-amber-700">{r.veces} veces tarde</span>
+                  </div>
+                  <div className="mt-1 space-y-0.5">
+                    {r.detalle.map((d, i) => (
+                      <p key={i} className="text-xs text-gray-500">
+                        {formatFechaLarga(d.fecha)}: {d.texto}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {perfil?.rol === "admin" && (
         <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
