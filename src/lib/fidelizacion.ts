@@ -20,7 +20,10 @@ export const MOTIVOS_CITA = [
   "Control aparatología",
   "Impresión",
   "Instalación",
+  "Cementación aparato",
+  "Profifluor aparato",
   "Urgencia aparato",
+  "Revisión de RX",
   "Trauma dental",
 ] as const;
 
