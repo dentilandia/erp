@@ -242,7 +242,7 @@ function construirHistorialTardanzas(
     hora_entrada_autorizada: string | null;
     hora_salida_autorizada: string | null;
   }[],
-): { perfil_id: string; fecha: string; texto: string; esSalida: boolean }[] {
+): { perfil_id: string; fecha: string; texto: string; tipo: "entrada_tarde" | "salida_temprana" | "salida_tardia" }[] {
   const marcasPorPersonaYDia: Record<string, { tipo: TipoAsistencia; marcado_en: string }[]> = {};
   for (const r of filas) {
     (marcasPorPersonaYDia[`${r.perfil_id}|${fechaBogota(r.marcado_en)}`] ??= []).push({
@@ -255,7 +255,7 @@ function construirHistorialTardanzas(
   const formatoHora = (iso: string) =>
     new Date(iso).toLocaleTimeString("es-CO", { timeZone: "America/Bogota", hour: "numeric", minute: "2-digit" });
 
-  const resultado: { perfil_id: string; fecha: string; texto: string; esSalida: boolean }[] = [];
+  const resultado: { perfil_id: string; fecha: string; texto: string; tipo: "entrada_tarde" | "salida_temprana" | "salida_tardia" }[] = [];
   const claves = new Set([...Object.keys(marcasPorPersonaYDia), ...notaPorClave.keys()]);
   for (const clave of claves) {
     const [perfilId, fecha] = clave.split("|");
@@ -263,6 +263,28 @@ function construirHistorialTardanzas(
     const nota = notaPorClave.get(clave);
     const hayLlegadaYSalida = marcasDia.some((m) => m.tipo === "llegada") && marcasDia.some((m) => m.tipo === "salida");
     if (!hayLlegadaYSalida) continue; // sin marcas no hay hora que mostrar
+
+    // Salida tardía (se quedó después del cierre normal): independiente del
+    // faltante del día de abajo — antes solo se veía en este historial
+    // cuando alguien salía ANTES de hora (se le descontaba), nunca cuando
+    // se quedaba DESPUÉS, aunque esos minutos de más sí se estén sumando
+    // como horas trabajadas/extra en el reporte semanal (armarReporteHoras).
+    const porTipoDia: Partial<Record<TipoAsistencia, string>> = {};
+    for (const m of marcasDia) if (!porTipoDia[m.tipo]) porTipoDia[m.tipo] = m.marcado_en;
+    const horaFinNormal = horasPorDefecto(fecha).salida;
+    const finNormalMs = new Date(`${fecha}T${horaFinNormal}:00-05:00`).getTime();
+    if (porTipoDia.salida) {
+      const minutosDespues = Math.round((new Date(porTipoDia.salida).getTime() - finNormalMs) / 60_000);
+      if (minutosDespues > 0) {
+        resultado.push({
+          perfil_id: perfilId,
+          fecha,
+          texto: `Salió ${formatoHora(porTipoDia.salida)} (${minutosDespues}min después)`,
+          tipo: "salida_tardia",
+        });
+      }
+    }
+
     const minutosGuardado = Math.round(
       Math.max(0, jornadaOrdinariaHoras(fecha) - horasTrabajadasDeMarcas(marcasDia, fecha, nota?.hora_entrada_autorizada ?? null)) * 60,
     );
@@ -279,7 +301,7 @@ function construirHistorialTardanzas(
         perfil_id: perfilId,
         fecha,
         texto: `Llegó ${formatoHora(horaLlegadaIso)} (${minutosIngresoEntrada}min tarde)`,
-        esSalida: false,
+        tipo: "entrada_tarde",
       });
     }
     if (minutosIngresoSalida > 0 && horaSalidaIso) {
@@ -287,7 +309,7 @@ function construirHistorialTardanzas(
         perfil_id: perfilId,
         fecha,
         texto: `Salió ${formatoHora(horaSalidaIso)} (${minutosIngresoSalida}min antes)`,
-        esSalida: true,
+        tipo: "salida_temprana",
       });
     }
   }
@@ -525,8 +547,28 @@ type HeColabRow = {
  *  jornada — esa cola ya suma dentro de "horas" en armarReporteHoras, vía
  *  asistencia_registros) de cuánto NO (interrupción de mediodía — nunca
  *  tocó asistencia_registros, así que si no se suma aparte desaparece del
- *  total de horas extra, aunque sí se vea en la columna "Atención pac."). */
-function separarExtraAtencion(rows: HeColabRow[], desde: string, hasta: string) {
+ *  total de horas extra, aunque sí se vea en la columna "Atención pac.").
+ *
+ *  La hora de salida que se escribe a mano en el formulario es solo un
+ *  estimado de quien cierra la solicitud — puede quedarse corta frente a lo
+ *  que de verdad marcó esa persona ese día (ej. anotan que terminaron de
+ *  atender a las 12:10 pero en realidad siguieron ocupadas con otra cosa y
+ *  no marcaron la salida a almuerzo hasta las 12:17). Por eso se cruza
+ *  contra la marca real de asistencia de ese mismo día (salida_almuerzo para
+ *  una interrupción de mediodía, salida para una que se extiende hasta el
+ *  cierre) y se usa la más tardía de las dos — nunca menos de lo escrito,
+ *  pero tampoco menos de lo que de verdad pasó. */
+function separarExtraAtencion(
+  rows: HeColabRow[],
+  registros: { perfil_id: string; tipo: TipoAsistencia; marcado_en: string }[],
+  desde: string,
+  hasta: string,
+) {
+  const marcasPorPersonaYDia: Record<string, Partial<Record<TipoAsistencia, string>>> = {};
+  for (const r of registros) {
+    const porTipo = (marcasPorPersonaYDia[`${r.perfil_id}|${fechaBogota(r.marcado_en)}`] ??= {});
+    if (!porTipo[r.tipo]) porTipo[r.tipo] = r.marcado_en;
+  }
   const total = new Map<string, number>();
   const sinMarca = new Map<string, number>();
   const porDia = new Map<string, number>();
@@ -536,16 +578,21 @@ function separarExtraAtencion(rows: HeColabRow[], desde: string, hasta: string) 
     if (!fechaHE || fechaHE < desde || fechaHE >= hasta) continue;
     const finNormal = horasPorDefecto(fechaHE).salida;
     const finNormalMs = new Date(`${fechaHE}T${finNormal}:00-05:00`).getTime();
-    const salidaMs = new Date(row.hora_salida).getTime();
+    const salidaTipadaMs = new Date(row.hora_salida).getTime();
+    const marcasDia = marcasPorPersonaYDia[`${row.perfil_id}|${fechaHE}`] ?? {};
     let extra: number;
     let reflejadoEnMarca: boolean;
-    if (salidaMs > finNormalMs) {
+    if (salidaTipadaMs > finNormalMs) {
+      const marcaRealMs = marcasDia.salida ? new Date(marcasDia.salida).getTime() : null;
+      const salidaMs = marcaRealMs ? Math.max(salidaTipadaMs, marcaRealMs) : salidaTipadaMs;
       extra = (salidaMs - finNormalMs) / 3_600_000;
       reflejadoEnMarca = true;
     } else {
       const horaIngreso = row.asistencia_horas_extra?.hora_ingreso_consultorio;
       if (!horaIngreso) continue;
       const ingresoMs = new Date(`${fechaHE}T${horaIngreso.slice(0, 5)}:00-05:00`).getTime();
+      const marcaRealMs = marcasDia.salida_almuerzo ? new Date(marcasDia.salida_almuerzo).getTime() : null;
+      const salidaMs = marcaRealMs ? Math.max(salidaTipadaMs, marcaRealMs) : salidaTipadaMs;
       extra = Math.max(0, (salidaMs - ingresoMs) / 3_600_000);
       reflejadoEnMarca = false;
     }
@@ -951,7 +998,7 @@ export function Asistencia() {
     Record<string, { fecha: string; nota: string; minutosCompensados: number }[]>
   >({});
   const [historialTardanzasPorPersona, setHistorialTardanzasPorPersona] = useState<
-    Record<string, { fecha: string; texto: string; esSalida: boolean }[]>
+    Record<string, { fecha: string; texto: string; tipo: "entrada_tarde" | "salida_temprana" | "salida_tardia" }[]>
   >({});
   const [ausenciasPorPersona, setAusenciasPorPersona] = useState<
     Record<string, { fecha: string; tipo: "vacaciones" | "incapacidad" | "descanso" }[]>
@@ -1034,7 +1081,7 @@ export function Asistencia() {
     const idsDeLaSede = new Set(personas.filter((p) => p.sedeNombre === sedeTardanzas).map((p) => p.id));
     const porPersona = new Map<string, { fecha: string; texto: string }[]>();
     for (const h of historial) {
-      if (h.esSalida) continue; // solo llegadas tarde, no salidas tempranas
+      if (h.tipo !== "entrada_tarde") continue; // solo llegadas tarde, no salidas
       if (!idsDeLaSede.has(h.perfil_id)) continue;
       if (h.fecha < inicioTardanzas || h.fecha > finTardanzas) continue;
       (porPersona.get(h.perfil_id) ?? porPersona.set(h.perfil_id, []).get(h.perfil_id)!).push({ fecha: h.fecha, texto: h.texto });
@@ -1527,9 +1574,9 @@ export function Asistencia() {
       }
     }
     setNotasPorPersona(notasAgrupadas);
-    const historialTardanzasAgrupado: Record<string, { fecha: string; texto: string; esSalida: boolean }[]> = {};
+    const historialTardanzasAgrupado: Record<string, { fecha: string; texto: string; tipo: "entrada_tarde" | "salida_temprana" | "salida_tardia" }[]> = {};
     for (const h of construirHistorialTardanzas(filas, notasRows)) {
-      (historialTardanzasAgrupado[h.perfil_id] ??= []).push({ fecha: h.fecha, texto: h.texto, esSalida: h.esSalida });
+      (historialTardanzasAgrupado[h.perfil_id] ??= []).push({ fecha: h.fecha, texto: h.texto, tipo: h.tipo });
     }
     setHistorialTardanzasPorPersona(historialTardanzasAgrupado);
     const compensaciones = construirCompensaciones(filas, notasRows);
@@ -1549,7 +1596,7 @@ export function Asistencia() {
       .select("perfil_id, hora_salida, asistencia_horas_extra(fecha, hora_ingreso_consultorio, paciente_nombre, motivo)")
       .not("hora_salida", "is", null);
     const { total: extraAtencion, sinMarca: extraAtencionSinMarca, porDia: extraAtencionDia, motivoPorDia: extraAtencionMotivoDia } =
-      separarExtraAtencion((heData as unknown as HeColabRow[]) ?? [], desde, hasta);
+      separarExtraAtencion((heData as unknown as HeColabRow[]) ?? [], filas, desde, hasta);
     setExtraAtencionPorPersonaYSemana(Object.fromEntries(extraAtencion));
     setExtraAtencionPorPersonaYDia(Object.fromEntries(extraAtencionDia));
     setExtraAtencionMotivoPorPersonaYDia(Object.fromEntries(extraAtencionMotivoDia));
@@ -1626,7 +1673,7 @@ export function Asistencia() {
           ...(historialTardanzasPorPersona[fila.perfilId] ?? []).map((h) => ({
             fecha: h.fecha,
             texto: h.texto,
-            color: h.esSalida ? "#2563eb" : "#b45309",
+            color: h.tipo === "salida_temprana" ? "#2563eb" : h.tipo === "salida_tardia" ? "#15803d" : "#b45309",
           })),
         ].sort((a, b) => a.fecha.localeCompare(b.fecha));
         const observacionesHtml =
@@ -1799,7 +1846,7 @@ export function Asistencia() {
       .from("asistencia_horas_extra_colaboradores")
       .select("perfil_id, hora_salida, asistencia_horas_extra(fecha, hora_ingreso_consultorio, paciente_nombre, motivo)")
       .not("hora_salida", "is", null);
-    const { sinMarca: extraAtencionSinMarca } = separarExtraAtencion((heData as unknown as HeColabRow[]) ?? [], desde, hasta);
+    const { sinMarca: extraAtencionSinMarca } = separarExtraAtencion((heData as unknown as HeColabRow[]) ?? [], filas, desde, hasta);
 
     const filasReporte = armarReporteHoras(
       filas, ausencias, compensaciones, autorizaciones, festivosSet, inicio, finExclusivo, metaSemanal,
@@ -3063,7 +3110,12 @@ export function Asistencia() {
                     ...(historialTardanzasPorPersona[fila.perfilId] ?? []).map((h) => ({
                       fecha: h.fecha,
                       texto: h.texto,
-                      color: h.esSalida ? "text-blue-600" : "text-amber-600",
+                      color:
+                        h.tipo === "salida_temprana"
+                          ? "text-blue-600"
+                          : h.tipo === "salida_tardia"
+                            ? "text-emerald-600"
+                            : "text-amber-600",
                       minutosCompensados: 0,
                     })),
                   ].sort((a, b) => a.fecha.localeCompare(b.fecha));
