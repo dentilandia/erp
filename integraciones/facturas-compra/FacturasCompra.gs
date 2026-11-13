@@ -163,6 +163,7 @@ function onOpen() {
     .addItem('4. Procesar ahora', 'procesarAhora')
     .addItem('5. Completar proveedores desde el historial', 'completarProveedoresDesdeHistorial')
     .addItem('6. Enviar al ERP ahora', 'enviarAlERP')
+    .addItem('Crear carpetas de facturas y comprobantes', 'crearCarpetasDrive')
     .addItem('Guardar clave del ERP', 'guardarClaveERP')
     .addSeparator()
     .addItem('Mostrar pestañas de configuración', 'mostrarConfiguracion')
@@ -785,6 +786,13 @@ function archivosSueltos_(carpeta) {
   return out.sort((a, b) => a.getDateCreated() - b.getDateCreated());
 }
 
+function crearCarpetasDrive() {
+  const ctx = { ss: SpreadsheetApp.getActive() };
+  const f = carpetaHermana_(ctx, CFG.CARPETA_FACTURAS), p = carpetaHermana_(ctx, CFG.CARPETA_PAGOS);
+  SpreadsheetApp.getUi().alert('Carpetas listas (junto a esta hoja en Drive):\n\n' + f.getName() + '\n' + f.getUrl() + '\n\n' + p.getName() + '\n' + p.getUrl() +
+    '\n\nCompártalas con quien vaya a subir archivos. El robot las revisa en cada corrida.');
+}
+
 /** Flujo C: facturas y cuentas de cobro subidas a mano a "📥 Facturas para registrar". */
 function flujoCarpetaFacturas_(ctx, res) {
   const carpeta = carpetaHermana_(ctx, CFG.CARPETA_FACTURAS);
@@ -1198,6 +1206,7 @@ function leerProveedores_(ss) {
 }
 
 function agregarProveedorNuevo_(ctx, f, correo) {
+  if (f.nit) correo = '';
   const h = ctx.ss.getSheetByName(CFG.HOJAS.PROV);
   const concepto = f.personaNatural ? 'Manual (persona natural)' : 'Por definir';
   h.appendRow([f.nit || '', nombreControl(f, null), f.proveedor, concepto, '', '', '', '',
@@ -1519,10 +1528,13 @@ function indexarProveedores(filas) {
 function buscarProveedor(idx, f, remitente) {
   if (f.nit && idx.porNit[f.nit]) return idx.porNit[f.nit];
   const correo = (String(remitente || '').match(/[\w.+-]+@[\w.-]+\.\w+/) || [''])[0].toLowerCase();
+  // Por correo solo si el documento no trae otra identificación: un mismo remitente puede
+  // enviar cuentas de cobro de varias personas en un solo correo.
+  const mismaPersona = p => p && (!f.nit || !p.nit || p.nit === f.nit);
   if (correo) {
-    if (idx.porCorreo[correo]) return idx.porCorreo[correo];
+    if (mismaPersona(idx.porCorreo[correo])) return idx.porCorreo[correo];
     const dominio = correo.split('@')[1];
-    if (idx.porCorreo[dominio] && !/gmail|hotmail|outlook|yahoo/.test(dominio)) return idx.porCorreo[dominio];
+    if (mismaPersona(idx.porCorreo[dominio]) && !/gmail|hotmail|outlook|yahoo/.test(dominio)) return idx.porCorreo[dominio];
   }
   const t = tokens(f.proveedor).filter(x => x.length >= 3);
   let mejor = null, max = 0;
