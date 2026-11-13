@@ -21,6 +21,7 @@ import {
   Warehouse,
   Clock,
   Headset,
+  FileText,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -50,6 +51,7 @@ const ADMIN_TABS = [
   { to: "/administracion/liquidaciones", label: "Liquidaciones", icon: Receipt },
   { to: "/administracion/financiacion", label: "Financiación", icon: CreditCard },
   { to: "/administracion/cierre-caja", label: "Cierre de Caja", icon: Landmark },
+  { to: "/administracion/facturacion", label: "Facturación", icon: FileText },
   { to: "/administracion/reportes", label: "Reportes", icon: BarChart3 },
   { to: "/administracion/inventarios", label: "Inventarios", icon: Warehouse },
 ];
