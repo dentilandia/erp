@@ -22,6 +22,9 @@
 // ===================== CONFIGURACIÓN =====================
 const CFG = {
   NIT_DENTILANDIA: '901117356',
+  // Proveedores cuyas facturas llegan a nombre de otra persona (p. ej. el dueño del local)
+  // pero las paga Dentilandia: se registran aunque no estén a nombre de Dentilandia.
+  NITS_SIEMPRE_NUESTROS: ['890904996'], // EPM
   DESDE: '2026/11/01',           // no revisa correos anteriores a esta fecha (AAAA/MM/DD)
   DIAS_BUSQUEDA: 45,             // y como máximo los últimos 45 días
   MAX_POR_CORRIDA: 30,           // hilos de correo con posibles cuentas de cobro por corrida (usan IA)
@@ -424,7 +427,10 @@ function procesarZip_(ctx, msg, zipAtt, vistos) {
   if (vistos[clave]) return null;
   vistos[clave] = true;
 
-  if (f.nitCliente && f.nitCliente !== CFG.NIT_DENTILANDIA) return { f, estado: 'Otro cliente', detalle: 'Factura a nombre de NIT ' + f.nitCliente };
+  if (f.nitCliente && f.nitCliente !== CFG.NIT_DENTILANDIA) {
+    if (CFG.NITS_SIEMPRE_NUESTROS.indexOf(f.nit) < 0) return { f, estado: 'Otro cliente', detalle: 'Factura a nombre de NIT ' + f.nitCliente };
+    f.notaCliente = 'a nombre de NIT ' + f.nitCliente + ' (la paga Dentilandia)';
+  }
   if (f.tipo !== 'Invoice') return { f, estado: 'Nota crédito', detalle: f.tipo + ' ' + f.numero + (f.referencia ? ' (afecta ' + f.referencia + ')' : '') + ': registrar a mano (fase 3)' };
 
   const prov = ctx.proveedores.porNit[f.nit] || buscarProveedor(ctx.proveedores, f, '') || null;
@@ -475,7 +481,7 @@ function flujoCobros_(ctx, res) {
           else if (vistosDoc[claveDoc(f)]) { r = null; }
           else {
             vistosDoc[claveDoc(f)] = true;
-            if (!f.esParaDentilandia) r = { f, estado: 'Otro cliente', detalle: 'Dirigido a: ' + f.cobraA };
+            if (!f.esParaDentilandia && CFG.NITS_SIEMPRE_NUESTROS.indexOf(f.nit) < 0) r = { f, estado: 'Otro cliente', detalle: 'Dirigido a: ' + f.cobraA };
             else {
               const prov = buscarProveedor(ctx.proveedores, f, remitente);
               if (prov && !f.nit && prov.nit) f.nit = prov.nit;
@@ -847,8 +853,9 @@ function flujoCarpetaFacturas_(ctx, res) {
             } catch (e) { /* no crítico */ }
           }
         }
-        else if (!f.esParaDentilandia) r = { f, estado: 'Otro cliente', detalle: 'Dirigido a: ' + f.cobraA };
         else {
+          // Lo que se sube a esta carpeta lo paga Dentilandia aunque venga a nombre de otro (servicios públicos del local).
+          if (!f.esParaDentilandia) f.notaCliente = 'a nombre de ' + f.cobraA + ' (subida a la carpeta: la paga Dentilandia)';
           const prov = buscarProveedor(ctx.proveedores, f, '');
           if (prov && !f.nit && prov.nit) f.nit = prov.nit;
           const blob = file.getBlob().setName(nombreArchivo);
@@ -1010,7 +1017,12 @@ function emparejarPago(pago, pendientes, numeros) {
   const toksPago = pago.nombres.map(nm => Array.from(new Set(tokens(nm).filter(t => t.length >= 3))));
   const esDelProveedor = x => {
     const t = tokens(x.proveedor).filter(y => y.length >= 3);
-    return toksPago.some(tp => { const c = tp.filter(y => t.indexOf(y) >= 0).length; return tp.length && c >= Math.min(2, tp.length, t.length || 1); });
+    const sigla = t.map(y => y[0]).join('');
+    return toksPago.some(tp => {
+      if (sigla.length >= 3 && tp.indexOf(sigla) >= 0) return true;
+      const c = tp.filter(y => t.indexOf(y) >= 0).length;
+      return tp.length && c >= Math.min(2, tp.length, t.length || 1);
+    });
   };
   const suma = fs => fs.reduce((a, x) => a + x.valor, 0);
   if (numeros && numeros.length) {
@@ -1639,6 +1651,7 @@ function calcularRetencion(prov, f, tabla) {
 
 function construirNotas(f, prov, ret) {
   const n = [];
+  if (f.notaCliente) n.push(f.notaCliente);
   if (ret.nota) n.push(ret.nota);
   if (f.descuentos > 0) n.push('incluye descuento $' + Math.round(f.descuentos).toLocaleString('es-CO'));
   if (f.otrosImpuestos > 0) n.push('otros impuestos $' + Math.round(f.otrosImpuestos).toLocaleString('es-CO') + ' incluidos en G');
