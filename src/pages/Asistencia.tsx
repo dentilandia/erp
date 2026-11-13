@@ -572,18 +572,20 @@ function separarExtraAtencion(
     const marcasDia = marcasPorPersonaYDia[`${row.perfil_id}|${fechaHE}`] ?? {};
     const horaIngreso = row.asistencia_horas_extra?.hora_ingreso_consultorio;
     const ingresoMs = horaIngreso ? new Date(`${fechaHE}T${horaIngreso.slice(0, 5)}:00-05:00`).getTime() : null;
+    const inicioAlmuerzoMs = new Date(`${fechaHE}T${horario.salida_almuerzo}:00-05:00`).getTime();
     const entradaAlmuerzoMs = new Date(`${fechaHE}T${horario.entrada_almuerzo}:00-05:00`).getTime();
     // El sábado no tiene almuerzo (jornada corta, sin esa pausa) — cualquier
     // interrupción ese día es, por definición, del segundo tipo. Entre
-    // semana, solo es interrupción de almuerzo si el paciente/urgencia
-    // entró ANTES de que terminara el almuerzo normal (13:00); de ahí en
-    // adelante ya es jornada de la tarde, no almuerzo.
+    // semana, solo es interrupción de almuerzo si el paciente/urgencia entró
+    // DURANTE la ventana del almuerzo normal (12:00–13:00) — faltaba el
+    // límite de abajo, así que una urgencia de la mañana (ej. 8am) también
+    // se tomaba como interrupción de almuerzo y se le enganchaba la marca de
+    // salida a almuerzo de ese día, sin tener nada que ver con ella.
     const esInterrupcionDeAlmuerzo =
-      diaDeSemana(fechaHE) !== 6 && ingresoMs !== null && ingresoMs < entradaAlmuerzoMs;
+      diaDeSemana(fechaHE) !== 6 && ingresoMs !== null && ingresoMs >= inicioAlmuerzoMs && ingresoMs < entradaAlmuerzoMs;
     let extra: number;
     let reflejadoEnMarca: boolean;
     if (esInterrupcionDeAlmuerzo) {
-      const inicioAlmuerzoMs = new Date(`${fechaHE}T${horario.salida_almuerzo}:00-05:00`).getTime();
       const marcaRealMs = marcasDia.salida_almuerzo ? new Date(marcasDia.salida_almuerzo).getTime() : null;
       const salidaMs = marcaRealMs ? Math.max(salidaTipadaMs, marcaRealMs) : salidaTipadaMs;
       extra = Math.max(0, (salidaMs - inicioAlmuerzoMs) / 3_600_000);
