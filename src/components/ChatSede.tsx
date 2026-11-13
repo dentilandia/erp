@@ -22,6 +22,33 @@ function primerNombre(nombre: string | null): string {
   return nombre?.trim().split(/\s+/)[0] || "—";
 }
 
+// Dos tonos ascendentes (estilo "aviso de mensaje") generados con Web Audio,
+// sin depender de un archivo de sonido. Si el navegador bloquea audio por no
+// haber habido interacción previa del usuario, falla en silencio — no es
+// crítico, el aviso visual sigue funcionando igual.
+function reproducirSonidoAviso() {
+  try {
+    const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    const tocarTono = (frecuencia: number, inicio: number, duracion: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = frecuencia;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + inicio);
+      gain.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + inicio + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + inicio + duracion);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + inicio);
+      osc.stop(ctx.currentTime + inicio + duracion + 0.05);
+    };
+    tocarTono(880, 0, 0.12);
+    tocarTono(1320, 0.14, 0.18);
+  } catch {
+    // Audio bloqueado por el navegador — se ignora, el resto del aviso sigue.
+  }
+}
+
 export function ChatSede({ sedeId, sedeNombre, sedeColor }: { sedeId: string; sedeNombre: string; sedeColor: string }) {
   const { perfil } = useAuth();
   const [abierto, setAbierto] = useState(false);
@@ -29,7 +56,19 @@ export function ChatSede({ sedeId, sedeNombre, sedeColor }: { sedeId: string; se
   const [texto, setTexto] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [noLeidos, setNoLeidos] = useState(0);
+  const [vistaPrevia, setVistaPrevia] = useState<{ nombre: string; texto: string } | null>(null);
   const finRef = useRef<HTMLDivElement>(null);
+  const perfilIdRef = useRef<string | null>(perfil?.id ?? null);
+  const vistaPreviaTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abiertoRef = useRef(abierto);
+
+  useEffect(() => {
+    perfilIdRef.current = perfil?.id ?? null;
+  }, [perfil?.id]);
+
+  useEffect(() => {
+    abiertoRef.current = abierto;
+  }, [abierto]);
 
   useEffect(() => {
     setMensajes([]);
@@ -42,13 +81,27 @@ export function ChatSede({ sedeId, sedeNombre, sedeColor }: { sedeId: string; se
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "mensajes_chat", filter: `sede_id=eq.${sedeId}` },
         (payload) => {
-          setMensajes((prev) => [...prev, payload.new as MensajeChat]);
+          const nuevo = payload.new as MensajeChat;
+          setMensajes((prev) => [...prev, nuevo]);
+          // Mensaje de otra persona: sonido + vista previa, para que
+          // recepción se entere aunque tenga el chat cerrado y la cabeza en
+          // otra cosa — antes solo subía el número del globito, que es fácil
+          // de no notar si no se está mirando esa esquina de la pantalla.
+          if (nuevo.autor_id !== perfilIdRef.current) {
+            reproducirSonidoAviso();
+            if (!abiertoRef.current) {
+              setVistaPrevia({ nombre: primerNombre(nuevo.autor_nombre), texto: nuevo.contenido });
+              if (vistaPreviaTimeoutRef.current) clearTimeout(vistaPreviaTimeoutRef.current);
+              vistaPreviaTimeoutRef.current = setTimeout(() => setVistaPrevia(null), 8000);
+            }
+          }
         },
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(canal);
+      if (vistaPreviaTimeoutRef.current) clearTimeout(vistaPreviaTimeoutRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sedeId]);
@@ -59,6 +112,7 @@ export function ChatSede({ sedeId, sedeNombre, sedeColor }: { sedeId: string; se
       const ultimoMensaje = mensajes[mensajes.length - 1];
       if (ultimoMensaje) localStorage.setItem(CLAVE_ULTIMA_LECTURA + sedeId, ultimoMensaje.created_at);
       setNoLeidos(0);
+      setVistaPrevia(null);
     } else {
       const ultimaLectura = localStorage.getItem(CLAVE_ULTIMA_LECTURA + sedeId);
       setNoLeidos(
@@ -156,18 +210,36 @@ export function ChatSede({ sedeId, sedeNombre, sedeColor }: { sedeId: string; se
           </div>
         </div>
       )}
-      <button
-        onClick={() => setAbierto((prev) => !prev)}
-        className="relative w-12 h-12 rounded-full text-white shadow-lg flex items-center justify-center ml-auto"
-        style={{ background: sedeColor }}
-      >
-        <MessageCircle size={20} />
-        {noLeidos > 0 && (
-          <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center">
-            {noLeidos > 9 ? "9+" : noLeidos}
+      {!abierto && vistaPrevia && (
+        <button
+          onClick={() => setAbierto(true)}
+          className="mb-2 ml-auto block w-72 text-left bg-white rounded-xl border border-gray-200 shadow-xl px-3 py-2"
+        >
+          <span className="text-[11px] font-semibold" style={{ color: sedeColor }}>
+            💬 {vistaPrevia.nombre} escribió:
           </span>
+          <p className="text-sm text-gray-700 line-clamp-2 mt-0.5">{vistaPrevia.texto}</p>
+        </button>
+      )}
+      <div className="relative ml-auto w-14 h-14">
+        {noLeidos > 0 && !abierto && (
+          <span className="absolute inset-0 rounded-full animate-ping" style={{ background: sedeColor, opacity: 0.5 }} />
         )}
-      </button>
+        <button
+          onClick={() => setAbierto((prev) => !prev)}
+          className={`relative w-14 h-14 rounded-full text-white shadow-lg flex items-center justify-center ${
+            noLeidos > 0 && !abierto ? "animate-bounce" : ""
+          }`}
+          style={{ background: sedeColor }}
+        >
+          <MessageCircle size={24} />
+          {noLeidos > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center ring-2 ring-white">
+              {noLeidos > 9 ? "9+" : noLeidos}
+            </span>
+          )}
+        </button>
+      </div>
     </div>
   );
 }
