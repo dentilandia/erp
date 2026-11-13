@@ -64,6 +64,7 @@ const CFG = {
   CARPETA_FACTURAS: '📥 Facturas para registrar',
   CARPETA_PAGOS: '💸 Comprobantes de pago',
   MAX_PAGOS_POR_CORRIDA: 15,
+  MESES_PAGOS_PENDIENTES: 3,     // los comprobantes se cruzan con facturas del mes actual y los 2 anteriores
   // ERP Dentilandia (Administración → Facturación): recibe todas las filas de los meses.
   ERP_URL: 'https://ctzyxmarmgmmgfdkdkhu.supabase.co/functions/v1/sync-facturas-compra',
   HOJAS: {
@@ -641,6 +642,13 @@ function registrarDocumento_(ctx, msg, f, prov, op) {
     return { f, estado: 'Registrada', pestana: nombrePestana + ' (simulado)', fila: filaSim, detalle: notas.join(' · ') };
   }
 
+  if (!prov) prov = agregarProveedorNuevo_(ctx, f, op.correo);
+  else if (!prov.nit && f.nit) completarNit_(ctx, prov, f.nit);
+  const sh = pestanaMes_(ctx, nombrePestana);
+  const fila = escribirFila_(ctx, sh, f, prov, ret, notas, '', op.color);
+  recordar_(ctx, f, prov, nombrePestana, fila);
+
+  // Soporte en Drive después de escribir la fila; el número (col. C) enlaza al PDF.
   let link = '';
   try {
     const carpeta = carpetaMes_(ctx, fechaMes);
@@ -650,14 +658,10 @@ function registrarDocumento_(ctx, msg, f, prov, op) {
       const archivo = carpeta.createFile(b.copyBlob().setName(base + (op.archivos.length > 1 && b !== op.principal ? '.' + i : '') + ext));
       if (b === op.principal) link = archivo.getUrl();
     });
+    if (link) sh.getRange(fila, 3).setRichTextValue(SpreadsheetApp.newRichTextValue().setText(String(f.numero || '-')).setLinkUrl(link).build());
   } catch (e) {
     notas.push('⚠ no se pudo guardar el soporte en Drive: ' + e.message);
   }
-
-  if (!prov) prov = agregarProveedorNuevo_(ctx, f, op.correo);
-  else if (!prov.nit && f.nit) completarNit_(ctx, prov, f.nit);
-  const fila = escribirFila_(ctx, pestanaMes_(ctx, nombrePestana), f, prov, ret, notas, link, op.color);
-  recordar_(ctx, f, prov, nombrePestana, fila);
   return { f, estado: 'Registrada', pestana: nombrePestana, fila, link, detalle: notas.join(' · ') };
 }
 
@@ -700,12 +704,20 @@ function escribirFila_(ctx, sh, f, prov, ret, notas, link, color) {
     0, 0,                                   // L ICA, M NC
     '=+I' + r + '-K' + r + '-L' + r + '-M' + r, // N Valor a pagar
     prov && prov.pagoAuto ? 'x' : '',       // O Pagado (solo si el proveedor se paga automáticamente)
-    prov && prov.pagoAuto ? prov.pagoAuto : '', // P Método
+    prov && prov.pagoAuto ? (metodoDeTexto(prov.pagoAuto) || prov.pagoAuto) : '', // P Método
     celdaRep(rep && rep[0]), celdaRep(rep && rep[1]), celdaRep(rep && rep[2]), // Q R S
     (prov && CFG.ESCRIBIR_REPARTICION) ? (prov.categoria || '') : '',        // T
     marca + (notas.length ? ' · ' + notas.join(' · ') : ''),                 // U
   ]];
-  sh.getRange(r, 2, 1, 20).setValues(valores);
+  try {
+    sh.getRange(r, 2, 1, 20).setValues(valores);
+  } catch (e) {
+    // Una lista desplegable de la fila (p. ej. Categoría o Método) no acepta el valor del proveedor:
+    // se quita la validación solo de esta fila, se escribe y queda el aviso para corregir a mano.
+    sh.getRange(r, 2, 1, 20).clearDataValidations();
+    valores[0][19] += ' · ⚠ revisar Categoría/Método: ' + String(e.message || e).slice(0, 120);
+    sh.getRange(r, 2, 1, 20).setValues(valores);
+  }
   const num = SpreadsheetApp.newRichTextValue().setText(String(f.numero || '-'));
   sh.getRange(r, 3).setRichTextValue(link ? num.setLinkUrl(link).build() : num.build());
   sh.getRange(r, 5, 1, 2).setNumberFormat('d/m/yyyy');
@@ -907,8 +919,11 @@ const HERRAMIENTA_PAGO = {
 /** Facturas sin marcar como pagadas, de todas las pestañas de mes. */
 function facturasPendientesDePago_(ss) {
   const out = [];
+  const hoy = new Date(isoBogota(new Date()) + 'T12:00:00');
+  const desde = claveMesDesde(hoy, CFG.MESES_PAGOS_PENDIENTES);
   ss.getSheets().forEach(s => {
-    if (!claveMes_(s.getName()) || s.getLastRow() < 3) return;
+    const k = claveMes_(s.getName());
+    if (!k || k < desde || s.getLastRow() < 3) return;
     s.getRange(3, 1, s.getLastRow() - 2, 16).getValues().forEach((r, i) => {
       const proveedor = String(r[1] || '').trim();
       if (!proveedor || String(r[14] || '').trim()) return;
@@ -921,12 +936,26 @@ function facturasPendientesDePago_(ss) {
   return out;
 }
 
+/** Clave AAAAMM del mes que está (meses - 1) antes del mes de la fecha. */
+function claveMesDesde(fecha, meses) {
+  const d = new Date(fecha.getFullYear(), fecha.getMonth() - (meses - 1), 1);
+  return d.getFullYear() * 100 + d.getMonth() + 1;
+}
+
 /** Flujo D: comprobantes de pago en "💸 Comprobantes de pago" → marca Pagado y Método en las facturas. */
 function flujoComprobantesPago_(ctx, res) {
   const carpeta = carpetaHermana_(ctx, CFG.CARPETA_PAGOS);
   const archivos = archivosSueltos_(carpeta);
   if (!archivos.length) return;
   const pendientes = facturasPendientesDePago_(ctx.ss);
+  if (ctx.simular && ctx.sim && ctx.sim.getLastRow() >= 3) {
+    // En la simulación, las facturas "registradas" en esta misma corrida solo están en 🧪 Simulación.
+    ctx.sim.getRange(3, 1, ctx.sim.getLastRow() - 2, 22).getValues().forEach((r, i) => {
+      const valor = Number(r[13]) || 0;
+      if (!String(r[1] || '').trim() || !claveMes_(String(r[21] || '')) || String(r[14] || '').trim() || valor <= 0) return;
+      pendientes.push({ hoja: ctx.sim, pestana: String(r[21]), fila: i + 3, proveedor: String(r[1]).trim(), numero: String(r[2] || ''), valor, fecha: '' });
+    });
+  }
   let n = 0;
   for (const file of archivos) {
     if (sinTiempo_(ctx) || n >= CFG.MAX_PAGOS_POR_CORRIDA) { res.pendientes = true; return; }
@@ -958,7 +987,7 @@ function flujoComprobantesPago_(ctx, res) {
           });
           // Papelería: una copia del comprobante en la carpeta del mes de las facturas, junto a ellas.
           try {
-            const ext = (file.getName().match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
+            const ext = (nombreConExtension(file.getName(), file.getMimeType()).match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
             const porMes = {};
             m.filas.forEach(x => { (porMes[x.pestana] = porMes[x.pestana] || []).push(x); });
             Object.keys(porMes).forEach(pest => {
@@ -1370,7 +1399,7 @@ function registrarLog_(ctx, r, msg) {
     return;
   }
   ctx.hojaLog = ctx.hojaLog || hojaLog_(ctx.ss);
-  ctx.hojaLog.appendRow([new Date(), r.estado, r.pestana || '', r.fila || '', f.proveedor || '', f.nit || '', f.numero || '',
+  ctx.hojaLog.appendRow([new Date(), r.estado, r.pestana ? "'" + r.pestana : '', r.fila || '', f.proveedor || '', f.nit || '', f.numero || '',
     f.fecha ? fechaLocal_(f.fecha) : '', f.total || '', f.cufe || '', r.detalle || '',
     msg.url || ('https://mail.google.com/mail/u/0/#all/' + msg.getThread().getId()), f.proveedor ? claveDoc(f) : '']);
 }
@@ -1612,10 +1641,13 @@ function buscarProveedor(idx, f, remitente) {
     if (mismaPersona(idx.porCorreo[dominio]) && !/gmail|hotmail|outlook|yahoo/.test(dominio)) return idx.porCorreo[dominio];
   }
   const t = tokens(f.proveedor).filter(x => x.length >= 3);
+  const sigla = t.map(x => x[0]).join('');
   let mejor = null, max = 0;
   idx.lista.forEach(p => {
     [p.nombre, p.nombreDian].forEach(n => {
       const sig = Array.from(new Set(tokens(n).filter(x => x.length >= 3)));
+      // Sigla: "EPM" en ⚙️ Proveedores = "Empresas Públicas de Medellín" en la factura.
+      if (sig.length === 1 && sigla.length >= 3 && sig[0] === sigla && 2 > max) { max = 2; mejor = p; return; }
       const comun = sig.filter(x => t.indexOf(x) >= 0).length;
       // Al menos 2 palabras en común (o 1 si el nombre tiene una sola) y que cubran la mayor parte del nombre.
       if (!sig.length || comun < Math.min(2, sig.length) || comun / sig.length < 0.6) return;
@@ -1739,5 +1771,5 @@ function peorEstado_(a, b) {
 if (typeof module !== 'undefined') {
   module.exports = { parsearXmlFactura, calcularRetencion, buscarDuplicado, construirNotas, nombreControl, normNum, tokens, claveDoc,
     docxXmlATexto, clasificarCorreo, esDeMesAnterior, esAnexo, remitenteOriginal, cobroDesdeIA, indexarProveedores, buscarProveedor, repartoFinal,
-    RETENCION_INICIAL, PROVEEDORES_INICIALES, HERRAMIENTA_COBRO, claveMes_, peorEstado_, numIgual, isoBogota, metodoDeTexto, nombreSoporte, nombreConExtension, agruparHistorial, conceptoDesdeHistorial, cruzarHistorialConProveedores, filaParaERP, pistaDeNombrePago, emparejarPago };
+    RETENCION_INICIAL, PROVEEDORES_INICIALES, HERRAMIENTA_COBRO, claveMes_, peorEstado_, numIgual, isoBogota, metodoDeTexto, nombreSoporte, nombreConExtension, claveMesDesde, agruparHistorial, conceptoDesdeHistorial, cruzarHistorialConProveedores, filaParaERP, pistaDeNombrePago, emparejarPago };
 }
