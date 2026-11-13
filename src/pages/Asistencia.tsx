@@ -524,6 +524,22 @@ type HeColabRow = {
   } | null;
 };
 
+/** Decide si una solicitud de horas extra por atención fue interrupción de
+ *  almuerzo (el paciente/urgencia entró DENTRO de la ventana real del
+ *  almuerzo, 12:00–13:00) o extensión del cierre (cualquier otro caso,
+ *  incluido cualquier sábado, que no tiene almuerzo) — de eso depende cuál
+ *  marca real de asistencia hay que usar como la salida real de esa persona
+ *  ese día (salida_almuerzo vs salida). Se decide por CUÁNDO entró el
+ *  paciente, nunca por lo que alguien haya escrito de salida. */
+function tipoInterrupcionHE(fechaHE: string, horaIngreso: string | null): "almuerzo" | "cierre" {
+  if (!horaIngreso || diaDeSemana(fechaHE) === 6) return "cierre";
+  const horario = horasPorDefecto(fechaHE);
+  const ingresoMs = new Date(`${fechaHE}T${horaIngreso.slice(0, 5)}:00-05:00`).getTime();
+  const inicioAlmuerzoMs = new Date(`${fechaHE}T${horario.salida_almuerzo}:00-05:00`).getTime();
+  const entradaAlmuerzoMs = new Date(`${fechaHE}T${horario.entrada_almuerzo}:00-05:00`).getTime();
+  return ingresoMs >= inicioAlmuerzoMs && ingresoMs < entradaAlmuerzoMs ? "almuerzo" : "cierre";
+}
+
 /** De las horas extra por atención de paciente/otro motivo (finalizadas),
  *  separa cuánto ya quedó reflejado en la marca real de salida (fin de
  *  jornada — esa cola ya suma dentro de "horas" en armarReporteHoras, vía
@@ -570,22 +586,11 @@ function separarExtraAtencion(
     const finNormalMs = new Date(`${fechaHE}T${horario.salida}:00-05:00`).getTime();
     const salidaTipadaMs = new Date(row.hora_salida).getTime();
     const marcasDia = marcasPorPersonaYDia[`${row.perfil_id}|${fechaHE}`] ?? {};
-    const horaIngreso = row.asistencia_horas_extra?.hora_ingreso_consultorio;
-    const ingresoMs = horaIngreso ? new Date(`${fechaHE}T${horaIngreso.slice(0, 5)}:00-05:00`).getTime() : null;
-    const inicioAlmuerzoMs = new Date(`${fechaHE}T${horario.salida_almuerzo}:00-05:00`).getTime();
-    const entradaAlmuerzoMs = new Date(`${fechaHE}T${horario.entrada_almuerzo}:00-05:00`).getTime();
-    // El sábado no tiene almuerzo (jornada corta, sin esa pausa) — cualquier
-    // interrupción ese día es, por definición, del segundo tipo. Entre
-    // semana, solo es interrupción de almuerzo si el paciente/urgencia entró
-    // DURANTE la ventana del almuerzo normal (12:00–13:00) — faltaba el
-    // límite de abajo, así que una urgencia de la mañana (ej. 8am) también
-    // se tomaba como interrupción de almuerzo y se le enganchaba la marca de
-    // salida a almuerzo de ese día, sin tener nada que ver con ella.
-    const esInterrupcionDeAlmuerzo =
-      diaDeSemana(fechaHE) !== 6 && ingresoMs !== null && ingresoMs >= inicioAlmuerzoMs && ingresoMs < entradaAlmuerzoMs;
+    const horaIngreso = row.asistencia_horas_extra?.hora_ingreso_consultorio ?? null;
     let extra: number;
     let reflejadoEnMarca: boolean;
-    if (esInterrupcionDeAlmuerzo) {
+    if (tipoInterrupcionHE(fechaHE, horaIngreso) === "almuerzo") {
+      const inicioAlmuerzoMs = new Date(`${fechaHE}T${horario.salida_almuerzo}:00-05:00`).getTime();
       const marcaRealMs = marcasDia.salida_almuerzo ? new Date(marcasDia.salida_almuerzo).getTime() : null;
       const salidaMs = marcaRealMs ? Math.max(salidaTipadaMs, marcaRealMs) : salidaTipadaMs;
       extra = Math.max(0, (salidaMs - inicioAlmuerzoMs) / 3_600_000);
@@ -1213,12 +1218,17 @@ export function Asistencia() {
   const [guardandoHE, setGuardandoHE] = useState(false);
   const [errorHE, setErrorHE] = useState<string | null>(null);
   const [finalizarForm, setFinalizarForm] = useState<
-    Record<
-      string,
-      { pacientePago: boolean | null; seAgendoCita: boolean | null; tareas: Record<string, string>; horaSalida: string }
-    >
+    Record<string, { pacientePago: boolean | null; seAgendoCita: boolean | null; tareas: Record<string, string> }>
   >({});
   const [guardandoFinalizarHE, setGuardandoFinalizarHE] = useState<string | null>(null);
+  // Marcas reales de asistencia (salida_almuerzo y salida) de cada
+  // colaborador de una solicitud ABIERTA, para la fecha de esa solicitud —
+  // clave "perfilId|fecha". La salida ya no se escribe a mano: se toma de
+  // acá (cuál de las dos según tipoInterrupcionHE). Si la que corresponde no
+  // está, esa persona todavía no puede finalizarse (no ha marcado salida).
+  const [marcasRealesHE, setMarcasRealesHE] = useState<
+    Record<string, { salida_almuerzo?: { id: string; marcado_en: string }; salida?: { id: string; marcado_en: string } }>
+  >({});
 
   // Horas extra de atención acumuladas por persona y semana (a partir de las
   // solicitudes finalizadas de arriba) — se muestran aparte en el reporte
@@ -1974,6 +1984,34 @@ export function Asistencia() {
       colaboradores: s.asistencia_horas_extra_colaboradores.map((c) => ({ ...c, nombre: c.perfiles?.nombre ?? "—" })),
     }));
     setSolicitudesHE(filas);
+
+    // Para las solicitudes ABIERTAS, trae las marcas reales de asistencia
+    // (salida_almuerzo y salida) de ese mismo día de cada colaborador — de
+    // ahí se toma la salida al finalizar, ya no se escribe a mano.
+    const abiertas = filas.filter((s) => s.estado === "abierta");
+    if (abiertas.length > 0) {
+      const perfilIds = Array.from(new Set(abiertas.flatMap((s) => s.colaboradores.map((c) => c.perfil_id))));
+      const fechas = Array.from(new Set(abiertas.map((s) => s.fecha)));
+      const desde = fechas.reduce((a, b) => (b < a ? b : a));
+      const hasta = sumarDias(fechas.reduce((a, b) => (b > a ? b : a)), 1);
+      const { data: marcasData } = await supabase
+        .from("asistencia_registros")
+        .select("perfil_id, tipo, marcado_en, id")
+        .in("perfil_id", perfilIds)
+        .in("tipo", ["salida_almuerzo", "salida"])
+        .gte("marcado_en", `${desde}T00:00:00-05:00`)
+        .lt("marcado_en", `${hasta}T00:00:00-05:00`)
+        .order("marcado_en");
+      const marcas: typeof marcasRealesHE = {};
+      for (const m of (marcasData as { perfil_id: string; tipo: "salida_almuerzo" | "salida"; marcado_en: string; id: string }[]) ?? []) {
+        const clave = `${m.perfil_id}|${fechaBogota(m.marcado_en)}`;
+        const entrada = (marcas[clave] ??= {});
+        if (!entrada[m.tipo]) entrada[m.tipo] = { id: m.id, marcado_en: m.marcado_en };
+      }
+      setMarcasRealesHE(marcas);
+    } else {
+      setMarcasRealesHE({});
+    }
   }
 
   useEffect(() => {
@@ -2026,74 +2064,43 @@ export function Asistencia() {
     cargarSolicitudesHE();
   }
 
-  // Antes se marcaba la salida de cada colaborador (con una hora escrita a
-  // mano) antes de saber siquiera si el paciente ya había sido atendido —
-  // podía quedar una hora de salida de alguien que en realidad seguía con el
-  // paciente. Ahora la salida se registra acá, junto con el resto de la
-  // solicitud — la hora la escribe quien finaliza (por defecto "ahora", pero
-  // editable para cargar retroactivo sin que quede la hora de cuando se
-  // tipeó en el sistema en vez de la hora real).
-  //
-  // Solo se toca asistencia_registros (la salida REAL del día de esa
-  // persona) cuando la hora de salida cae después del cierre normal de la
-  // jornada — o sea, cuando de verdad se quedó hasta tarde por esto. Si cae
-  // antes (ej. una interrupción del almuerzo), su jornada sigue normal
-  // después y no se debe tocar su salida real — el registro acá solo sirve
-  // para calcular las horas extra en el reporte.
+  // Antes la salida se escribía a mano (por defecto "ahora", pero casi
+  // siempre se aceptaba sin corregir) — así quedaron guardadas, por ejemplo,
+  // solicitudes "finalizadas" 1 minuto después de que entró el paciente,
+  // que nunca fue lo que de verdad pasó. Ahora la salida de cada
+  // colaborador se toma directo de su marca real de asistencia de ese día
+  // (salida_almuerzo si el paciente entró durante el almuerzo, salida si
+  // fue más tarde — ver tipoInterrupcionHE) — si todavía no la ha marcado,
+  // no se puede finalizar esa solicitud.
+  function marcaRealSalidaHE(
+    solicitud: SolicitudHorasExtra,
+    perfilId: string,
+  ): { id: string; marcado_en: string } | null {
+    const tipo = tipoInterrupcionHE(solicitud.fecha, solicitud.hora_ingreso_consultorio);
+    const entrada = marcasRealesHE[`${perfilId}|${solicitud.fecha}`];
+    return (tipo === "almuerzo" ? entrada?.salida_almuerzo : entrada?.salida) ?? null;
+  }
+
   async function finalizarSolicitudHE(
     solicitud: SolicitudHorasExtra & { colaboradores: (ColaboradorHorasExtra & { nombre: string })[] },
   ) {
-    const form =
-      finalizarForm[solicitud.id] ?? { pacientePago: null, seAgendoCita: null, tareas: {}, horaSalida: horaBogotaAhora() };
+    const form = finalizarForm[solicitud.id] ?? { pacientePago: null, seAgendoCita: null, tareas: {} };
     // "¿Pagó?"/"¿Se agendó cita?" solo aplican cuando sí hay un paciente de
     // por medio — para "otro motivo" esas preguntas no tienen sentido.
     if (solicitud.paciente_nombre !== null && (form.pacientePago === null || form.seAgendoCita === null)) return;
-    if (!form.horaSalida) return;
+    const marcas = solicitud.colaboradores.map((c) => ({ c, marca: marcaRealSalidaHE(solicitud, c.perfil_id) }));
+    if (marcas.some(({ marca }) => !marca)) return; // alguien todavía no marca su salida real
     setGuardandoFinalizarHE(solicitud.id);
     setErrorHE(null);
-    const salidaISO = new Date(`${solicitud.fecha}T${form.horaSalida}:00-05:00`).toISOString();
-    const finNormalISO = new Date(`${solicitud.fecha}T${horasPorDefecto(solicitud.fecha).salida}:00-05:00`).toISOString();
-    const esFinDeJornada = salidaISO > finNormalISO;
-    const desde = `${solicitud.fecha}T00:00:00-05:00`;
-    const hasta = `${sumarDias(solicitud.fecha, 1)}T00:00:00-05:00`;
-    for (const c of solicitud.colaboradores) {
-      let marcaRegistroId: string | null = null;
-      if (esFinDeJornada) {
-        const { data: existentes } = await supabase
-          .from("asistencia_registros")
-          .select("id")
-          .eq("perfil_id", c.perfil_id)
-          .eq("tipo", "salida")
-          .gte("marcado_en", desde)
-          .lt("marcado_en", hasta);
-        for (const ex of existentes ?? []) {
-          await supabase.from("asistencia_registros").delete().eq("id", ex.id);
-        }
-        const { data: nuevaMarca, error: errorMarca } = await supabase
-          .from("asistencia_registros")
-          .insert({
-            perfil_id: c.perfil_id,
-            sede_id: personas.find((p) => p.id === c.perfil_id)?.sede_id ?? null,
-            tipo: "salida",
-            marcado_en: salidaISO,
-          })
-          .select("id")
-          .single();
-        if (errorMarca || !nuevaMarca) {
-          setGuardandoFinalizarHE(null);
-          setErrorHE(errorMarca?.message ?? "No se pudo registrar la salida.");
-          return;
-        }
-        marcaRegistroId = nuevaMarca.id;
-        // La salida real cambió — si ese día ya tenía un "compensado"
-        // guardado (calculado contra la salida anterior), queda
-        // desactualizado.
-        await recalcularCompensadoDia(c.perfil_id, solicitud.fecha);
-      }
+    for (const { c, marca } of marcas) {
       const tarea = form.tareas[c.id]?.trim();
       const { error: errorUpd } = await supabase
         .from("asistencia_horas_extra_colaboradores")
-        .update({ hora_salida: salidaISO, marca_registro_id: marcaRegistroId, ...(tarea ? { tareas_realizadas: tarea } : {}) })
+        .update({
+          hora_salida: marca!.marcado_en,
+          marca_registro_id: marca!.id,
+          ...(tarea ? { tareas_realizadas: tarea } : {}),
+        })
         .eq("id", c.id);
       if (errorUpd) {
         setGuardandoFinalizarHE(null);
@@ -2763,8 +2770,14 @@ export function Asistencia() {
           {solicitudesHE.length > 0 && (
             <div className="space-y-3">
               {solicitudesHE.map((s) => {
-                const form =
-                  finalizarForm[s.id] ?? { pacientePago: null, seAgendoCita: null, tareas: {}, horaSalida: horaBogotaAhora() };
+                const form = finalizarForm[s.id] ?? { pacientePago: null, seAgendoCita: null, tareas: {} };
+                const marcasColaboradores =
+                  s.estado === "abierta" ? s.colaboradores.map((c) => ({ c, marca: marcaRealSalidaHE(s, c.perfil_id) })) : [];
+                const faltaAlguienPorMarcar = marcasColaboradores.some(({ marca }) => !marca);
+                // Alerta si ya pasaron las 6pm de HOY y la solicitud sigue
+                // abierta — para que no se quede olvidada sin finalizar.
+                const yaPasaronLas6 =
+                  s.estado === "abierta" && s.fecha === fechaBogota(new Date().toISOString()) && horaBogotaAhora() >= "18:00";
                 return (
                   <div
                     key={s.id}
@@ -2789,38 +2802,42 @@ export function Asistencia() {
                       {s.doctora_id && `Doctora: ${doctoras.find((d) => d.id === s.doctora_id)?.nombre ?? "—"} · `}
                       {s.hora_ingreso_consultorio && `Ingreso: ${s.hora_ingreso_consultorio} · `}Motivo: {s.motivo}
                     </p>
+                    {yaPasaronLas6 && (
+                      <p className="text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1 mb-2">
+                        ⚠ Ya pasaron las 6:00pm y esta solicitud sigue abierta — finalízala para que quede con la salida real de hoy.
+                      </p>
+                    )}
                     <div className="space-y-1.5">
-                      {s.colaboradores.map((c) => (
-                        <div key={c.id} className="flex items-center gap-2">
-                          <span className="w-40 shrink-0">{c.nombre}</span>
-                          {c.hora_salida ? (
-                            <span className="text-tinta font-medium">
-                              Salida: {new Date(c.hora_salida).toLocaleTimeString("es-CO")}
-                            </span>
-                          ) : (
-                            <span className="text-gray-400">
-                              {s.estado === "finalizada" ? "Sin salida registrada" : "Salida pendiente — se registra al finalizar"}
-                            </span>
-                          )}
-                        </div>
-                      ))}
+                      {s.estado === "finalizada"
+                        ? s.colaboradores.map((c) => (
+                            <div key={c.id} className="flex items-center gap-2">
+                              <span className="w-40 shrink-0">{c.nombre}</span>
+                              {c.hora_salida ? (
+                                <span className="text-tinta font-medium">
+                                  Salida: {new Date(c.hora_salida).toLocaleTimeString("es-CO")}
+                                </span>
+                              ) : (
+                                <span className="text-gray-400">Sin salida registrada</span>
+                              )}
+                            </div>
+                          ))
+                        : marcasColaboradores.map(({ c, marca }) => (
+                            <div key={c.id} className="flex items-center gap-2">
+                              <span className="w-40 shrink-0">{c.nombre}</span>
+                              {marca ? (
+                                <span className="text-tinta font-medium">
+                                  Salida real: {new Date(marca.marcado_en).toLocaleTimeString("es-CO")}
+                                </span>
+                              ) : (
+                                <span className="text-amber-600">Todavía no marca salida en el ERP</span>
+                              )}
+                            </div>
+                          ))}
                     </div>
 
                     {s.estado === "abierta" && (
                       <div className="mt-3 pt-3 border-t border-amber-200 space-y-2">
                         <p className="text-xs font-medium text-gray-600">Para finalizar:</p>
-                        <label className="flex items-center gap-2 text-xs text-gray-500">
-                          Hora de salida real:
-                          <input
-                            type="time"
-                            value={form.horaSalida}
-                            onChange={(e) =>
-                              setFinalizarForm((prev) => ({ ...prev, [s.id]: { ...form, horaSalida: e.target.value } }))
-                            }
-                            title="Corrígela si estás cargando esto días después"
-                            className="rounded-md border border-gray-300 px-2 py-1 text-sm"
-                          />
-                        </label>
                         {s.paciente_nombre !== null && (
                           <>
                             <div className="flex items-center gap-2 flex-wrap text-xs">
@@ -2875,12 +2892,16 @@ export function Asistencia() {
                           onClick={() => finalizarSolicitudHE(s)}
                           disabled={
                             (s.paciente_nombre !== null && (form.pacientePago === null || form.seAgendoCita === null)) ||
-                            !form.horaSalida ||
+                            faltaAlguienPorMarcar ||
                             guardandoFinalizarHE === s.id
                           }
                           className="rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
                         >
-                          {guardandoFinalizarHE === s.id ? "Guardando…" : "Finalizar solicitud"}
+                          {guardandoFinalizarHE === s.id
+                            ? "Guardando…"
+                            : faltaAlguienPorMarcar
+                              ? "Falta que marquen salida"
+                              : "Finalizar solicitud"}
                         </button>
                       </div>
                     )}
