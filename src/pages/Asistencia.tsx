@@ -242,7 +242,7 @@ function construirHistorialTardanzas(
     hora_entrada_autorizada: string | null;
     hora_salida_autorizada: string | null;
   }[],
-): { perfil_id: string; fecha: string; texto: string; tipo: "entrada_tarde" | "salida_temprana" | "salida_tardia" }[] {
+): { perfil_id: string; fecha: string; texto: string; tipo: "entrada_tarde" | "salida_temprana" }[] {
   const marcasPorPersonaYDia: Record<string, { tipo: TipoAsistencia; marcado_en: string }[]> = {};
   for (const r of filas) {
     (marcasPorPersonaYDia[`${r.perfil_id}|${fechaBogota(r.marcado_en)}`] ??= []).push({
@@ -255,7 +255,11 @@ function construirHistorialTardanzas(
   const formatoHora = (iso: string) =>
     new Date(iso).toLocaleTimeString("es-CO", { timeZone: "America/Bogota", hour: "numeric", minute: "2-digit" });
 
-  const resultado: { perfil_id: string; fecha: string; texto: string; tipo: "entrada_tarde" | "salida_temprana" | "salida_tardia" }[] = [];
+  // Nota: la salida DESPUÉS del cierre normal (quedarse tarde) ya se suma
+  // como horas trabajadas/extra en armarReporteHoras — a propósito no se
+  // lista acá como observación aparte (se sigue contabilizando, pero sin
+  // mostrarse línea por línea).
+  const resultado: { perfil_id: string; fecha: string; texto: string; tipo: "entrada_tarde" | "salida_temprana" }[] = [];
   const claves = new Set([...Object.keys(marcasPorPersonaYDia), ...notaPorClave.keys()]);
   for (const clave of claves) {
     const [perfilId, fecha] = clave.split("|");
@@ -263,28 +267,6 @@ function construirHistorialTardanzas(
     const nota = notaPorClave.get(clave);
     const hayLlegadaYSalida = marcasDia.some((m) => m.tipo === "llegada") && marcasDia.some((m) => m.tipo === "salida");
     if (!hayLlegadaYSalida) continue; // sin marcas no hay hora que mostrar
-
-    // Salida tardía (se quedó después del cierre normal): independiente del
-    // faltante del día de abajo — antes solo se veía en este historial
-    // cuando alguien salía ANTES de hora (se le descontaba), nunca cuando
-    // se quedaba DESPUÉS, aunque esos minutos de más sí se estén sumando
-    // como horas trabajadas/extra en el reporte semanal (armarReporteHoras).
-    const porTipoDia: Partial<Record<TipoAsistencia, string>> = {};
-    for (const m of marcasDia) if (!porTipoDia[m.tipo]) porTipoDia[m.tipo] = m.marcado_en;
-    const horaFinNormal = horasPorDefecto(fecha).salida;
-    const finNormalMs = new Date(`${fecha}T${horaFinNormal}:00-05:00`).getTime();
-    if (porTipoDia.salida) {
-      const minutosDespues = Math.round((new Date(porTipoDia.salida).getTime() - finNormalMs) / 60_000);
-      if (minutosDespues > 0) {
-        resultado.push({
-          perfil_id: perfilId,
-          fecha,
-          texto: `Salió ${formatoHora(porTipoDia.salida)} (${minutosDespues}min después)`,
-          tipo: "salida_tardia",
-        });
-      }
-    }
-
     const minutosGuardado = Math.round(
       Math.max(0, jornadaOrdinariaHoras(fecha) - horasTrabajadasDeMarcas(marcasDia, fecha, nota?.hora_entrada_autorizada ?? null)) * 60,
     );
@@ -588,12 +570,17 @@ function separarExtraAtencion(
       extra = (salidaMs - finNormalMs) / 3_600_000;
       reflejadoEnMarca = true;
     } else {
-      const horaIngreso = row.asistencia_horas_extra?.hora_ingreso_consultorio;
-      if (!horaIngreso) continue;
-      const ingresoMs = new Date(`${fechaHE}T${horaIngreso.slice(0, 5)}:00-05:00`).getTime();
+      // Interrupción de mediodía: lo extra es todo el tiempo que se quedó
+      // más allá de la hora en que debía empezar su almuerzo (12:00), no
+      // desde que entró el paciente/urgencia puntual — esa hora de ingreso
+      // es solo el motivo de la interrupción, no el inicio de lo que se le
+      // debe reconocer (si ya iba tarde para almorzar por otra razón, ese
+      // tiempo también se le reconoce).
+      const inicioAlmuerzoNormal = horasPorDefecto(fechaHE).salida_almuerzo;
+      const inicioAlmuerzoMs = new Date(`${fechaHE}T${inicioAlmuerzoNormal}:00-05:00`).getTime();
       const marcaRealMs = marcasDia.salida_almuerzo ? new Date(marcasDia.salida_almuerzo).getTime() : null;
       const salidaMs = marcaRealMs ? Math.max(salidaTipadaMs, marcaRealMs) : salidaTipadaMs;
-      extra = Math.max(0, (salidaMs - ingresoMs) / 3_600_000);
+      extra = Math.max(0, (salidaMs - inicioAlmuerzoMs) / 3_600_000);
       reflejadoEnMarca = false;
     }
     if (extra <= 0) continue;
@@ -998,7 +985,7 @@ export function Asistencia() {
     Record<string, { fecha: string; nota: string; minutosCompensados: number }[]>
   >({});
   const [historialTardanzasPorPersona, setHistorialTardanzasPorPersona] = useState<
-    Record<string, { fecha: string; texto: string; tipo: "entrada_tarde" | "salida_temprana" | "salida_tardia" }[]>
+    Record<string, { fecha: string; texto: string; tipo: "entrada_tarde" | "salida_temprana" }[]>
   >({});
   const [ausenciasPorPersona, setAusenciasPorPersona] = useState<
     Record<string, { fecha: string; tipo: "vacaciones" | "incapacidad" | "descanso" }[]>
@@ -1574,7 +1561,7 @@ export function Asistencia() {
       }
     }
     setNotasPorPersona(notasAgrupadas);
-    const historialTardanzasAgrupado: Record<string, { fecha: string; texto: string; tipo: "entrada_tarde" | "salida_temprana" | "salida_tardia" }[]> = {};
+    const historialTardanzasAgrupado: Record<string, { fecha: string; texto: string; tipo: "entrada_tarde" | "salida_temprana" }[]> = {};
     for (const h of construirHistorialTardanzas(filas, notasRows)) {
       (historialTardanzasAgrupado[h.perfil_id] ??= []).push({ fecha: h.fecha, texto: h.texto, tipo: h.tipo });
     }
@@ -1673,7 +1660,7 @@ export function Asistencia() {
           ...(historialTardanzasPorPersona[fila.perfilId] ?? []).map((h) => ({
             fecha: h.fecha,
             texto: h.texto,
-            color: h.tipo === "salida_temprana" ? "#2563eb" : h.tipo === "salida_tardia" ? "#15803d" : "#b45309",
+            color: h.tipo === "salida_temprana" ? "#2563eb" : "#b45309",
           })),
         ].sort((a, b) => a.fecha.localeCompare(b.fecha));
         const observacionesHtml =
@@ -3110,12 +3097,7 @@ export function Asistencia() {
                     ...(historialTardanzasPorPersona[fila.perfilId] ?? []).map((h) => ({
                       fecha: h.fecha,
                       texto: h.texto,
-                      color:
-                        h.tipo === "salida_temprana"
-                          ? "text-blue-600"
-                          : h.tipo === "salida_tardia"
-                            ? "text-emerald-600"
-                            : "text-amber-600",
+                      color: h.tipo === "salida_temprana" ? "text-blue-600" : "text-amber-600",
                       minutosCompensados: 0,
                     })),
                   ].sort((a, b) => a.fecha.localeCompare(b.fecha));
