@@ -536,10 +536,18 @@ type HeColabRow = {
  *  que de verdad marcó esa persona ese día (ej. anotan que terminaron de
  *  atender a las 12:10 pero en realidad siguieron ocupadas con otra cosa y
  *  no marcaron la salida a almuerzo hasta las 12:17). Por eso se cruza
- *  contra la marca real de asistencia de ese mismo día (salida_almuerzo para
- *  una interrupción de mediodía, salida para una que se extiende hasta el
- *  cierre) y se usa la más tardía de las dos — nunca menos de lo escrito,
- *  pero tampoco menos de lo que de verdad pasó. */
+ *  contra la marca real de asistencia de ese mismo día y se usa la más
+ *  tardía de las dos — nunca menos de lo escrito, pero tampoco menos de lo
+ *  que de verdad pasó.
+ *
+ *  Si fue interrupción de almuerzo o extensión del cierre se decide por
+ *  CUÁNDO entró el paciente/urgencia (hora_ingreso_consultorio) — nunca por
+ *  la hora de salida escrita a mano, que es justo el dato que puede estar
+ *  desactualizado: una urgencia que entró a las 5:48pm y "se resolvió" a
+ *  las 5:49pm (antes de las 6pm) NO es una interrupción de almuerzo solo
+ *  porque lo escrito quedó antes del cierre — comparado contra las 12:00
+ *  eso se disparaba a más de 300 minutos, cuando lo real es la cola después
+ *  del cierre que sí se haya quedado, si la hubo. */
 function separarExtraAtencion(
   rows: HeColabRow[],
   registros: { perfil_id: string; tipo: TipoAsistencia; marcado_en: string }[],
@@ -558,30 +566,33 @@ function separarExtraAtencion(
   for (const row of rows) {
     const fechaHE = row.asistencia_horas_extra?.fecha;
     if (!fechaHE || fechaHE < desde || fechaHE >= hasta) continue;
-    const finNormal = horasPorDefecto(fechaHE).salida;
-    const finNormalMs = new Date(`${fechaHE}T${finNormal}:00-05:00`).getTime();
+    const horario = horasPorDefecto(fechaHE);
+    const finNormalMs = new Date(`${fechaHE}T${horario.salida}:00-05:00`).getTime();
     const salidaTipadaMs = new Date(row.hora_salida).getTime();
     const marcasDia = marcasPorPersonaYDia[`${row.perfil_id}|${fechaHE}`] ?? {};
+    const horaIngreso = row.asistencia_horas_extra?.hora_ingreso_consultorio;
+    const ingresoMs = horaIngreso ? new Date(`${fechaHE}T${horaIngreso.slice(0, 5)}:00-05:00`).getTime() : null;
+    const entradaAlmuerzoMs = new Date(`${fechaHE}T${horario.entrada_almuerzo}:00-05:00`).getTime();
+    // El sábado no tiene almuerzo (jornada corta, sin esa pausa) — cualquier
+    // interrupción ese día es, por definición, del segundo tipo. Entre
+    // semana, solo es interrupción de almuerzo si el paciente/urgencia
+    // entró ANTES de que terminara el almuerzo normal (13:00); de ahí en
+    // adelante ya es jornada de la tarde, no almuerzo.
+    const esInterrupcionDeAlmuerzo =
+      diaDeSemana(fechaHE) !== 6 && ingresoMs !== null && ingresoMs < entradaAlmuerzoMs;
     let extra: number;
     let reflejadoEnMarca: boolean;
-    if (salidaTipadaMs > finNormalMs) {
-      const marcaRealMs = marcasDia.salida ? new Date(marcasDia.salida).getTime() : null;
-      const salidaMs = marcaRealMs ? Math.max(salidaTipadaMs, marcaRealMs) : salidaTipadaMs;
-      extra = (salidaMs - finNormalMs) / 3_600_000;
-      reflejadoEnMarca = true;
-    } else {
-      // Interrupción de mediodía: lo extra es todo el tiempo que se quedó
-      // más allá de la hora en que debía empezar su almuerzo (12:00), no
-      // desde que entró el paciente/urgencia puntual — esa hora de ingreso
-      // es solo el motivo de la interrupción, no el inicio de lo que se le
-      // debe reconocer (si ya iba tarde para almorzar por otra razón, ese
-      // tiempo también se le reconoce).
-      const inicioAlmuerzoNormal = horasPorDefecto(fechaHE).salida_almuerzo;
-      const inicioAlmuerzoMs = new Date(`${fechaHE}T${inicioAlmuerzoNormal}:00-05:00`).getTime();
+    if (esInterrupcionDeAlmuerzo) {
+      const inicioAlmuerzoMs = new Date(`${fechaHE}T${horario.salida_almuerzo}:00-05:00`).getTime();
       const marcaRealMs = marcasDia.salida_almuerzo ? new Date(marcasDia.salida_almuerzo).getTime() : null;
       const salidaMs = marcaRealMs ? Math.max(salidaTipadaMs, marcaRealMs) : salidaTipadaMs;
       extra = Math.max(0, (salidaMs - inicioAlmuerzoMs) / 3_600_000);
       reflejadoEnMarca = false;
+    } else {
+      const marcaRealMs = marcasDia.salida ? new Date(marcasDia.salida).getTime() : null;
+      const salidaMs = marcaRealMs ? Math.max(salidaTipadaMs, marcaRealMs) : salidaTipadaMs;
+      extra = Math.max(0, (salidaMs - finNormalMs) / 3_600_000);
+      reflejadoEnMarca = true;
     }
     if (extra <= 0) continue;
     const claveSemana = `${row.perfil_id}|${lunesDeSemana(fechaHE)}`;
