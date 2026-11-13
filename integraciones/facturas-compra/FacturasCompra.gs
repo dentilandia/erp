@@ -792,7 +792,17 @@ function archivar_(ctx, carpeta, file, estado) {
 /** Un archivo de Drive con la misma forma que un adjunto de Gmail (lo que usan leerConIA_ y textoDocx_). */
 function adjuntoDeArchivo_(file) {
   const blob = file.getBlob();
-  return { getName: () => file.getName(), getBytes: () => blob.getBytes(), getSize: () => file.getSize(), copyBlob: () => blob.copyBlob() };
+  const nombre = nombreConExtension(file.getName(), file.getMimeType());
+  return { getName: () => nombre, getBytes: () => blob.getBytes(), getSize: () => file.getSize(), copyBlob: () => blob.copyBlob().setName(nombre) };
+}
+
+/** Agrega la extensión según el tipo de archivo cuando el nombre no la trae ("Clara Villa - 859 860"). */
+function nombreConExtension(nombre, mime) {
+  nombre = String(nombre || '');
+  if (/\.[a-z0-9]{2,5}$/i.test(nombre)) return nombre;
+  const ext = { 'application/pdf': '.pdf', 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'application/zip': '.zip',
+    'application/x-zip-compressed': '.zip', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx' }[String(mime || '').toLowerCase()];
+  return ext ? nombre + ext : nombre;
 }
 /** Un archivo de Drive con la forma de un mensaje de Gmail (lo que usan registrarDocumento_ y registrarLog_). */
 function mensajeDeArchivo_(file) {
@@ -819,9 +829,10 @@ function flujoCarpetaFacturas_(ctx, res) {
     const msg = mensajeDeArchivo_(file);
     let r;
     try {
-      if (/\.zip$/i.test(file.getName())) {
+      const nombreArchivo = nombreConExtension(file.getName(), file.getMimeType());
+      if (/\.zip$/i.test(nombreArchivo)) {
         r = procesarZip_(ctx, msg, adjuntoDeArchivo_(file), {}) || { estado: 'Ya estaba', detalle: 'ZIP repetido' };
-      } else if (/\.(pdf|docx|png|jpe?g|webp)$/i.test(file.getName())) {
+      } else if (/\.(pdf|docx|png|jpe?g|webp)$/i.test(nombreArchivo)) {
         ctx.docsIA++;
         const ia = leerConIA_(ctx, adjuntoDeArchivo_(file), 'Origen: subido a Drive (WhatsApp o descarga).\nNombre del archivo: ' + file.getName());
         const f = cobroDesdeIA(ia, file.getName(), file.getDateCreated());
@@ -840,7 +851,7 @@ function flujoCarpetaFacturas_(ctx, res) {
         else {
           const prov = buscarProveedor(ctx.proveedores, f, '');
           if (prov && !f.nit && prov.nit) f.nit = prov.nit;
-          const blob = file.getBlob();
+          const blob = file.getBlob().setName(nombreArchivo);
           r = registrarDocumento_(ctx, msg, f, prov, { color: f.tipo === 'Cobro' ? CFG.COLOR_IA : CFG.COLOR_XML, archivos: [blob], principal: blob });
         }
       } else {
@@ -916,7 +927,7 @@ function flujoComprobantesPago_(ctx, res) {
     const msg = mensajeDeArchivo_(file);
     let r;
     try {
-      if (!/\.(pdf|png|jpe?g|webp)$/i.test(file.getName())) throw new Error('formato que el robot no lee (use foto o PDF)');
+      if (!/\.(pdf|png|jpe?g|webp)$/i.test(nombreConExtension(file.getName(), file.getMimeType()))) throw new Error('formato que el robot no lee (use foto o PDF)');
       const ia = leerConIA_(ctx, adjuntoDeArchivo_(file), 'Nombre del archivo: ' + file.getName(), HERRAMIENTA_PAGO, PROMPT_PAGO);
       if (!ia.es_comprobante_de_pago) throw new Error('no parece un comprobante de pago');
       const pista = pistaDeNombrePago(file.getName());
@@ -1715,5 +1726,5 @@ function peorEstado_(a, b) {
 if (typeof module !== 'undefined') {
   module.exports = { parsearXmlFactura, calcularRetencion, buscarDuplicado, construirNotas, nombreControl, normNum, tokens, claveDoc,
     docxXmlATexto, clasificarCorreo, esDeMesAnterior, esAnexo, remitenteOriginal, cobroDesdeIA, indexarProveedores, buscarProveedor, repartoFinal,
-    RETENCION_INICIAL, PROVEEDORES_INICIALES, HERRAMIENTA_COBRO, claveMes_, peorEstado_, numIgual, isoBogota, metodoDeTexto, nombreSoporte, agruparHistorial, conceptoDesdeHistorial, cruzarHistorialConProveedores, filaParaERP, pistaDeNombrePago, emparejarPago };
+    RETENCION_INICIAL, PROVEEDORES_INICIALES, HERRAMIENTA_COBRO, claveMes_, peorEstado_, numIgual, isoBogota, metodoDeTexto, nombreSoporte, nombreConExtension, agruparHistorial, conceptoDesdeHistorial, cruzarHistorialConProveedores, filaParaERP, pistaDeNombrePago, emparejarPago };
 }
