@@ -5,6 +5,6 @@ punta a punta con casos reales (EPM a nombre de otro, cuentas de cobro de varias
 comprobantes sin extensión, pagos con tarjeta, anexos de seguridad social).
 
 ```bash
-node integraciones/facturas-compra/pruebas/corrida-completa.js
-SIM=1 node integraciones/facturas-compra/pruebas/corrida-completa.js
+node integraciones/facturas-compra/pruebas/corrida-completa.cjs
+SIM=1 node integraciones/facturas-compra/pruebas/corrida-completa.cjs
 ```

@@ -1,7 +1,7 @@
 // Corrida completa de "4. Procesar ahora" con los casos reales del 12-13 de noviembre.
 'use strict';
 const vm = require('vm'), fs = require('fs'), assert = require('assert');
-const { crearEntorno, Blob, DFile } = require('./gas_mock');
+const { crearEntorno, Blob, DFile } = require('./gas_mock.cjs');
 
 const IA = {
   '116819955552.pdf': { es_documento_de_cobro: false, es_factura_electronica: true, tipo_documento: 'otro', cobra_a: 'LUZ MARINA GOMEZ CC 43123456',
