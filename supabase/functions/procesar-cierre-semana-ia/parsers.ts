@@ -110,8 +110,12 @@ export function fechaISO(v: unknown): string | null {
   return null;
 }
 
-export function detectarFormato(filas: Fila[]): "bancolombia" | "bold" | "recibos" | null {
+export function detectarFormato(filas: Fila[]): "bancolombia" | "bancolombia_csv" | "bold" | "bold_cuenta" | "recibos" | null {
   const primeras = filas.slice(0, 40).map((f) => f.map(normal).join("|"));
+  // CSV de Bancolombia (descarga estándar, sin encabezado): 331-880201-49, 331, , 20261114, , 90000.00, 4027, PAGO QR ...
+  if (filas.slice(0, 5).some((f) => /^\d{3}-\d{6}-\d{2}$/.test(texto(f[0])) && /^\d{8}$/.test(texto(f[3])))) return "bancolombia_csv";
+  // Extracto de cuenta Bold: FECHA · IDENTIFICADOR · DESCRIPCION · VALOR · SALDO
+  if (primeras.some((f) => f.startsWith("FECHA|IDENTIFICADOR|DESCRIPCION|VALOR"))) return "bold_cuenta";
   if (primeras.some((f) => f.includes("NRO CUENTA")) && primeras.some((f) => f.startsWith("MOVIMIENTOS"))) return "bancolombia";
   if (primeras.some((f) => f.includes("ID TRANSACCION") && f.includes("METODO DE PAGO"))) return "bold";
   if (primeras.some((f) => /RECIBO|NUMERO DE DOCUMENTO|DOCUMENTO/.test(f) && /FECHA/.test(f))) return "recibos";
@@ -126,6 +130,9 @@ function categoriaBancolombia(desc: string, valor: number, sede: Sede): { catego
     return { categoria: "egreso", estado: "no_aplica", nota: null };
   }
   if (/CONSIGNACION/.test(d)) return { categoria: "consignacion_efectivo", estado: "pendiente", nota: null };
+  if (/(DESDE|DE) CTA\s+\d{8,}|DENTILANDIA/.test(d)) {
+    return { categoria: "traslado_interno", estado: "no_aplica", nota: "Movimiento entre cuentas propias" };
+  }
   if (/INTERES/.test(d)) return { categoria: "intereses", estado: "no_aplica", nota: null };
   if (/INV VIRT|INVERSION|CDT/.test(d)) {
     return { categoria: "traslado_interno", estado: "no_aplica", nota: "Movimiento de inversión virtual propia" };
@@ -167,8 +174,9 @@ export function leerBancolombia(filas: Fila[]): ResultadoLectura {
   const [anioHasta, mesHasta] = hasta.split("-").map(Number);
 
   const movimientos: MovimientoBanco[] = [];
+  const ordinales = new Map<string, number>();
   let enMovimientos = false;
-  let iFecha = 0, iDesc = 1, iSuc = 2, iDcto = 3, iValor = 4, iSaldo = 5;
+  let iFecha = 0, iDesc = 1, iSuc = 2, iDcto = 3, iValor = 4;
   for (const f of filas) {
     const n = f.map(normal);
     if (n[0] === "FECHA" && n.includes("VALOR")) {
@@ -178,7 +186,6 @@ export function leerBancolombia(filas: Fila[]): ResultadoLectura {
       iSuc = n.indexOf("SUCURSAL");
       iDcto = n.findIndex((c) => c.startsWith("DCTO"));
       iValor = n.indexOf("VALOR");
-      iSaldo = n.indexOf("SALDO");
       continue;
     }
     if (n.some((c) => c.includes("FIN ESTADO DE CUENTA"))) break;
@@ -193,7 +200,6 @@ export function leerBancolombia(filas: Fila[]): ResultadoLectura {
       continue;
     }
     const descripcion = texto(f[iDesc]);
-    const saldo = texto(f[iSaldo]);
     const fecha = ymd(anio, mes, dia);
     const cat = categoriaBancolombia(descripcion, valor, info.sede);
     movimientos.push({
@@ -205,13 +211,108 @@ export function leerBancolombia(filas: Fila[]): ResultadoLectura {
       descripcion: [descripcion, iSuc >= 0 ? texto(f[iSuc]) : ""].filter(Boolean).join(" · "),
       referencia: iDcto >= 0 ? texto(f[iDcto]) || null : null,
       ...cat,
-      // El saldo después del movimiento hace única la línea aunque haya dos
-      // pagos iguales el mismo día, y es el mismo en cualquier descarga.
-      huella: `${info.cuenta}|${fecha}|${valor.toFixed(2)}|${normal(descripcion)}|${saldo}`,
+      huella: huellaBancolombia(info.cuenta, fecha, valor, descripcion, ordinales),
     });
   }
   if (movimientos.length === 0) avisos.push("El extracto no trae movimientos.");
   return { fuente: info.cuenta, desde, hasta, movimientos, recibos: [], avisos };
+}
+
+
+/** Huella de una línea Bancolombia, igual en el Excel mensual y en el CSV
+ *  diario: cuenta + fecha + valor + descripción + n.º de repetición de esa
+ *  misma línea ese día (dos QR iguales del mismo valor el mismo día). */
+function huellaBancolombia(cuenta: Cuenta, fecha: string, valor: number, descripcion: string, ordinales: Map<string, number>) {
+  const base = `${cuenta}|${fecha}|${valor.toFixed(2)}|${normal(descripcion).replace(/[^A-Z0-9 ]/g, "")}`;
+  const n = (ordinales.get(base) ?? 0) + 1;
+  ordinales.set(base, n);
+  return `${base}|${n}`;
+}
+
+/** CSV estándar de Bancolombia (sin encabezado). Columnas: cuenta, oficina,
+ *  —, fecha AAAAMMDD, —, valor, código, descripción, … */
+export function leerBancolombiaCSV(filas: Fila[]): ResultadoLectura {
+  const avisos: string[] = [];
+  const movimientos: MovimientoBanco[] = [];
+  const ordinales = new Map<string, number>();
+  let info: { cuenta: Cuenta; sede: Sede } | undefined;
+  let minF: string | null = null, maxF: string | null = null;
+  // El CSV viene del más reciente al más antiguo: se recorre al revés para
+  // que el n.º de repetición coincida con el del Excel (orden cronológico).
+  for (const f of [...filas].reverse()) {
+    const cuentaTxt = texto(f[0]).replace(/\D/g, "");
+    const m = texto(f[3]).match(/^(\d{4})(\d{2})(\d{2})$/);
+    if (!cuentaTxt || !m) continue;
+    info = info ?? CUENTAS_BANCOLOMBIA[cuentaTxt];
+    if (!info) throw new Error(`CSV de Bancolombia de una cuenta no reconocida (${cuentaTxt}).`);
+    const fecha = ymd(+m[1], +m[2], +m[3]);
+    const valor = numero(f[5]);
+    if (!isFinite(valor)) {
+      avisos.push(`Fila sin valor legible: ${f.map(texto).join(" | ")}`);
+      continue;
+    }
+    const descripcion = texto(f[7]);
+    minF = !minF || fecha < minF ? fecha : minF;
+    maxF = !maxF || fecha > maxF ? fecha : maxF;
+    movimientos.push({
+      cuenta: info.cuenta,
+      sede: info.sede,
+      fecha,
+      valor,
+      valor_bruto: null,
+      descripcion,
+      referencia: texto(f[6]) || null,
+      ...categoriaBancolombia(descripcion, valor, info.sede),
+      huella: huellaBancolombia(info.cuenta, fecha, valor, descripcion, ordinales),
+    });
+  }
+  if (!info || !minF || !maxF) throw new Error("El CSV de Bancolombia no trae movimientos.");
+  // Sin encabezado de período: la cobertura es del primer al último día con
+  // movimientos (conservador — nunca se acusa un faltante fuera de ese rango).
+  return { fuente: info.cuenta, desde: minF, hasta: maxF, movimientos, recibos: [], avisos };
+}
+
+/** Extracto de cuenta Bold (CSV): aquí llegan las transferencias por llaves
+ *  Bre-B y QR a la cuenta, que NO salen en el reporte de transacciones del
+ *  datáfono, y las liquidaciones diarias del datáfono ("TRANSFERENCIA BOLD"). */
+export function leerBoldCuenta(filas: Fila[]): ResultadoLectura {
+  const avisos: string[] = [];
+  const iEnc = filas.findIndex((f) => normal(f[0]) === "FECHA" && normal(f[1]) === "IDENTIFICADOR");
+  const movimientos: MovimientoBanco[] = [];
+  let minF: string | null = null, maxF: string | null = null;
+  for (const f of filas.slice(iEnc + 1)) {
+    const fecha = fechaISO(f[0]);
+    const valor = numero(f[3]);
+    if (!fecha || !isFinite(valor)) continue;
+    const id = texto(f[1]);
+    const descripcion = texto(f[2]);
+    const d = normal(descripcion);
+    minF = !minF || fecha < minF ? fecha : minF;
+    maxF = !maxF || fecha > maxF ? fecha : maxF;
+    let cat: { categoria: Categoria; estado: "pendiente" | "no_aplica"; nota: string | null };
+    if (/DENTILANDIA/.test(d)) cat = { categoria: "traslado_interno", estado: "no_aplica", nota: "Traslado entre cuentas propias" };
+    else if (valor < 0) cat = /GMF|COMISION|RETEFUENTE|IVA/.test(d)
+      ? { categoria: "comision_impuesto", estado: "no_aplica", nota: null }
+      : { categoria: "egreso", estado: "no_aplica", nota: null };
+    else if (/INTERES/.test(d)) cat = { categoria: "intereses", estado: "no_aplica", nota: null };
+    else if (/REEMBOLSO/.test(d)) cat = { categoria: "egreso", estado: "no_aplica", nota: "Reembolso de un envío propio" };
+    else if (/TRANSFERENCIA BOLD/.test(d)) cat = { categoria: "datafono", estado: "no_aplica", nota: "Liquidación neta del datáfono Bold" };
+    else if (/LLAVE|QR|TRANSFERENCIA ACH DE|PSE|NEQUI/.test(d)) cat = { categoria: "transferencia_paciente", estado: "pendiente", nota: null };
+    else cat = { categoria: "otro_ingreso", estado: "pendiente", nota: null };
+    movimientos.push({
+      cuenta: "bold_fabricato",
+      sede: "Fabricato",
+      fecha,
+      valor,
+      valor_bruto: null,
+      descripcion,
+      referencia: id || null,
+      ...cat,
+      huella: `boldcta|${id}|${normal(descripcion)}|${valor.toFixed(2)}`,
+    });
+  }
+  if (!minF || !maxF) throw new Error("El extracto de cuenta Bold no trae movimientos.");
+  return { fuente: "bold_fabricato", desde: minF, hasta: maxF, movimientos, recibos: [], avisos };
 }
 
 // ----------------------------------------------------------------------- Bold
@@ -312,6 +413,9 @@ export function leerRecibos(filas: Fila[]): ResultadoLectura {
     estado: buscar(/ESTADO/, /ANULAD/),
   };
   const faltan = Object.entries({ fecha: c.fecha, valor: c.valor, medio: c.medio }).filter(([, i]) => i < 0).map(([k]) => k);
+  if (faltan.length > 0 && filas.slice(iEnc + 1).every((f) => f.every((c) => texto(c) === ""))) {
+    throw new Error("El reporte de recibos llegó VACÍO (solo encabezados). En el sistema de facturación hay que filtrar el rango de fechas antes de exportar.");
+  }
   if (faltan.length > 0) {
     throw new Error(
       `El reporte de recibos no trae las columnas: ${faltan.join(", ")}. Encabezados encontrados: ${filas[iEnc].map(texto).join(", ")}.`,
@@ -355,9 +459,11 @@ export function leerRecibos(filas: Fila[]): ResultadoLectura {
 export function leerDocumento(filas: Fila[], nombreArchivo: string): ResultadoLectura {
   const formato = detectarFormato(filas);
   if (formato === "bancolombia") return leerBancolombia(filas);
+  if (formato === "bancolombia_csv") return leerBancolombiaCSV(filas);
+  if (formato === "bold_cuenta") return leerBoldCuenta(filas);
   if (formato === "bold") return leerBold(filas, nombreArchivo);
   if (formato === "recibos") return leerRecibos(filas);
   throw new Error(
-    `No se reconoce el formato de "${nombreArchivo}". Sube el extracto de Bancolombia en Excel, el "Reporte mensual de transacciones" de Bold o el reporte de recibos de caja.`,
+    `No se reconoce el formato de "${nombreArchivo}". Sube el extracto de Bancolombia (Excel o CSV), el extracto de cuenta o el reporte de transacciones de Bold, o el reporte de recibos de caja.`,
   );
 }

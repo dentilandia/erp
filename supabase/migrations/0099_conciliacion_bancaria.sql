@@ -363,8 +363,9 @@ begin
     end if;
   end loop;
 
-  -- 1. Transferencia del ERP ↔ abono: mismo valor exacto, misma sede, el abono
-  --    entre 1 día antes y 3 días después del pago; gana el más cercano.
+  -- 1. Transferencia del ERP ↔ abono: mismo valor exacto, el abono entre 2
+  --    días antes y 3 días después del pago (recepción a veces registra el
+  --    pago o genera el recibo al día siguiente); gana el más cercano.
   for v_pago in
     select p.* from v_cierre_pagos_erp p
     where p.medio = 'transferencia_debito' and p.fecha between p_desde - 3 and p_hasta + 3
@@ -378,7 +379,7 @@ begin
     where m.categoria = 'transferencia_paciente'
       and m.estado = 'pendiente'
       and m.valor = v_pago.valor
-      and m.fecha between v_pago.fecha - 1 and v_pago.fecha + 3
+      and m.fecha between v_pago.fecha - 2 and v_pago.fecha + 3
       and not exists (select 1 from conciliacion_enlaces e where e.movimiento_id = m.id)
     -- Los QR de Bancolombia de ambas sedes llegan a la misma cuenta: se
     -- acepta cualquier cuenta, prefiriendo la de la propia sede.
@@ -418,7 +419,7 @@ begin
       select m.id into v_mov_id
       from banco_movimientos m
       where m.estado = 'pendiente' and m.valor = v_grupo.total
-        and m.fecha between v_grupo.fecha - 1 and v_grupo.fecha + 3
+        and m.fecha between v_grupo.fecha - 2 and v_grupo.fecha + 3
         and ((not v_grupo.es_tarjeta and m.categoria = 'transferencia_paciente')
              or (v_grupo.es_tarjeta and m.cuenta = 'bold_fabricato' and m.categoria = 'datafono'))
         and not exists (select 1 from conciliacion_enlaces e where e.movimiento_id = m.id)
@@ -491,10 +492,10 @@ begin
   loop
     select r.id into v_rec_id
     from recibos_sistema r
-    where r.sede = v_pago.sede and r.fecha = v_pago.fecha and r.medio = v_pago.medio
+    where r.sede = v_pago.sede and r.fecha between v_pago.fecha - 1 and v_pago.fecha + 1 and r.medio = v_pago.medio
       and r.valor = v_pago.valor and not r.anulado and r.estado = 'pendiente'
       and not exists (select 1 from conciliacion_enlaces e where e.recibo_id = r.id)
-    order by similarity(fn_normalizar_nombre(r.paciente), fn_normalizar_nombre(v_pago.paciente)) desc, r.numero
+    order by abs(r.fecha - v_pago.fecha), similarity(fn_normalizar_nombre(r.paciente), fn_normalizar_nombre(v_pago.paciente)) desc, r.numero
     limit 1;
     if v_rec_id is not null then
       insert into conciliacion_enlaces (tipo, recibo_id, cargo_pago_id, saldo_id, regla)
@@ -522,7 +523,7 @@ begin
   loop
     select r.id into v_rec_id
     from recibos_sistema r
-    where r.sede = v_grupo.sede and r.fecha = v_grupo.fecha and r.medio = v_grupo.medio
+    where r.sede = v_grupo.sede and r.fecha between v_grupo.fecha - 1 and v_grupo.fecha + 1 and r.medio = v_grupo.medio
       and r.valor = v_grupo.total and not r.anulado and r.estado = 'pendiente'
       and not exists (select 1 from conciliacion_enlaces e where e.recibo_id = r.id)
     order by similarity(fn_normalizar_nombre(r.paciente), fn_normalizar_nombre(v_grupo.paciente)) desc

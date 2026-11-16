@@ -79,7 +79,9 @@ async function cargarDocumento(admin: Admin, semanaId: string, etiqueta: string,
   }
   let lectura: ResultadoLectura;
   try {
-    const wb = XLSX.read(buf, { type: "array", cellDates: true });
+    // En CSV se leen los valores como texto: si no, SheetJS interpreta
+    // "01/11/2026" como 11 de enero (formato de EE. UU.).
+    const wb = XLSX.read(buf, ext === "csv" ? { type: "array", raw: true } : { type: "array", cellDates: true });
     const filas = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null }) as unknown[][];
     lectura = leerDocumento(filas, path.split("/").pop() ?? path);
   } catch (e) {
