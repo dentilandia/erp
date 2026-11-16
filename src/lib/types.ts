@@ -592,6 +592,30 @@ export interface CierreCaja {
   url_tirilla_datafono: string | null;
   url_reporte_datafono: string | null;
   analisis_ia: AnalisisIA | null;
+  // Confirmación humana de "Cuadra" (0098) y resultado determinístico (0099).
+  cuadra_confirmado_por: string | null;
+  cuadra_confirmado_en: string | null;
+  cuadra_nota: string | null;
+  resultado_ok: boolean | null;
+  resultado_detalle: ResultadoCierre | null;
+  reabierto_en: string | null;
+  reabierto_motivo: string | null;
+}
+
+export interface AlertaCierre {
+  tipo: string;
+  detalle?: string;
+  valor: number;
+}
+
+/** Resultado del cruce línea por línea (fn_actualizar_cierres_caja) — sin IA. */
+export interface ResultadoCierre {
+  facturado: { efectivo_neto: number; gastos: number; tarjeta: number; transferencia: number; addi_sistecredito: number; total: number };
+  cobertura: { transferencias: boolean; consignacion: boolean | null; recibos: boolean };
+  tarjeta: { datafono: number | null; diferencia: number | null; sin_cobro_datafono: number; sin_cobro_datafono_valor: number };
+  transferencias: { sin_abono: number; sin_abono_valor: number; abonos_sin_identificar: number; abonos_sin_identificar_valor: number };
+  recibos: { no_generados: number; no_generados_valor: number; sin_pago: number; sin_pago_valor: number; duplicados: number };
+  alertas: AlertaCierre[];
 }
 
 export interface AnalisisIA {

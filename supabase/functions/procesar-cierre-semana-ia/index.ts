@@ -1,44 +1,40 @@
 // Supabase Edge Function: procesar-cierre-semana-ia
 //
-// El cierre de caja real no se hace día por día — cada período (normalmente
-// una semana, pero semana_fin permite cualquier rango) se sube UN lote de 3
-// documentos (que cada uno cubre varios días, y salvo Bancolombia, una sola
-// sede) y hay que compararlo contra lo que ya cerró cada día en
-// cierres_diarios (Cierre diario de Operación, fuente oficial desde que se
-// integró con Cierre de Caja). La tarjeta de las 2 sedes NO depende de que
-// nadie suba nada: Las Américas siempre adjunta su tirilla Redeban en Cierre
-// diario de Operación, y Fabricato recibe por correo (Bold, "cierre de
-// ventas") el valor exacto de cada turno — ambas se leen directo, sin IA de
-// por medio para ese número. Esta función:
-//   1. Lee los 3 documentos del período que sí requieren lectura por IA
-//      (cierres_caja_semanas) + la tirilla de Las Américas y los turnos Bold
-//      de Fabricato de cada día del rango (cierres_diarios).
-//   2. Junta el facturado real de cada día × 2 sedes desde cierres_diarios.
-//   3. Le pide a Claude que lea los documentos y devuelva, día por día y sede
-//      por sede, lo que encuentra (efectivo/transferencia) y si cuadra contra
-//      lo facturado — la tarjeta ya viene resuelta de forma determinística.
-//   4. Crea/actualiza las filas de cierres_caja correspondientes (un día ×
-//      2 sedes cada una) — con el facturado ya resuelto (sin que nadie tenga
-//      que digitarlo) y el análisis de la IA. "Cuadra" NO se marca sola, la
-//      sigue confirmando un admin a mano por día en la pantalla de Días.
+// Procesa un período de cierre de caja (cierres_caja_semanas) — rehecho tras
+// la auditoría de nov-2026. Antes, la IA leía los extractos completos (y los
+// cortaba a 60.000 caracteres), devolvía UN total por día y lo comparaba
+// contra una "foto" de totales que se quedaba vieja. Ahora:
 //
-// Deploy:
-//   supabase functions deploy procesar-cierre-semana-ia
-// Secrets requeridos: los mismos que procesar-cierre-ia (ANTHROPIC_API_KEY,
-// ANTHROPIC_MODEL opcional).
+//   1. Cada documento del período se lee con reglas fijas (parsers.ts): cada
+//      línea del extracto Bancolombia, cada cobro de Bold y cada recibo del
+//      sistema de facturación queda como un registro propio, sin duplicarse
+//      aunque se suba dos veces o dos períodos se crucen. Un archivo vacío o
+//      con formato desconocido se reporta, no se ignora en silencio.
+//   2. La tarjeta de Las Américas: la IA SOLO lee la tirilla Redeban de cada
+//      día (una imagen → un número), y solo si esa tirilla no se ha leído.
+//   3. fn_conciliar_cierre() cruza en la base de datos, sin IA, pago por
+//      pago: transferencias ↔ abonos, tarjeta Fabricato ↔ cobros Bold,
+//      efectivo consignado ↔ consignaciones, pagos ↔ recibos.
+//   4. fn_actualizar_cierres_caja() deja el resultado por día×sede con el
+//      facturado calculado EN VIVO desde los pagos del ERP. "Cuadra" nunca
+//      se marca solo: lo confirma una persona (ver 0098).
+//
+// Secrets: ANTHROPIC_API_KEY (solo para leer tirillas), ANTHROPIC_MODEL
+// opcional, CIERRE_CAJA_CRON_SECRET para el cron diario.
 
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import * as XLSX from "npm:xlsx@0.18.5";
+import { leerDocumento, type ResultadoLectura } from "./parsers.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
+const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const ANTHROPIC_MODEL = Deno.env.get("ANTHROPIC_MODEL") ?? "claude-sonnet-5";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
 };
 
 function json(body: unknown, status = 200) {
@@ -48,9 +44,7 @@ function json(body: unknown, status = 200) {
 function base64Encode(bytes: Uint8Array): string {
   let binary = "";
   const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
+  for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   return btoa(binary);
 }
 
@@ -61,45 +55,141 @@ function sumarDias(fechaYMD: string, dias: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
-/** Descarga un soporte del storage y lo convierte en los bloques de contenido
- *  que entiende la API de Claude (texto para xlsx/csv, documento para pdf,
- *  imagen para jpg/png/webp) — usado tanto para los documentos semanales
- *  como para cada tirilla diaria de datáfono de Las Américas. */
-async function bloqueDocumento(admin: ReturnType<typeof createClient>, label: string, path: string): Promise<Record<string, unknown>[]> {
-  const bloques: Record<string, unknown>[] = [];
-  const { data: file, error: errFile } = await admin.storage.from("comprobantes").download(path);
-  if (errFile || !file) {
-    bloques.push({ type: "text", text: `[No se pudo descargar "${label}": ${errFile?.message ?? "desconocido"}]` });
-    return bloques;
-  }
+const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+
+type Admin = SupabaseClient;
+
+const DOCUMENTOS: { campo: string; etiqueta: string }[] = [
+  { campo: "url_bancolombia", etiqueta: "Bancolombia Las Américas" },
+  { campo: "url_bancolombia_fabricato", etiqueta: "Bancolombia Fabricato" },
+  { campo: "url_bold_fabricato", etiqueta: "Bold Fabricato" },
+  { campo: "url_recibos_caja", etiqueta: "Recibos de caja (facturación)" },
+];
+
+/** Descarga un archivo del período, lo lee y guarda sus líneas. Devuelve avisos para mostrar. */
+async function cargarDocumento(admin: Admin, semanaId: string, etiqueta: string, path: string): Promise<string[]> {
+  const { data: file, error } = await admin.storage.from("comprobantes").download(path);
+  if (error || !file) return [`${etiqueta}: no se pudo descargar (${error?.message ?? "desconocido"}).`];
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if (buf.byteLength === 0) return [`${etiqueta}: el archivo está VACÍO (0 bytes). Descárgalo de nuevo del banco y súbelo otra vez.`];
+
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
-  bloques.push({ type: "text", text: `--- ${label} ---` });
-  if (ext === "xlsx" || ext === "xls" || ext === "csv") {
-    const buf = new Uint8Array(await file.arrayBuffer());
-    const wb = XLSX.read(buf, { type: "array" });
-    let texto = "";
-    for (const nombreHoja of wb.SheetNames) {
-      const hoja = wb.Sheets[nombreHoja];
-      texto += `\n[Hoja: ${nombreHoja}]\n${XLSX.utils.sheet_to_csv(hoja)}`;
-    }
-    bloques.push({ type: "text", text: texto.slice(0, 60000) });
-  } else if (ext === "pdf") {
-    const buf = new Uint8Array(await file.arrayBuffer());
-    bloques.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Encode(buf) } });
-  } else if (["jpg", "jpeg", "png", "webp"].includes(ext)) {
-    const buf = new Uint8Array(await file.arrayBuffer());
-    const media = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-    bloques.push({ type: "image", source: { type: "base64", media_type: media, data: base64Encode(buf) } });
-  } else {
-    bloques.push({ type: "text", text: `[Formato ".${ext}" no soportado para lectura automática — súbelo como xlsx, pdf, jpg o png.]` });
+  if (!["xlsx", "xls", "csv"].includes(ext)) {
+    return [`${etiqueta}: formato .${ext} no soportado — sube el Excel que descarga el banco / Bold / el sistema de facturación.`];
   }
-  return bloques;
+  let lectura: ResultadoLectura;
+  try {
+    const wb = XLSX.read(buf, { type: "array", cellDates: true });
+    const filas = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null }) as unknown[][];
+    lectura = leerDocumento(filas, path.split("/").pop() ?? path);
+  } catch (e) {
+    return [`${etiqueta}: ${e instanceof Error ? e.message : String(e)}`];
+  }
+
+  const archivo = path;
+  if (lectura.movimientos.length > 0) {
+    const filas = lectura.movimientos.map((m) => ({ ...m, archivo, semana_id: semanaId }));
+    for (let i = 0; i < filas.length; i += 500) {
+      const { error: errIns } = await admin
+        .from("banco_movimientos")
+        .upsert(filas.slice(i, i + 500), { onConflict: "huella", ignoreDuplicates: true });
+      if (errIns) throw new Error(`No se pudieron guardar los movimientos de ${etiqueta}: ${errIns.message}`);
+    }
+  }
+  if (lectura.recibos.length > 0) {
+    const filas = lectura.recibos.map((r) => ({ ...r, archivo, semana_id: semanaId }));
+    for (let i = 0; i < filas.length; i += 500) {
+      const { error: errIns } = await admin
+        .from("recibos_sistema")
+        .upsert(filas.slice(i, i + 500), { onConflict: "huella", ignoreDuplicates: true });
+      if (errIns) throw new Error(`No se pudieron guardar los recibos: ${errIns.message}`);
+    }
+  }
+  const { error: errFuente } = await admin.from("cierre_fuentes_cargadas").upsert(
+    {
+      fuente: lectura.fuente,
+      desde: lectura.desde,
+      hasta: lectura.hasta,
+      archivo,
+      filas: lectura.movimientos.length + lectura.recibos.length,
+      semana_id: semanaId,
+    },
+    { onConflict: "fuente,archivo" },
+  );
+  if (errFuente) throw new Error(`No se pudo registrar la cobertura de ${etiqueta}: ${errFuente.message}`);
+  return lectura.avisos.map((a) => `${etiqueta}: ${a}`);
 }
 
-// Mismo criterio que el front (claveSedeDe en CierreCaja.tsx): dos sedes hoy,
-// se identifican por si el nombre contiene "Fabricato" o no.
-function claveSedeDe(nombreSede: string): "Las Americas" | "Fabricato" {
-  return nombreSede.includes("Fabricato") ? "Fabricato" : "Las Americas";
+/** Lee con IA el "Gran Total" de una tirilla Redeban (imagen o PDF). */
+async function leerTirilla(admin: Admin, path: string): Promise<number | null> {
+  if (!ANTHROPIC_API_KEY) return null;
+  const { data: file } = await admin.storage.from("comprobantes").download(path);
+  if (!file) return null;
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  const bloque =
+    ext === "pdf"
+      ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Encode(buf) } }
+      : {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg",
+            data: base64Encode(buf),
+          },
+        };
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    body: JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 300,
+      thinking: { type: "disabled" },
+      system:
+        "Lees tirillas de cierre de datáfono Redeban de una clínica en Colombia. Devuelve la suma de todos los 'GRAN TOTAL' de ventas aprobadas de la tirilla (si hay varias secciones o varios lotes, súmalos). Si no se puede leer con certeza, devuelve null.",
+      messages: [{ role: "user", content: [bloque] }],
+      tools: [
+        {
+          name: "reportar_total",
+          description: "Total de ventas con tarjeta de la tirilla.",
+          input_schema: { type: "object", properties: { gran_total: { type: ["number", "null"] } }, required: ["gran_total"] },
+        },
+      ],
+      tool_choice: { type: "tool", name: "reportar_total" },
+    }),
+  });
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  const uso = (data.content ?? []).find((b: { type: string }) => b.type === "tool_use") as { input?: { gran_total?: number | null } } | undefined;
+  const v = uso?.input?.gran_total;
+  return typeof v === "number" && isFinite(v) ? v : null;
+}
+
+/** Resumen del período por sede, escrito a partir del resultado determinístico (sin IA). */
+async function resumenPorSede(admin: Admin, desde: string, hasta: string, sede: string): Promise<string> {
+  const { data } = await admin
+    .from("cierres_caja")
+    .select("fecha, resultado_ok, resultado_detalle, cuadra")
+    .eq("sede", sede)
+    .gte("fecha", desde)
+    .lte("fecha", hasta)
+    .order("fecha");
+  const dias = (data ?? []) as { fecha: string; resultado_ok: boolean | null; resultado_detalle: { alertas?: { tipo: string; valor: number }[] } | null }[];
+  if (dias.length === 0) return "Sin días con movimiento en el período.";
+  const limpios = dias.filter((d) => d.resultado_ok).length;
+  const porTipo = new Map<string, { n: number; valor: number }>();
+  for (const d of dias) {
+    for (const a of d.resultado_detalle?.alertas ?? []) {
+      const act = porTipo.get(a.tipo) ?? { n: 0, valor: 0 };
+      act.n += 1;
+      act.valor += Math.abs(Number(a.valor ?? 0));
+      porTipo.set(a.tipo, act);
+    }
+  }
+  const lineas = [...porTipo.entries()]
+    .sort((a, b) => b[1].valor - a[1].valor)
+    .map(([tipo, v]) => `${tipo}: ${v.n} día(s), ${fmt(v.valor)}`);
+  return `${limpios} de ${dias.length} días sin novedades.` + (lineas.length ? ` Pendientes — ${lineas.join("; ")}.` : "");
 }
 
 Deno.serve(async (req) => {
@@ -109,361 +199,104 @@ Deno.serve(async (req) => {
   let semanaId: string | undefined;
 
   try {
-    // Dos formas de llamar: un admin autenticado desde la pantalla (botón
-    // "Procesar con IA"), o el cron diario (sin usuario — manda un secreto
-    // compartido en vez de un JWT, guardado en Vault y en los secrets del
-    // edge function, nunca en el código).
     const cronSecret = req.headers.get("x-cron-secret");
     const cronSecretEsperado = Deno.env.get("CIERRE_CAJA_CRON_SECRET");
     const esLlamadaCron = !!cronSecret && !!cronSecretEsperado && cronSecret === cronSecretEsperado;
-
     if (!esLlamadaCron) {
       const authHeader = req.headers.get("Authorization") ?? "";
       const callerClient = createClient(SUPABASE_URL, ANON_KEY, { global: { headers: { Authorization: authHeader } } });
       const { data: userData } = await callerClient.auth.getUser();
       if (!userData?.user) return json({ ok: false, error: "No autenticado." }, 401);
-
       const { data: perfil } = await admin.from("perfiles").select("rol").eq("id", userData.user.id).single();
-      if (perfil?.rol !== "admin") {
-        return json({ ok: false, error: "Solo un administrador puede procesar el cierre con IA." }, 403);
-      }
+      if (perfil?.rol !== "admin") return json({ ok: false, error: "Solo un administrador puede procesar el cierre." }, 403);
     }
 
     const body = await req.json();
     semanaId = body?.semana_id;
     if (!semanaId) return json({ ok: false, error: "Falta semana_id." }, 400);
 
-    const { data: semana, error: errSemana } = await admin
+    const { data: semana, error: errSemana } = await admin.from("cierres_caja_semanas").select("*").eq("id", semanaId).single();
+    if (errSemana || !semana) return json({ ok: false, error: "No se encontró el período." }, 404);
+    const desde: string = semana.semana_inicio;
+    const hasta: string = semana.semana_fin ?? sumarDias(desde, 6);
+
+    await admin
       .from("cierres_caja_semanas")
-      .select("*")
-      .eq("id", semanaId)
-      .single();
-    if (errSemana || !semana) return json({ ok: false, error: "No se encontró la semana." }, 404);
+      .update({ procesando: true, procesando_desde: new Date().toISOString(), error_ia: null })
+      .eq("id", semanaId);
 
-    const documentosSemana: { label: string; path: string | null; sedes: ("Las Americas" | "Fabricato")[] }[] = [
-      {
-        label: "Movimientos Bancolombia — Las Américas (transferencias de pacientes + consignación de efectivo)",
-        path: semana.url_bancolombia,
-        sedes: ["Las Americas"],
-      },
-      {
-        label:
-          "Movimientos Bancolombia — Fabricato (SOLO para confirmar consignación de efectivo — las transferencias y la tarjeta de Fabricato van por Bold, no por esta cuenta)",
-        path: semana.url_bancolombia_fabricato,
-        sedes: ["Fabricato"],
-      },
-      { label: "Movimientos Bold — Fabricato", path: semana.url_bold_fabricato, sedes: ["Fabricato"] },
-      { label: "Excel recibos de caja del sistema — ambas sedes", path: semana.url_recibos_caja, sedes: ["Las Americas", "Fabricato"] },
-    ].filter((d) => d.path);
-
-    // El período normalmente es una semana completa (7 días), pero
-    // semana_fin puede extenderlo o acortarlo a cualquier rango — algunos
-    // lotes de documentos no llegan alineados a semanas de lunes a lunes.
-    const finPeriodo = semana.semana_fin ?? sumarDias(semana.semana_inicio, 6);
-    const fechas: string[] = [];
-    for (let f = semana.semana_inicio; f <= finPeriodo && fechas.length < 60; f = sumarDias(f, 1)) {
-      fechas.push(f);
-    }
-
-    const { data: sedesData } = await admin.from("sedes").select("id, nombre");
-    const sedesPorClave = new Map<"Las Americas" | "Fabricato", string>();
-    for (const s of sedesData ?? []) sedesPorClave.set(claveSedeDe(s.nombre), s.id);
-
-    const { data: cierresDiariosData } = await admin
-      .from("cierres_diarios")
-      .select("sede_id, fecha, totales_por_medio, gasto, tirilla_datafono_url, bold_cierre_turnos, consignado, fecha_consignacion")
-      .in("fecha", fechas);
-    const facturadoPorDiaSede = new Map<
-      string,
-      { efvo_fact: number; tarjeta_fact: number; transf_fact: number; addi: number; total: number; gasto: number }
-    >();
-    // La tirilla Redeban de Las Américas ya no se sube una vez por semana:
-    // siempre está adjunta día por día en Cierre diario de Operación, así
-    // que se toma de ahí directo — una imagen/PDF por fecha, sin ambigüedad
-    // de a qué día pertenece (a diferencia de un solo documento semanal).
-    const tirillaLasAmericasPorFecha = new Map<string, string>();
-    // La tarjeta de Fabricato tampoco depende de un documento: Bold manda un
-    // correo por cada turno cerrado ("cierre de ventas") con el valor exacto
-    // en texto plano — un bot lee Gmail y los va guardando acá, uno o varios
-    // por día. Se suman para tener el total determinístico del día.
-    const boldFabricatoPorFecha = new Map<string, number>();
-    // En Fabricato las transferencias/tarjeta van por Bold, pero el efectivo
-    // se sigue consignando en Bancolombia — esto le dice a la IA qué días
-    // buscar esa consignación en el extracto de esa cuenta.
-    const consignacionPorDiaSede = new Map<string, { consignado: boolean; fecha_consignacion: string | null }>();
-    for (const c of (cierresDiariosData as {
-      sede_id: string;
-      fecha: string;
-      totales_por_medio: Record<string, number>;
-      gasto: number;
-      tirilla_datafono_url: string | null;
-      bold_cierre_turnos: { valor: number }[] | null;
-      consignado: boolean;
-      fecha_consignacion: string | null;
-    }[]) ?? []) {
-      let claveSede: "Las Americas" | "Fabricato" | null = null;
-      for (const [k, v] of sedesPorClave) if (v === c.sede_id) claveSede = k;
-      if (!claveSede) continue;
-      const t = c.totales_por_medio ?? {};
-      const gasto = Number(c.gasto ?? 0);
-      const efvo_fact = (t["efectivo"] ?? 0) - gasto;
-      const tarjeta_fact = (t["tarjeta_debito"] ?? 0) + (t["tarjeta_credito"] ?? 0);
-      const transf_fact = t["transferencia_debito"] ?? 0;
-      const addi = (t["addi"] ?? 0) + (t["sistecredito"] ?? 0);
-      facturadoPorDiaSede.set(`${c.fecha}|${claveSede}`, {
-        efvo_fact,
-        tarjeta_fact,
-        transf_fact,
-        addi,
-        total: efvo_fact + tarjeta_fact + transf_fact + addi,
-        gasto,
-      });
-      if (claveSede === "Las Americas" && c.tirilla_datafono_url) {
-        tirillaLasAmericasPorFecha.set(c.fecha, c.tirilla_datafono_url);
-      }
-      if (claveSede === "Fabricato" && c.bold_cierre_turnos && c.bold_cierre_turnos.length > 0) {
-        const suma = c.bold_cierre_turnos.reduce((a, turno) => a + Number(turno.valor ?? 0), 0);
-        boldFabricatoPorFecha.set(c.fecha, suma);
-      }
-      consignacionPorDiaSede.set(`${c.fecha}|${claveSede}`, { consignado: c.consignado, fecha_consignacion: c.fecha_consignacion });
-    }
-
-    if (documentosSemana.length === 0 && tirillaLasAmericasPorFecha.size === 0 && boldFabricatoPorFecha.size === 0) {
-      return json({ ok: false, error: "Esta semana no tiene ningún documento adjunto todavía." }, 400);
-    }
-
-    await admin.from("cierres_caja_semanas").update({ procesando: true, error_ia: null }).eq("id", semanaId);
-
-    // --- Descargar y preparar cada documento como bloque de contenido para Claude ---
-    const contentBlocks: Record<string, unknown>[] = [];
-    for (const doc of documentosSemana) {
-      contentBlocks.push(...(await bloqueDocumento(admin, `${doc.label} (aplica a: ${doc.sedes.join(", ")})`, doc.path!)));
-    }
-    for (const fecha of fechas) {
-      const path = tirillaLasAmericasPorFecha.get(fecha);
+    // 1. Documentos del período → líneas
+    const avisos: string[] = [];
+    for (const d of DOCUMENTOS) {
+      const path = semana[d.campo] as string | null;
       if (!path) continue;
-      contentBlocks.push(...(await bloqueDocumento(admin, `Tirilla datáfono Redeban — Las Américas — ${fecha} (aplica a: Las Americas)`, path)));
+      avisos.push(...(await cargarDocumento(admin, semanaId, d.etiqueta, path)));
     }
 
-    const facturadoLineas = fechas.flatMap((fecha) =>
-      (["Las Americas", "Fabricato"] as const).map((sede) => {
-        const f = facturadoPorDiaSede.get(`${fecha}|${sede}`);
-        if (!f) return `- ${fecha} · ${sede}: sin cierre diario registrado en el ERP.`;
-        const notaTarjeta =
-          sede === "Fabricato" && boldFabricatoPorFecha.has(fecha)
-            ? ` [tarjeta ya verificada contra Bold: $${boldFabricatoPorFecha.get(fecha)}, no hace falta que la verifiques tú]`
-            : "";
-        const consig = consignacionPorDiaSede.get(`${fecha}|${sede}`);
-        const notaConsig = consig?.consignado
-          ? ` [efectivo marcado como CONSIGNADO en el ERP (fecha de consignación: ${consig.fecha_consignacion ?? "sin especificar"}) — búscalo en el extracto de Bancolombia de esta sede, puede venir repartido en varias consignaciones que sumen el total; dilo en tu nota: encontrado o no]`
-          : "";
-        return `- ${fecha} · ${sede}: efectivo ${f.efvo_fact} (ya con el gasto de ${f.gasto} restado), tarjeta ${f.tarjeta_fact}, transferencia ${f.transf_fact}, addi/sistecrédito ${f.addi}, total ${f.total}.${notaTarjeta}${notaConsig}`;
-      }),
-    );
-    const facturadoTexto = `Período del ${semana.semana_inicio} al ${finPeriodo} (${fechas.length} días) — facturado según el ERP (Cierre diario de Operación) por día y sede:\n${facturadoLineas.join("\n")}`;
-    const totalCombinaciones = fechas.length * 2;
-
-    const systemPrompt = `Eres un asistente contable de una clínica dental en Colombia (Dentilandia), con 2 sedes:
-"Las Americas" y "Fabricato". Te doy el facturado según el ERP de los ${fechas.length} días de un período, para cada
-sede, y los documentos de soporte que cubren ese mismo período (algunos aplican a una sola sede, otros a ambas — se
-indica en cada uno). La tarjeta de las 2 sedes YA viene resuelta de forma determinística (no depende de que tú la
-leas de ningún documento): para Las Américas te llega una imagen/PDF de la tirilla Redeban por cada día que la
-tenga (la etiqueta ya trae su fecha exacta), y para Fabricato el valor ya viene anotado junto al facturado de cada
-día cuando aplica — en ambos casos, para "tarjeta_real" de esos día×sede usa ese mismo valor (o el de la tirilla
-que leas) tal cual, sin necesidad de más verificación.
-- Movimientos Bancolombia — Las Américas: transferencias de pacientes (compáralas contra "transferencia_real") y
-  también la consignación diaria del efectivo (ambas cosas pasan por esta cuenta).
-- Movimientos Bancolombia — Fabricato: en Fabricato las transferencias y la tarjeta van por Bold, NO por esta
-  cuenta — este extracto SOLO sirve para confirmar que el efectivo que un día quedó marcado como "CONSIGNADO" en
-  el ERP (ver la anotación junto a cada día de Fabricato abajo) realmente aparece como una consignación en este
-  banco. No uses este documento para "transferencia_real" de Fabricato — esa sale del documento de Bold.
-- Movimientos Bold: solo Fabricato, transferencia/banco (aparte de Bancolombia).
-- Excel de recibos de caja del sistema: ambas sedes, efectivo (y puede traer una columna de sede).
-
-Lee esos documentos y, para CADA UNA de las ${totalCombinaciones} combinaciones día×sede de ese período, extrae lo
-que encuentres (sobre todo efectivo y transferencia) y compáralo contra el facturado del ERP de ese día y esa
-sede. Si un documento no trae desglose por día, repartelo por día tal como aparece, o usa null si no puedes
-separar un día de otro. Cuando un día traiga la anotación de efectivo consignado, dedica una frase de tu "nota" a
-decir si encontraste o no esa consignación en el extracto de Bancolombia correspondiente a esa sede.
-
-Usa la herramienta "reportar_cierre" para dar tu respuesta, una entrada por cada una de las ${totalCombinaciones}
-combinaciones día×sede de ese período, en el mismo orden que te las di. Da el resumen en dos textos separados, uno
-por cada sede ("resumen_las_americas" y "resumen_fabricato") — no los mezcles en un solo párrafo, cada uno debe
-leerse de corrido sin mencionar a la otra sede.`;
-
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        // ~250 tokens de margen por cada día×sede (json + nota) más colchón fijo,
-        // para que un período largo no trunque la respuesta a mitad del JSON.
-        max_tokens: Math.min(16000, 2000 + totalCombinaciones * 250),
-        // Sin esto, el modelo gasta todo max_tokens "pensando" (bloque "thinking")
-        // y nunca llega a escribir el JSON de salida — esta tarea es extracción y
-        // comparación directa, no necesita razonamiento extendido.
-        thinking: { type: "disabled" },
-        system: systemPrompt,
-        messages: [{ role: "user", content: [{ type: "text", text: facturadoTexto }, ...contentBlocks] }],
-        // Herramienta forzada en vez de pedir "responde solo JSON": este modelo no
-        // admite prefill del mensaje del asistente, y sin forzar, se gastaba todo
-        // max_tokens narrando el análisis en texto antes de llegar al JSON. Con
-        // tool_choice obligado, el modelo llena directamente el "input" con el
-        // esquema exacto, sin poder escribir texto libre de por medio.
-        tools: [
-          {
-            name: "reportar_cierre",
-            description: "Reporta el análisis día×sede del período comparado contra el facturado del ERP.",
-            input_schema: {
-              type: "object",
-              properties: {
-                dias: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      fecha: { type: "string" },
-                      sede: { type: "string", enum: ["Las Americas", "Fabricato"] },
-                      efectivo_real: { type: ["number", "null"] },
-                      tarjeta_real: { type: ["number", "null"] },
-                      transferencia_real: { type: ["number", "null"] },
-                      diferencia_efectivo: { type: ["number", "null"] },
-                      diferencia_tarjeta: { type: ["number", "null"] },
-                      diferencia_transferencia: { type: ["number", "null"] },
-                      cuadra_sugerido: { type: "boolean" },
-                      nota: { type: "string" },
-                    },
-                    required: ["fecha", "sede", "cuadra_sugerido", "nota"],
-                  },
-                },
-                resumen_las_americas: { type: "string" },
-                resumen_fabricato: { type: "string" },
-              },
-              required: ["dias", "resumen_las_americas", "resumen_fabricato"],
-            },
-          },
-        ],
-        tool_choice: { type: "tool", name: "reportar_cierre" },
-      }),
-    });
-
-    if (!resp.ok) {
-      const errText = await resp.text();
-      throw new Error(`Error de la API de Claude (${resp.status}): ${errText.slice(0, 500)}`);
-    }
-    const data = await resp.json();
-    const toolUse = (data.content ?? []).find((b: { type: string }) => b.type === "tool_use") as
-      | { input: { dias: Record<string, unknown>[]; resumen_las_americas: string; resumen_fabricato: string } }
-      | undefined;
-
-    let resultado: { dias: Record<string, unknown>[]; resumen_las_americas: string; resumen_fabricato: string };
-    if (toolUse?.input) {
-      resultado = toolUse.input;
-    } else {
-      const tiposBloques = (data.content ?? []).map((b: { type: string }) => b.type).join(",");
-      const textoRespuesta = (data.content ?? []).map((b: { type: string; text?: string }) => b.text ?? "").join("");
-      throw new Error(
-        `Claude no devolvió el resultado esperado (stop_reason: ${data.stop_reason}, bloques: [${tiposBloques}], ` +
-          `tokens de salida: ${data.usage?.output_tokens}): ${textoRespuesta.slice(0, 500)}`,
+    // 2. Tirillas Redeban de Las Américas que aún no se han leído
+    const { data: sedes } = await admin.from("sedes").select("id, nombre");
+    const sedeAmericas = (sedes ?? []).find((s: { nombre: string }) => !s.nombre.includes("Fabricato")) as { id: string } | undefined;
+    if (sedeAmericas) {
+      const { data: tirillas } = await admin
+        .from("cierres_diarios")
+        .select("fecha, tirilla_datafono_url")
+        .eq("sede_id", sedeAmericas.id)
+        .gte("fecha", desde)
+        .lte("fecha", hasta)
+        .not("tirilla_datafono_url", "is", null);
+      const { data: yaLeidas } = await admin
+        .from("cierres_caja")
+        .select("fecha, url_tirilla_datafono, dataf_spro")
+        .eq("sede", "Las Americas")
+        .gte("fecha", desde)
+        .lte("fecha", hasta);
+      const leidaPorFecha = new Map(
+        ((yaLeidas ?? []) as { fecha: string; url_tirilla_datafono: string | null; dataf_spro: number | null }[]).map((r) => [r.fecha, r]),
       );
-    }
-
-    const generadoEn = new Date().toISOString();
-    const analisisPorDiaSede = new Map<string, Record<string, unknown>>();
-    for (const d of resultado.dias ?? []) {
-      analisisPorDiaSede.set(`${d.fecha}|${d.sede}`, d);
-    }
-
-    // --- Crear/actualizar las filas de cierres_caja de este período ---
-    for (const fecha of fechas) {
-      for (const sede of ["Las Americas", "Fabricato"] as const) {
-        const facturado = facturadoPorDiaSede.get(`${fecha}|${sede}`);
-        // Sin Cierre Diario de Operación registrado ese día (ej. un domingo que
-        // no se trabaja) no hay nada que reconciliar — no se crea una fila
-        // vacía en cierres_caja solo porque el día cae dentro del rango.
-        if (!facturado) continue;
-        const analisis = analisisPorDiaSede.get(`${fecha}|${sede}`);
-        const urlDatafono1 = sede === "Las Americas" ? tirillaLasAmericasPorFecha.get(fecha) ?? null : null;
-        const urlBanco1 = sede === "Las Americas" ? semana.url_bancolombia : semana.url_bancolombia_fabricato;
-        const urlBanco2 = sede === "Fabricato" ? semana.url_bold_fabricato : null;
-
-        // Tarjeta determinística: Las Américas la trae la IA (leyó la tirilla
-        // Redeban); Fabricato ya la tenemos exacta de los correos de Bold, sin
-        // IA de por medio. Si por algún motivo falta la fuente determinística
-        // de ese día, se deja sin resolver en vez de inventar un valor.
-        const boldFabricato = sede === "Fabricato" ? boldFabricatoPorFecha.get(fecha) ?? null : null;
-        const dataf_spro =
-          sede === "Fabricato" ? boldFabricato : typeof analisis?.tarjeta_real === "number" ? analisis.tarjeta_real : null;
-        const dif_dataf_bruta = dataf_spro === null ? null : facturado.tarjeta_fact - dataf_spro;
-        const dataf_explicado = dif_dataf_bruta !== null && Math.abs(dif_dataf_bruta) < 1;
-        const fuente_dataf =
-          sede === "Fabricato" && boldFabricato !== null ? "SPRO Bold" : sede === "Las Americas" && urlDatafono1 ? "Redeban" : undefined;
-        const tieneFuenteTarjeta = sede === "Las Americas" ? !!urlDatafono1 : boldFabricato !== null;
-
-        const { error: errUpsert } = await admin.from("cierres_caja").upsert(
-          {
-            fecha,
-            sede,
-            efvo_fact: facturado.efvo_fact,
-            tarjeta_fact: facturado.tarjeta_fact,
-            transf_fact: facturado.transf_fact,
-            addi: facturado.addi,
-            total: facturado.total,
-            gasto: facturado.gasto,
-            url_recibos_caja: semana.url_recibos_caja,
-            url_movimientos_banco: urlBanco1,
-            url_movimientos_banco_2: urlBanco2,
-            url_tirilla_datafono: urlDatafono1,
-            dataf_sin_docs: !tieneFuenteTarjeta,
-            dataf_spro,
-            dif_dataf_bruta,
-            dataf_explicado,
-            ...(fuente_dataf ? { fuente_dataf } : {}),
-            ...(analisis
-              ? {
-                  analisis_ia: {
-                    efectivo_real: analisis.efectivo_real ?? null,
-                    tarjeta_real: dataf_spro ?? analisis.tarjeta_real ?? null,
-                    transferencia_real: analisis.transferencia_real ?? null,
-                    diferencia_efectivo: analisis.diferencia_efectivo ?? null,
-                    diferencia_tarjeta: dif_dataf_bruta ?? analisis.diferencia_tarjeta ?? null,
-                    diferencia_transferencia: analisis.diferencia_transferencia ?? null,
-                    cuadra_sugerido: analisis.cuadra_sugerido ?? false,
-                    resumen: analisis.nota ?? "",
-                    generado_en: generadoEn,
-                  },
-                }
-              : {}),
-          },
-          { onConflict: "fecha,sede" },
-        );
-        // Sin esto, un error de escritura (ej. una columna que no existe) se
-        // tragaba en silencio: la función terminaba "ok" sin haber guardado
-        // nada — pasó exactamente eso con analisis_ia antes de esta migración.
-        if (errUpsert) throw new Error(`No se pudo guardar ${fecha} · ${sede}: ${errUpsert.message}`);
+      for (const t of (tirillas ?? []) as { fecha: string; tirilla_datafono_url: string }[]) {
+        const previa = leidaPorFecha.get(t.fecha);
+        if (previa && previa.url_tirilla_datafono === t.tirilla_datafono_url && previa.dataf_spro !== null) continue;
+        const total = await leerTirilla(admin, t.tirilla_datafono_url);
+        if (total === null) {
+          avisos.push(`Tirilla Redeban del ${t.fecha}: no se pudo leer el total, revísala a mano.`);
+          continue;
+        }
+        const { error: errT } = await admin
+          .from("cierres_caja")
+          .upsert(
+            { fecha: t.fecha, sede: "Las Americas", dataf_spro: total, url_tirilla_datafono: t.tirilla_datafono_url, fuente_dataf: "Redeban" },
+            { onConflict: "fecha,sede" },
+          );
+        if (errT) avisos.push(`Tirilla del ${t.fecha}: ${errT.message}`);
       }
     }
+
+    // 3 y 4. Conciliación determinística y resultado por día×sede
+    const { data: conc, error: errConc } = await admin.rpc("fn_conciliar_cierre", { p_desde: desde, p_hasta: hasta });
+    if (errConc) throw new Error(`Conciliación: ${errConc.message}`);
+    const { error: errAct } = await admin.rpc("fn_actualizar_cierres_caja", { p_desde: desde, p_hasta: hasta });
+    if (errAct) throw new Error(`Resultado por día: ${errAct.message}`);
+
+    const resumenAmericas = await resumenPorSede(admin, desde, hasta, "Las Americas");
+    const resumenFabricato = await resumenPorSede(admin, desde, hasta, "Fabricato");
 
     await admin
       .from("cierres_caja_semanas")
       .update({
         procesando: false,
-        procesado_en: generadoEn,
-        resumen_ia_las_americas: resultado.resumen_las_americas ?? null,
-        resumen_ia_fabricato: resultado.resumen_fabricato ?? null,
-        error_ia: null,
+        procesando_desde: null,
+        procesado_en: new Date().toISOString(),
+        resumen_ia_las_americas: resumenAmericas,
+        resumen_ia_fabricato: resumenFabricato,
+        error_ia: avisos.length ? avisos.join("\n") : null,
       })
       .eq("id", semanaId);
 
-    return json({ ok: true, resumen_las_americas: resultado.resumen_las_americas, resumen_fabricato: resultado.resumen_fabricato });
+    return json({ ok: true, conciliacion: conc, avisos, resumen_las_americas: resumenAmericas, resumen_fabricato: resumenFabricato });
   } catch (e) {
     const mensaje = e instanceof Error ? e.message : String(e);
     if (semanaId) {
-      await admin.from("cierres_caja_semanas").update({ procesando: false, error_ia: mensaje }).eq("id", semanaId);
+      await admin.from("cierres_caja_semanas").update({ procesando: false, procesando_desde: null, error_ia: mensaje }).eq("id", semanaId);
     }
     return json({ ok: false, error: mensaje }, 500);
   }

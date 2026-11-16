@@ -56,13 +56,18 @@ export function CierreDiario() {
   const [gastoGuardadoOk, setGastoGuardadoOk] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
   const [subiendoTirilla, setSubiendoTirilla] = useState(false);
-  // Evita que el efecto que guarda totales_por_medio (más abajo) escriba un
-  // {} vacío mientras esta consulta todavía está en camino, antes de que
-  // lleguen los datos reales del día.
-  const [cargado, setCargado] = useState(false);
+  // Día×sede al que pertenecen los datos que hay en pantalla. El efecto que
+  // guarda totales_por_medio (más abajo) solo escribe si coincide con el día
+  // seleccionado: antes, al cambiar la fecha (o al teclearla, que pasa por
+  // fechas intermedias), se alcanzaban a guardar los totales del día anterior
+  // bajo la fecha nueva — así quedó el 4 oct de Fabricato con los totales del
+  // 4 nov (auditoría de cierre de caja, nov-2026).
+  const [cargadoPara, setCargadoPara] = useState<string | null>(null);
 
   useEffect(() => {
-    setCargado(false);
+    setCargadoPara(null);
+    const clave = `${sedeActiva.id}|${fecha}`;
+    let vigente = true;
     (async () => {
       const { data } = await supabase
         .from("cargo_pagos")
@@ -71,6 +76,7 @@ export function CierreDiario() {
         )
         .eq("cargos.sede_id", sedeActiva.id)
         .eq("cargos.fecha", fecha);
+      if (!vigente) return;
       const todas = (data as unknown as CargoPagoFila[]) ?? [];
       // Solo "procedimiento" cuenta como venta de la doctora (honorario). RX y
       // conceptos administrativos (GUM, sedación, anticipos...) van a "otros ingresos".
@@ -99,6 +105,7 @@ export function CierreDiario() {
         // Los saldos registrados manualmente desde Parámetros (traslado de un saldo
         // previo, corrección) no son plata recibida ese día — no deben sumar al cierre.
         .neq("medio_origen", "ajuste_manual");
+      if (!vigente) return;
       setOtrosSaldosRaw(
         (
           (saldosData as unknown as {
@@ -122,6 +129,7 @@ export function CierreDiario() {
         .eq("sede_id", sedeActiva.id)
         .eq("fecha", fecha)
         .maybeSingle();
+      if (!vigente) return;
       setCierre((cierreRow as CierreDiarioRow) ?? null);
 
       const { data: gastosData } = await supabase
@@ -130,11 +138,17 @@ export function CierreDiario() {
         .eq("sede_id", sedeActiva.id)
         .eq("fecha", fecha)
         .order("created_at", { ascending: true });
+      if (!vigente) return;
       setGastos((gastosData as GastoDia[])?.map((g) => ({ ...g, valor: Number(g.valor) })) ?? []);
       setGasto("0");
       setGastoConcepto("");
-      setCargado(true);
+      // Si mientras llegaban estos datos ya se eligió otro día, se descartan.
+      if (!vigente) return;
+      setCargadoPara(clave);
     })();
+    return () => {
+      vigente = false;
+    };
   }, [sedeActiva.id, fecha]);
 
   // Quiénes registraron algo este día — para las pastillas de filtro. Se
@@ -264,12 +278,12 @@ export function CierreDiario() {
   // upsert solo toca estas dos columnas (gracias a onConflict), así que no
   // pisa consignado/entregado_admin/etc. si el día ya existía.
   useEffect(() => {
-    if (!cargado) return;
+    if (cargadoPara !== `${sedeActiva.id}|${fecha}`) return;
     supabase
       .from("cierres_diarios")
       .upsert({ sede_id: sedeActiva.id, fecha, totales_por_medio: totalesPorMedio }, { onConflict: "sede_id,fecha" })
       .then();
-  }, [cargado, totalesPorMedio, sedeActiva.id, fecha]);
+  }, [cargadoPara, totalesPorMedio, sedeActiva.id, fecha]);
 
   // Cada acción de abajo (consignado, entregado, tirilla...) hace su propio
   // upsert, y cada uno tiene que reenviar TODAS las columnas — no solo la que

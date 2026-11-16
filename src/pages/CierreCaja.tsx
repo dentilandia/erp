@@ -63,7 +63,16 @@ function lunesDeSemana(fechaYMD: string): string {
  *  (días viejos) ni el documento de recibos de caja (días nuevos, con el
  *  flujo de adjuntar documentos) están presentes. */
 function faltaCierreFisico(c: CierreCajaRow) {
+  // El reporte de recibos del sistema de facturación ya no basta con estar
+  // adjunto: tiene que cubrir de verdad este día (cierre_fuentes_cargadas).
+  if (c.resultado_detalle) return c.arqueo === null && !c.resultado_detalle.cobertura?.recibos;
   return c.arqueo === null && !c.url_recibos_caja;
+}
+
+/** Alertas del cruce línea por línea que no repiten los pendientes de datáfono de siempre. */
+const TIPOS_ALERTA_YA_CUBIERTOS = new Set(["Falta datáfono", "Diferencia datáfono"]);
+function alertasCruce(c: CierreCajaRow) {
+  return (c.resultado_detalle?.alertas ?? []).filter((a) => !TIPOS_ALERTA_YA_CUBIERTOS.has(a.tipo));
 }
 
 /** Falta el respaldo de datáfono: ni hay fuente determinística ahora mismo
@@ -125,7 +134,8 @@ function tienePendientes(c: CierreCajaRow, financiacion: Record<string, Financia
     (!!c.dif_dataf_bruta && !c.dataf_explicado) ||
     pendienteAddi(c, financiacion) !== null ||
     !!c.nota_consignacion_pendiente ||
-    pendienteTransferencia(c) !== null
+    pendienteTransferencia(c) !== null ||
+    alertasCruce(c).length > 0
   );
 }
 
@@ -203,10 +213,20 @@ function pendientesDe(
       descripcion: transferencia.descripcion,
     });
   }
+  // Hallazgos del cruce línea por línea (banco, Bold, recibos, consignación).
+  for (const a of alertasCruce(c)) {
+    items.push({
+      clave: `${base}|${a.tipo}`,
+      fecha: c.fecha,
+      sede: c.sede,
+      tipo: a.tipo,
+      descripcion: `${a.detalle ?? a.tipo} (${fmtCOP(a.valor)}).`,
+    });
+  }
   return items;
 }
 
-type TabCierre = "cuadre" | "pendientes" | "errores";
+type TabCierre = "cuadre" | "pendientes" | "conciliacion" | "errores";
 type SedeFiltro = "todas" | "Fabricato" | "Las Americas";
 type Preset = "todo" | "7" | "mes" | "custom";
 
@@ -365,14 +385,19 @@ export function CierreCaja() {
   }
 
   async function marcarPendiente(clave: string, resuelto: boolean, solucion: string) {
+    // Quién y cuándo lo pone la base de datos (no el navegador), y exige una
+    // solución escrita de al menos 10 caracteres — no se resuelve en bloque.
+    if (resuelto && solucion.trim().length < 10) {
+      window.alert("Escribe cómo se resolvió este pendiente (mínimo 10 caracteres).");
+      return;
+    }
+    const anterior = pendientesEstado[clave];
     setPendientesEstado((prev) => ({ ...prev, [clave]: { resuelto, solucion } }));
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    await supabase.from("cierres_pendientes_estado").upsert(
-      { clave, resuelto, solucion, resuelto_por: user?.id ?? null, resuelto_en: resuelto ? new Date().toISOString() : null },
-      { onConflict: "clave" },
-    );
+    const { error } = await supabase.from("cierres_pendientes_estado").upsert({ clave, resuelto, solucion }, { onConflict: "clave" });
+    if (error) {
+      window.alert(`No se guardó: ${error.message}`);
+      setPendientesEstado((prev) => ({ ...prev, [clave]: anterior ?? { resuelto: false, solucion: "" } }));
+    }
   }
 
   function toggleMes(mes: string) {
@@ -480,10 +505,16 @@ export function CierreCaja() {
             Pendientes {pendientesAbiertos.length > 0 && `(${pendientesAbiertos.length})`}
           </button>
           <button
+            onClick={() => setTab("conciliacion")}
+            className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === "conciliacion" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
+          >
+            Conciliación bancaria
+          </button>
+          <button
             onClick={() => setTab("errores")}
             className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === "errores" ? "bg-[var(--acento)] text-white" : "text-gray-500"}`}
           >
-            Errores {erroresCuadre.length + transferenciasPorVerificar.length > 0 && `(${erroresCuadre.length + transferenciasPorVerificar.length})`}
+            Histórico {erroresCuadre.length + transferenciasPorVerificar.length > 0 && `(${erroresCuadre.length + transferenciasPorVerificar.length})`}
           </button>
         </div>
 
@@ -694,6 +725,8 @@ export function CierreCaja() {
           )}
         </div>
       )}
+
+      {tab === "conciliacion" && <ConciliacionBancaria desde={desde} hasta={hasta} sedeFiltro={sedeFiltro} onCambio={cargar} />}
 
       {tab === "errores" && (
         <div className="space-y-6">
@@ -1287,8 +1320,27 @@ function DetalleModal({
   const verDocumento = verDocumentoCierre;
 
   async function guardarCuadra(v: boolean) {
+    // Confirmar un día que el sistema marcó para revisar exige explicar por
+    // qué sí cuadra; la base de datos lo valida y deja quién y cuándo.
+    const marcadoParaRevisar = cierre.resultado_ok === false || cierre.analisis_ia?.cuadra_sugerido === false;
+    let nota: string | null = cierre.cuadra_nota;
+    if (v && marcadoParaRevisar) {
+      nota = window.prompt(
+        "El sistema encontró novedades en este día. ¿Por qué sí cuadra? (mínimo 10 caracteres, queda registrado a tu nombre)",
+        cierre.cuadra_nota ?? "",
+      );
+      if (nota === null) return;
+      if (nota.trim().length < 10) {
+        window.alert("La explicación debe tener al menos 10 caracteres.");
+        return;
+      }
+    }
+    const { error } = await supabase.from("cierres_caja").update({ cuadra: v, cuadra_nota: v ? nota : cierre.cuadra_nota }).eq("id", cierre.id);
+    if (error) {
+      window.alert(`No se guardó: ${error.message}`);
+      return;
+    }
     setCuadra(v);
-    await supabase.from("cierres_caja").update({ cuadra: v }).eq("id", cierre.id);
     onGuardado();
   }
 
@@ -1327,13 +1379,16 @@ function DetalleModal({
     guardarNotas({ [k]: v });
   }
 
-  async function procesarConIA() {
+  /** Recalcula este día con el motor determinístico (sin IA): vuelve a
+   *  cruzar los pagos del ERP contra los extractos ya cargados. */
+  async function recalcularDia() {
     setProcesandoIA(true);
     setErrorIA(null);
     try {
-      const { data, error } = await supabase.functions.invoke("procesar-cierre-ia", { body: { cierre_id: cierre.id } });
-      if (error) throw error;
-      if (!data?.ok) throw new Error(data?.error ?? "Error desconocido procesando el cierre.");
+      const { error: e1 } = await supabase.rpc("fn_conciliar_cierre", { p_desde: cierre.fecha, p_hasta: cierre.fecha });
+      if (e1) throw e1;
+      const { error: e2 } = await supabase.rpc("fn_actualizar_cierres_caja", { p_desde: cierre.fecha, p_hasta: cierre.fecha });
+      if (e2) throw e2;
       onGuardado();
     } catch (e) {
       setErrorIA(await mensajeDeErrorFuncion(e));
@@ -1389,7 +1444,7 @@ function DetalleModal({
               <tr className="text-left text-gray-500">
                 <th className="py-1">Medio</th>
                 <th className="py-1 text-right">Facturado</th>
-                <th className="py-1 text-right">Real (IA)</th>
+                <th className="py-1 text-right">Real (IA, histórico)</th>
                 <th className="py-1 text-right">Diferencia (IA)</th>
                 <th className="py-1 text-right">Cierre diario (Operación)</th>
               </tr>
@@ -1413,6 +1468,22 @@ function DetalleModal({
           diferencias de digitación. "Real (IA)" es lo que Claude leyó en los documentos adjuntos de la semana.
         </p>
 
+        {cierre.resultado_detalle && (
+          <div className={`rounded-lg p-3 text-sm space-y-1 ${cierre.resultado_ok ? "bg-green-50" : "bg-amber-50"}`}>
+            <p className="font-medium text-tinta">
+              Cruce línea por línea: {cierre.resultado_ok ? "sin novedades" : `${cierre.resultado_detalle.alertas.length} novedad(es)`}
+            </p>
+            {cierre.resultado_detalle.alertas.map((a, i) => (
+              <p key={i} className="text-xs text-gray-700">
+                <span className="font-semibold">{a.tipo}:</span> {a.detalle ?? ""} ({fmtCOP(a.valor)})
+              </p>
+            ))}
+            <p className="text-[11px] text-gray-400">
+              El detalle de cada transferencia, abono o recibo está en la pestaña "Conciliación bancaria".
+            </p>
+          </div>
+        )}
+
         {cierre.analisis_ia && (
           <div className="rounded-lg bg-gray-50 p-3 text-sm space-y-1.5">
             <p className="text-gray-600">{cierre.analisis_ia.resumen}</p>
@@ -1432,14 +1503,25 @@ function DetalleModal({
             <span className={`font-semibold ${cuadra ? "text-[#3E9B6F]" : "text-red-600"}`}>{cuadra ? "✔ Cuadra" : "Revisar"}</span>
           </label>
           <button
-            onClick={procesarConIA}
+            onClick={recalcularDia}
             disabled={procesandoIA}
             className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-[var(--acento)] text-white disabled:opacity-40"
           >
-            {procesandoIA ? "Procesando…" : "✨ Reprocesar este día con IA"}
+            {procesandoIA ? "Recalculando…" : "↻ Recalcular este día"}
           </button>
         </div>
         {errorIA && <p className="text-xs text-red-600">{errorIA}</p>}
+        {cierre.cuadra && cierre.cuadra_confirmado_en && (
+          <p className="text-xs text-gray-500">
+            Confirmado el {new Date(cierre.cuadra_confirmado_en).toLocaleString("es-CO")}
+            {cierre.cuadra_nota ? ` — "${cierre.cuadra_nota}"` : ""}
+          </p>
+        )}
+        {cierre.reabierto_en && (
+          <p className="text-xs text-amber-700">
+            Reabierto automáticamente el {new Date(cierre.reabierto_en).toLocaleString("es-CO")}: {cierre.reabierto_motivo}
+          </p>
+        )}
 
         {!cargandoOperacion && (
           <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm flex items-center justify-between flex-wrap gap-2">
@@ -1629,6 +1711,350 @@ function DetalleModal({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Conciliación bancaria — listas de trabajo del cruce línea por línea
+// (vistas v_conc_* de 0099). Aquí es donde se ven las transacciones
+// pendientes por identificar y los recibos no generados.
+// ============================================================
+
+interface MovPendiente {
+  id: string;
+  fecha: string;
+  sede: string;
+  cuenta: string;
+  categoria: string;
+  valor: number;
+  descripcion: string | null;
+  referencia: string | null;
+  dias_abierto: number;
+}
+interface PagoSinRespaldo {
+  id: string;
+  fecha: string;
+  sede: string;
+  medio?: string;
+  valor: number;
+  paciente: string | null;
+  concepto: string | null;
+}
+interface ConsignacionGrupo {
+  sede: string;
+  fecha_consignacion: string;
+  dias: string[];
+  esperado: number;
+  conciliado: boolean;
+  extracto_cubre: boolean;
+  consignado_banco_3dias: number;
+}
+interface EfectivoDia {
+  fecha: string;
+  sede: string;
+  efectivo_neto: number;
+  dias: number;
+}
+interface ReciboSinPago {
+  id: string;
+  fecha: string;
+  sede: string;
+  numero: string | null;
+  paciente: string | null;
+  medio: string;
+  valor: number;
+  posible_duplicado: boolean;
+}
+
+const NOMBRE_CUENTA: Record<string, string> = {
+  bancolombia_americas: "Bancolombia …0149",
+  bancolombia_fabricato: "Bancolombia …2157",
+  bold_fabricato: "Bold Fabricato",
+};
+
+function ConciliacionBancaria({
+  desde,
+  hasta,
+  sedeFiltro,
+  onCambio,
+}: {
+  desde: string;
+  hasta: string;
+  sedeFiltro: SedeFiltro;
+  onCambio: () => void;
+}) {
+  const [abonos, setAbonos] = useState<MovPendiente[]>([]);
+  const [sinAbono, setSinAbono] = useState<PagoSinRespaldo[]>([]);
+  const [tarjetaSinCobro, setTarjetaSinCobro] = useState<PagoSinRespaldo[]>([]);
+  const [consignaciones, setConsignaciones] = useState<ConsignacionGrupo[]>([]);
+  const [sinConsignar, setSinConsignar] = useState<EfectivoDia[]>([]);
+  const [enAdmin, setEnAdmin] = useState<EfectivoDia[]>([]);
+  const [recibosNoGenerados, setRecibosNoGenerados] = useState<PagoSinRespaldo[]>([]);
+  const [recibosSinPago, setRecibosSinPago] = useState<ReciboSinPago[]>([]);
+  const [cargando, setCargando] = useState(true);
+  const [recalculando, setRecalculando] = useState(false);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function filtrar(q: any, campoFecha = "fecha") {
+    let r = q;
+    if (desde) r = r.gte(campoFecha, desde);
+    if (hasta) r = r.lte(campoFecha, hasta);
+    if (sedeFiltro !== "todas") r = r.eq("sede", sedeFiltro);
+    return r.order(campoFecha);
+  }
+
+  async function cargarListas() {
+    setCargando(true);
+    const [a, b, c, d, e, f, g, h] = await Promise.all([
+      filtrar(supabase.from("v_conc_abonos_sin_identificar").select("*")),
+      filtrar(supabase.from("v_conc_transferencias_sin_abono").select("*")),
+      filtrar(supabase.from("v_conc_tarjeta_sin_datafono").select("*")),
+      filtrar(supabase.from("v_conc_consignaciones").select("*"), "fecha_consignacion"),
+      filtrar(supabase.from("v_conc_efectivo_sin_consignar").select("*")),
+      filtrar(supabase.from("v_conc_efectivo_en_administracion").select("*")),
+      filtrar(supabase.from("v_conc_recibos_no_generados").select("*")),
+      filtrar(supabase.from("v_conc_recibos_sin_pago").select("*")),
+    ]);
+    setAbonos((a.data as MovPendiente[]) ?? []);
+    setSinAbono((b.data as PagoSinRespaldo[]) ?? []);
+    setTarjetaSinCobro((c.data as PagoSinRespaldo[]) ?? []);
+    setConsignaciones(((d.data as ConsignacionGrupo[]) ?? []).filter((x) => !x.conciliado));
+    setSinConsignar((e.data as EfectivoDia[]) ?? []);
+    setEnAdmin((f.data as EfectivoDia[]) ?? []);
+    setRecibosNoGenerados((g.data as PagoSinRespaldo[]) ?? []);
+    setRecibosSinPago((h.data as ReciboSinPago[]) ?? []);
+    setCargando(false);
+  }
+
+  useEffect(() => {
+    cargarListas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desde, hasta, sedeFiltro]);
+
+  async function recalcular() {
+    const ini = desde || sumarDiasCal(today(), -45);
+    const fin = hasta || today();
+    setRecalculando(true);
+    const { error: e1 } = await supabase.rpc("fn_conciliar_cierre", { p_desde: ini, p_hasta: fin });
+    const { error: e2 } = e1 ? { error: null } : await supabase.rpc("fn_actualizar_cierres_caja", { p_desde: ini, p_hasta: fin });
+    setRecalculando(false);
+    if (e1 || e2) window.alert(`No se pudo recalcular: ${(e1 ?? e2)?.message}`);
+    await cargarListas();
+    onCambio();
+  }
+
+  async function identificar(tabla: "banco_movimientos" | "recibos_sistema", id: string) {
+    const nota = window.prompt("¿A qué corresponde? (paciente, recibo, motivo — mínimo 10 caracteres; queda a tu nombre)");
+    if (nota === null) return;
+    const { error } = await supabase.from(tabla).update({ estado: "identificado", nota }).eq("id", id);
+    if (error) window.alert(`No se guardó: ${error.message}`);
+    await cargarListas();
+  }
+
+  const suma = (xs: { valor?: number; esperado?: number; efectivo_neto?: number }[]) =>
+    xs.reduce((a, x) => a + Number(x.valor ?? x.esperado ?? x.efectivo_neto ?? 0), 0);
+
+  const tablaPagos = (filas: PagoSinRespaldo[]) => (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="text-left text-xs text-gray-500 bg-gray-50">
+          <th className="px-3 py-2">Fecha</th>
+          <th className="px-3 py-2">Sede</th>
+          <th className="px-3 py-2">Paciente</th>
+          <th className="px-3 py-2">Concepto</th>
+          {filas.some((f) => f.medio) && <th className="px-3 py-2">Medio</th>}
+          <th className="px-3 py-2 text-right">Valor</th>
+        </tr>
+      </thead>
+      <tbody>
+        {filas.map((f) => (
+          <tr key={f.id} className="border-t border-gray-100">
+            <td className="px-3 py-2">{f.fecha}</td>
+            <td className="px-3 py-2">{f.sede}</td>
+            <td className="px-3 py-2">{f.paciente ?? "—"}</td>
+            <td className="px-3 py-2 text-gray-500">{f.concepto ?? ""}</td>
+            {filas.some((x) => x.medio) && <td className="px-3 py-2">{f.medio}</td>}
+            <td className="px-3 py-2 text-right font-semibold">{fmtCOP(f.valor)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <p className="text-xs text-gray-400 max-w-xl">
+          Cruce pago por pago entre el ERP, los extractos (Bancolombia, Bold) y los recibos del sistema de facturación, con
+          reglas fijas (mismo valor, fechas cercanas, mismo paciente o hermanos). Solo aparece aquí lo que NO cruzó.
+        </p>
+        <button
+          onClick={recalcular}
+          disabled={recalculando}
+          className="text-xs font-medium px-3 py-1.5 rounded-lg bg-[var(--acento)] text-white disabled:opacity-40"
+        >
+          {recalculando ? "Recalculando…" : "↻ Recalcular período"}
+        </button>
+      </div>
+      {cargando && <p className="text-sm text-gray-400">Cargando…</p>}
+
+      <ErroresSeccion
+        titulo={`Abonos en el banco sin identificar — ${fmtCOP(suma(abonos))}`}
+        cantidad={abonos.length}
+        vacio="Todo lo que entró al banco tiene un pago del ERP que lo respalda."
+      >
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-gray-500 bg-gray-50">
+              <th className="px-3 py-2">Fecha</th>
+              <th className="px-3 py-2">Cuenta</th>
+              <th className="px-3 py-2">Tipo</th>
+              <th className="px-3 py-2">Descripción</th>
+              <th className="px-3 py-2 text-right">Valor</th>
+              <th className="px-3 py-2" />
+            </tr>
+          </thead>
+          <tbody>
+            {abonos.map((m) => (
+              <tr key={m.id} className="border-t border-gray-100">
+                <td className="px-3 py-2">{m.fecha}</td>
+                <td className="px-3 py-2">{NOMBRE_CUENTA[m.cuenta] ?? m.cuenta}</td>
+                <td className="px-3 py-2 text-xs">{m.categoria.replace(/_/g, " ")}</td>
+                <td className="px-3 py-2 text-gray-500">{m.descripcion}</td>
+                <td className="px-3 py-2 text-right font-semibold">{fmtCOP(m.valor)}</td>
+                <td className="px-3 py-2 text-right">
+                  <button onClick={() => identificar("banco_movimientos", m.id)} className="text-xs text-[var(--acento)] font-medium">
+                    Identificar
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </ErroresSeccion>
+
+      <ErroresSeccion
+        titulo={`Transferencias del ERP que no llegaron al banco — ${fmtCOP(suma(sinAbono))}`}
+        cantidad={sinAbono.length}
+        vacio="Todas las transferencias registradas aparecen en Bancolombia o Bold (o aún no hay extracto que cubra esas fechas)."
+      >
+        {tablaPagos(sinAbono)}
+      </ErroresSeccion>
+
+      <ErroresSeccion
+        titulo={`Tarjeta en Fabricato sin cobro en Bold — ${fmtCOP(suma(tarjetaSinCobro))}`}
+        cantidad={tarjetaSinCobro.length}
+        vacio="Cada pago con tarjeta de Fabricato tiene su cobro en el reporte de Bold."
+      >
+        {tablaPagos(tarjetaSinCobro)}
+      </ErroresSeccion>
+
+      <ErroresSeccion
+        titulo={`Consignaciones no encontradas — ${fmtCOP(suma(consignaciones))}`}
+        cantidad={consignaciones.length}
+        vacio="Toda consignación marcada en Cierre diario aparece en el banco."
+      >
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-gray-500 bg-gray-50">
+              <th className="px-3 py-2">Consignado el</th>
+              <th className="px-3 py-2">Sede</th>
+              <th className="px-3 py-2">Días</th>
+              <th className="px-3 py-2 text-right">Esperado</th>
+              <th className="px-3 py-2 text-right">Banco (3 días)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {consignaciones.map((g) => (
+              <tr key={`${g.sede}-${g.fecha_consignacion}`} className="border-t border-gray-100">
+                <td className="px-3 py-2">{g.fecha_consignacion}</td>
+                <td className="px-3 py-2">{g.sede}</td>
+                <td className="px-3 py-2 text-xs">{g.dias.join(", ")}</td>
+                <td className="px-3 py-2 text-right font-semibold">{fmtCOP(g.esperado)}</td>
+                <td className="px-3 py-2 text-right">{g.extracto_cubre ? fmtCOP(g.consignado_banco_3dias) : "sin extracto"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </ErroresSeccion>
+
+      <ErroresSeccion
+        titulo={`Efectivo sin consignar ni entregar (> 3 días) — ${fmtCOP(suma(sinConsignar))}`}
+        cantidad={sinConsignar.length}
+        vacio="No hay días con efectivo sin consignar."
+      >
+        <table className="w-full text-sm">
+          <tbody>
+            {sinConsignar.map((d) => (
+              <tr key={`${d.fecha}-${d.sede}`} className="border-t border-gray-100">
+                <td className="px-3 py-2">{d.fecha}</td>
+                <td className="px-3 py-2">{d.sede}</td>
+                <td className="px-3 py-2 text-xs text-gray-500">{d.dias} días</td>
+                <td className="px-3 py-2 text-right font-semibold">{fmtCOP(d.efectivo_neto)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </ErroresSeccion>
+
+      <ErroresSeccion
+        titulo={`Efectivo entregado a administración (no consignado) — ${fmtCOP(suma(enAdmin))}`}
+        cantidad={enAdmin.length}
+        vacio="No hay efectivo en manos de administración."
+      >
+        <table className="w-full text-sm">
+          <tbody>
+            {enAdmin.map((d) => (
+              <tr key={`${d.fecha}-${d.sede}`} className="border-t border-gray-100">
+                <td className="px-3 py-2">{d.fecha}</td>
+                <td className="px-3 py-2">{d.sede}</td>
+                <td className="px-3 py-2 text-xs text-gray-500">{d.dias} días</td>
+                <td className="px-3 py-2 text-right font-semibold">{fmtCOP(d.efectivo_neto)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </ErroresSeccion>
+
+      <ErroresSeccion
+        titulo={`Recibos no generados en el sistema de facturación — ${fmtCOP(suma(recibosNoGenerados))}`}
+        cantidad={recibosNoGenerados.length}
+        vacio="Cada pago del ERP tiene su recibo de caja (o aún no se ha cargado el reporte de recibos de esas fechas)."
+      >
+        {tablaPagos(recibosNoGenerados)}
+      </ErroresSeccion>
+
+      <ErroresSeccion
+        titulo={`Recibos sin pago en el ERP / duplicados — ${fmtCOP(suma(recibosSinPago))}`}
+        cantidad={recibosSinPago.length}
+        vacio="Todos los recibos del sistema de facturación tienen su pago en el ERP."
+      >
+        <table className="w-full text-sm">
+          <tbody>
+            {recibosSinPago.map((r) => (
+              <tr key={r.id} className="border-t border-gray-100">
+                <td className="px-3 py-2">{r.fecha}</td>
+                <td className="px-3 py-2">{r.sede}</td>
+                <td className="px-3 py-2">{r.numero}</td>
+                <td className="px-3 py-2">{r.paciente}</td>
+                <td className="px-3 py-2">{r.medio}</td>
+                <td className="px-3 py-2">
+                  {r.posible_duplicado && (
+                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700">posible duplicado</span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right font-semibold">{fmtCOP(r.valor)}</td>
+                <td className="px-3 py-2 text-right">
+                  <button onClick={() => identificar("recibos_sistema", r.id)} className="text-xs text-[var(--acento)] font-medium">
+                    Identificar
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </ErroresSeccion>
     </div>
   );
 }
