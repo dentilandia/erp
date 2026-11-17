@@ -52,6 +52,7 @@ export interface ReciboSistema {
   fecha: string;
   numero: string | null;
   paciente: string | null;
+  responsable: string | null; // acudiente: suele ser quien aparece en el QR/llave del banco
   medio: string;
   valor: number;
   anulado: boolean;
@@ -120,6 +121,23 @@ export function detectarFormato(filas: Fila[]): "bancolombia" | "bancolombia_csv
   if (primeras.some((f) => f.includes("ID TRANSACCION") && f.includes("METODO DE PAGO"))) return "bold";
   if (primeras.some((f) => /RECIBO|NUMERO DE DOCUMENTO|DOCUMENTO/.test(f) && /FECHA/.test(f))) return "recibos";
   return null;
+}
+
+/** Algunos sistemas (Oral Drive) exportan el Excel declarando que la hoja
+ *  solo tiene A1:C1 aunque traiga cientos de filas; SheetJS respeta esa
+ *  declaración y devolvía SOLO los encabezados. Se recalcula el rango real
+ *  a partir de las celdas presentes. `utils` = XLSX.utils. */
+// deno-lint-ignore no-explicit-any
+export function filasDeHoja(utils: any, hoja: Record<string, unknown>): Fila[] {
+  let maxR = 0, maxC = 0;
+  for (const k of Object.keys(hoja)) {
+    if (k.startsWith("!")) continue;
+    const c = utils.decode_cell(k);
+    if (c.r > maxR) maxR = c.r;
+    if (c.c > maxC) maxC = c.c;
+  }
+  hoja["!ref"] = utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxR, c: maxC } });
+  return utils.sheet_to_json(hoja, { header: 1, raw: true, defval: null }) as Fila[];
 }
 
 // ---------------------------------------------------------------- Bancolombia
@@ -385,13 +403,15 @@ export function leerBold(filas: Fila[], nombreArchivo = ""): ResultadoLectura {
 }
 
 // ---------------------------------------------------- Recibos (facturación)
+// El orden importa: "Sistecredito" contiene CREDITO y "Transferencia Débito"
+// contiene DEBITO, así que van primero los más específicos.
 const MEDIOS: [RegExp, string][] = [
+  [/SISTECREDITO|SISTE/, "sistecredito"],
+  [/ADDI/, "addi"],
+  [/TRANSFER|NEQUI|QR|CONSIGNACION|BANCOLOMBIA|DAVIPLATA|LLAVE|PSE/, "transferencia_debito"],
   [/EFECTIVO|CONTADO/, "efectivo"],
   [/CREDITO|CREDIT/, "tarjeta_credito"],
   [/DEBITO|DATAFONO|TARJETA/, "tarjeta_debito"],
-  [/TRANSFER|NEQUI|QR|CONSIGNACION|BANCOLOMBIA|DAVIPLATA|BOLD/, "transferencia_debito"],
-  [/ADDI/, "addi"],
-  [/SISTECREDITO|SISTE/, "sistecredito"],
 ];
 
 export function leerRecibos(filas: Fila[]): ResultadoLectura {
@@ -405,12 +425,16 @@ export function leerRecibos(filas: Fila[]): ResultadoLectura {
   const buscar = (...pat: RegExp[]) => enc.findIndex((h) => pat.some((p) => p.test(h)));
   const c = {
     numero: buscar(/^NUMERO/, /RECIBO/, /CONSECUTIVO/),
-    fecha: buscar(/^FECHA/),
-    paciente: buscar(/PACIENTE/, /CLIENTE/, /TERCERO/, /NOMBRE/),
+    // Oral Drive trae "Fecha creación" y "Fecha seleccionada": la
+    // seleccionada es la del pago (puede diferir si se crea al día siguiente).
+    fecha: enc.indexOf("FECHA SELECCIONADA") >= 0 ? enc.indexOf("FECHA SELECCIONADA") : buscar(/^FECHA/),
+    paciente: enc.indexOf("TERCERO/PACIENTE") >= 0 ? enc.indexOf("TERCERO/PACIENTE") : buscar(/^PACIENTE/, /CLIENTE/, /^TERCERO/, /NOMBRE/),
     medio: buscar(/MEDIO/, /FORMA DE PAGO/, /METODO/),
     valor: buscar(/^VALOR/, /^TOTAL/, /MONTO/),
-    sede: buscar(/SEDE/, /SUCURSAL/, /BODEGA/, /CENTRO/),
-    estado: buscar(/ESTADO/, /ANULAD/),
+    sede: enc.indexOf("SEDE") >= 0 ? enc.indexOf("SEDE") : buscar(/SEDE/, /SUCURSAL/, /BODEGA/),
+    estado: enc.indexOf("ESTADO"),
+    anulado: enc.indexOf("ANULADO"),
+    responsable: enc.indexOf("RESPONSABLE LEGAL"),
   };
   const faltan = Object.entries({ fecha: c.fecha, valor: c.valor, medio: c.medio }).filter(([, i]) => i < 0).map(([k]) => k);
   if (faltan.length > 0 && filas.slice(iEnc + 1).every((f) => f.every((c) => texto(c) === ""))) {
@@ -436,6 +460,7 @@ export function leerRecibos(filas: Fila[]): ResultadoLectura {
     const sedeTxt = c.sede >= 0 ? normal(f[c.sede]) : "";
     const sede: Sede = /FABRICATO|BELLO/.test(sedeTxt) ? "Fabricato" : "Las Americas";
     if (c.sede < 0) avisos.push("El reporte no trae sede: se asumió Las Américas.");
+    if (!isFinite(valor) || valor === 0) continue;
     const numeroRecibo = c.numero >= 0 ? texto(f[c.numero]) || null : null;
     minF = !minF || fecha < minF ? fecha : minF;
     maxF = !maxF || fecha > maxF ? fecha : maxF;
@@ -444,9 +469,10 @@ export function leerRecibos(filas: Fila[]): ResultadoLectura {
       fecha,
       numero: numeroRecibo,
       paciente: c.paciente >= 0 ? texto(f[c.paciente]) || null : null,
+      responsable: c.responsable >= 0 ? texto(f[c.responsable]) || null : null,
       medio,
       valor,
-      anulado: c.estado >= 0 && /ANULAD/.test(normal(f[c.estado])),
+      anulado: (c.estado >= 0 && /ANULAD/.test(normal(f[c.estado]))) || (c.anulado >= 0 && numero(f[c.anulado]) > 0),
       huella: `recibo|${sede}|${numeroRecibo ?? `${fecha}|${medio}|${valor}|${normal(f[c.paciente])}`}`,
     });
   }

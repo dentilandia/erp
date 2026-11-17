@@ -160,6 +160,7 @@ create table if not exists recibos_sistema (
   fecha date not null,
   numero text,
   paciente text,
+  responsable text,                          -- acudiente (quien suele aparecer en el QR del banco)
   medio text not null,                       -- normalizado a los medios del ERP
   valor numeric(14,2) not null,
   anulado boolean not null default false,

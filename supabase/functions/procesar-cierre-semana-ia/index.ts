@@ -24,7 +24,7 @@
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import * as XLSX from "npm:xlsx@0.18.5";
-import { leerDocumento, type ResultadoLectura } from "./parsers.ts";
+import { filasDeHoja, leerDocumento, type ResultadoLectura } from "./parsers.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -82,7 +82,7 @@ async function cargarDocumento(admin: Admin, semanaId: string, etiqueta: string,
     // En CSV se leen los valores como texto: si no, SheetJS interpreta
     // "01/11/2026" como 11 de enero (formato de EE. UU.).
     const wb = XLSX.read(buf, ext === "csv" ? { type: "array", raw: true } : { type: "array", cellDates: true });
-    const filas = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null }) as unknown[][];
+    const filas = filasDeHoja(XLSX.utils, wb.Sheets[wb.SheetNames[0]]);
     lectura = leerDocumento(filas, path.split("/").pop() ?? path);
   } catch (e) {
     return [`${etiqueta}: ${e instanceof Error ? e.message : String(e)}`];
