@@ -486,6 +486,7 @@ begin
   for v_pago in
     select p.* from v_cierre_pagos_erp p
     where p.fecha between p_desde and p_hasta
+      and not fn_es_sedacion(p.concepto)
       and not exists (
         select 1 from conciliacion_enlaces e
         where e.tipo = 'recibo' and (e.cargo_pago_id = p.id or e.saldo_id = p.id))
@@ -493,17 +494,22 @@ begin
   loop
     select r.id into v_rec_id
     from recibos_sistema r
-    where r.sede = v_pago.sede and r.fecha between v_pago.fecha - 1 and v_pago.fecha + 1 and r.medio = v_pago.medio
+    -- Se acepta un recibo creado en la otra sede (pasa cuando quien lo hace
+    -- tiene abierta la otra sede en Oral Drive), prefiriendo la propia.
+    where r.fecha between v_pago.fecha - 1 and v_pago.fecha + 1 and r.medio = v_pago.medio
       and r.valor = v_pago.valor and not r.anulado and r.estado = 'pendiente'
       and not exists (select 1 from conciliacion_enlaces e where e.recibo_id = r.id)
-    order by abs(r.fecha - v_pago.fecha), similarity(fn_normalizar_nombre(r.paciente), fn_normalizar_nombre(v_pago.paciente)) desc, r.numero
+      and (r.sede = v_pago.sede or similarity(fn_normalizar_nombre(r.paciente), fn_normalizar_nombre(v_pago.paciente)) >= 0.6)
+    order by (r.sede <> v_pago.sede), abs(r.fecha - v_pago.fecha),
+             similarity(fn_normalizar_nombre(r.paciente), fn_normalizar_nombre(v_pago.paciente)) desc, r.numero
     limit 1;
     if v_rec_id is not null then
       insert into conciliacion_enlaces (tipo, recibo_id, cargo_pago_id, saldo_id, regla)
       values ('recibo', v_rec_id,
               case when v_pago.origen = 'cargo' then v_pago.id end,
               case when v_pago.origen = 'saldo' then v_pago.id end,
-              'exacto');
+              case when (select r.sede from recibos_sistema r where r.id = v_rec_id) <> v_pago.sede
+                   then 'recibo_en_otra_sede' else 'exacto' end);
       update recibos_sistema set estado = 'conciliado' where id = v_rec_id;
       n_recibos := n_recibos + 1;
       v_rec_id := null;
@@ -657,12 +663,34 @@ join cierres_diarios d on d.sede_id = s.id and d.fecha = f.fecha
 where f.efectivo_neto > 0 and d.entregado_admin and not d.consignado;
 
 -- Recibos no generados: pago en el ERP sin recibo en el sistema de facturación.
+-- Política: la sedación NO lleva recibo en el sistema de facturación — la
+-- empresa de sedación le factura a Dentilandia. Esos pagos sí deben aparecer
+-- en el banco, pero no se reportan como "recibo no generado".
+create or replace function fn_es_sedacion(p_concepto text)
+returns boolean
+language sql
+immutable
+as $$
+  select coalesce(fn_normalizar_nombre(p_concepto) like '%sedacion%', false)
+$$;
+
 create or replace view v_conc_recibos_no_generados
 with (security_invoker = true) as
 select p.origen, p.id, p.fecha, p.sede, p.medio, p.valor, p.paciente, p.concepto
 from v_cierre_pagos_erp p
 where fn_fuente_cubre('recibos_sistema', p.fecha)
+  and not fn_es_sedacion(p.concepto)
   and not exists (select 1 from conciliacion_enlaces e where e.tipo = 'recibo' and (e.cargo_pago_id = p.id or e.saldo_id = p.id));
+
+-- Recibos creados en una sede distinta a la del pago (no es plata perdida,
+-- pero el reporte de Oral Drive por sede queda descuadrado).
+create or replace view v_conc_recibos_otra_sede
+with (security_invoker = true) as
+select r.id, r.fecha, r.numero, r.paciente, r.medio, r.valor, r.sede as sede_recibo, p.sede as sede
+from conciliacion_enlaces e
+join recibos_sistema r on r.id = e.recibo_id
+join v_cierre_pagos_erp p on p.id = coalesce(e.cargo_pago_id, e.saldo_id)
+where e.tipo = 'recibo' and e.regla = 'recibo_en_otra_sede';
 
 -- Recibos del sistema de facturación sin pago en el ERP; si hay otro recibo
 -- igual (sede, día, paciente, medio, valor) ya cruzado, es un posible duplicado.

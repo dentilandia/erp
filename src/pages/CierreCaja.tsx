@@ -1792,6 +1792,7 @@ function ConciliacionBancaria({
   const [enAdmin, setEnAdmin] = useState<EfectivoDia[]>([]);
   const [recibosNoGenerados, setRecibosNoGenerados] = useState<PagoSinRespaldo[]>([]);
   const [recibosSinPago, setRecibosSinPago] = useState<ReciboSinPago[]>([]);
+  const [recibosOtraSede, setRecibosOtraSede] = useState<(ReciboSinPago & { sede_recibo: string })[]>([]);
   const [cargando, setCargando] = useState(true);
   const [recalculando, setRecalculando] = useState(false);
 
@@ -1806,7 +1807,7 @@ function ConciliacionBancaria({
 
   async function cargarListas() {
     setCargando(true);
-    const [a, b, c, d, e, f, g, h] = await Promise.all([
+    const [a, b, c, d, e, f, g, h, i] = await Promise.all([
       filtrar(supabase.from("v_conc_abonos_sin_identificar").select("*")),
       filtrar(supabase.from("v_conc_transferencias_sin_abono").select("*")),
       filtrar(supabase.from("v_conc_tarjeta_sin_datafono").select("*")),
@@ -1815,6 +1816,7 @@ function ConciliacionBancaria({
       filtrar(supabase.from("v_conc_efectivo_en_administracion").select("*")),
       filtrar(supabase.from("v_conc_recibos_no_generados").select("*")),
       filtrar(supabase.from("v_conc_recibos_sin_pago").select("*")),
+      filtrar(supabase.from("v_conc_recibos_otra_sede").select("*")),
     ]);
     setAbonos((a.data as MovPendiente[]) ?? []);
     setSinAbono((b.data as PagoSinRespaldo[]) ?? []);
@@ -1824,6 +1826,7 @@ function ConciliacionBancaria({
     setEnAdmin((f.data as EfectivoDia[]) ?? []);
     setRecibosNoGenerados((g.data as PagoSinRespaldo[]) ?? []);
     setRecibosSinPago((h.data as ReciboSinPago[]) ?? []);
+    setRecibosOtraSede((i.data as (ReciboSinPago & { sede_recibo: string })[]) ?? []);
     setCargando(false);
   }
 
@@ -2022,7 +2025,27 @@ function ConciliacionBancaria({
         cantidad={recibosNoGenerados.length}
         vacio="Cada pago del ERP tiene su recibo de caja (o aún no se ha cargado el reporte de recibos de esas fechas)."
       >
+        <p className="text-[11px] text-gray-400 px-3 pt-2">La sedación no se incluye: la factura la emite la empresa de sedación a nombre de Dentilandia.</p>
         {tablaPagos(recibosNoGenerados)}
+      </ErroresSeccion>
+
+      <ErroresSeccion
+        titulo={`Recibos hechos en la otra sede — ${fmtCOP(suma(recibosOtraSede))}`}
+        cantidad={recibosOtraSede.length}
+        vacio="Todos los recibos quedaron en la sede donde se cobró."
+      >
+        <table className="w-full text-sm">
+          <tbody>
+            {recibosOtraSede.map((r) => (
+              <tr key={r.id} className="border-t border-gray-100">
+                <td className="px-3 py-2">{r.fecha}</td>
+                <td className="px-3 py-2">{r.paciente}</td>
+                <td className="px-3 py-2 text-xs">Cobrado en {r.sede} · recibo #{r.numero} en {r.sede_recibo}</td>
+                <td className="px-3 py-2 text-right font-semibold">{fmtCOP(r.valor)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </ErroresSeccion>
 
       <ErroresSeccion
