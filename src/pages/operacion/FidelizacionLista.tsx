@@ -9,6 +9,7 @@ import {
   MEDIOS_CONTACTO,
   PLAZO_DIAS,
   RESULTADOS_CONTACTO,
+  RESULTADO_EN_CONSULTA,
   type TipoFidelizacion,
 } from "../../lib/fidelizacion";
 
@@ -20,6 +21,7 @@ interface Caso {
   detalle: string | null;
   estado: string;
   proximo_contacto: string | null;
+  fecha_consulta: string | null;
   cerrado_en: string | null;
   cerrado_por_nombre: string | null;
   pacientes: { nombre: string; telefono: string | null } | null;
@@ -29,7 +31,10 @@ interface Caso {
 interface Contacto {
   id: string;
   fecha_contacto: string;
-  medio: string;
+  medio: string | null;
+  llamo: boolean;
+  b2chat: boolean;
+  fecha_consulta: string | null;
   observacion: string | null;
   resultado: string;
   proximo_contacto: string | null;
@@ -37,14 +42,39 @@ interface Contacto {
   created_at: string;
 }
 
+// Dos pasos, como en Recuperación de pacientes: 1) llamada; 2) si no contestó,
+// B2Chat. Los dos pueden quedar en el mismo registro. En Seguimiento de
+// procedimientos, además, el seguimiento puede quedar para la consulta.
 interface FormContacto {
-  medio: string;
+  llamo: boolean;
+  b2chat: boolean;
   observacion: string;
   resultado: string;
   proximoContacto: string;
+  enConsulta: boolean;
+  fechaConsulta: string;
 }
 
-const FORM_VACIO: FormContacto = { medio: "llamada", observacion: "", resultado: "", proximoContacto: "" };
+const FORM_VACIO: FormContacto = {
+  llamo: false,
+  b2chat: false,
+  observacion: "",
+  resultado: "",
+  proximoContacto: "",
+  enConsulta: false,
+  fechaConsulta: "",
+};
+
+function fechaCorta(d: string): string {
+  return new Date(`${d}T12:00:00`).toLocaleDateString("es-CO", { day: "numeric", month: "short" });
+}
+
+/** "Llamada + B2Chat" para los registros nuevos; el medio único para los anteriores. */
+function pasosDe(k: Contacto): string {
+  const pasos = [k.llamo && "Llamada", k.b2chat && "B2Chat (no contestó la llamada)"].filter(Boolean);
+  if (pasos.length > 0) return pasos.join(" + ");
+  return MEDIOS_CONTACTO.find((m) => m.value === k.medio)?.label ?? k.medio ?? "Sin llamada";
+}
 
 function diasEntre(desde: string, hasta: string): number {
   return Math.round((new Date(`${hasta}T00:00:00`).getTime() - new Date(`${desde}T00:00:00`).getTime()) / 86400000);
@@ -97,7 +127,7 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
     setCargando(true);
     const { data } = await supabase
       .from("fidelizacion_casos")
-      .select("id, tipo, fecha_atencion, fecha_limite, detalle, estado, proximo_contacto, cerrado_en, cerrado_por_nombre, pacientes(nombre, telefono), doctoras(nombre)")
+      .select("id, tipo, fecha_atencion, fecha_limite, detalle, estado, proximo_contacto, fecha_consulta, cerrado_en, cerrado_por_nombre, pacientes(nombre, telefono), doctoras(nombre)")
       .eq("sede_id", sedeId)
       .eq("tipo", tipo)
       .order("fecha_atencion", { ascending: true });
@@ -115,7 +145,7 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
   async function cargarContactos(id: string) {
     const { data } = await supabase
       .from("fidelizacion_seguimientos")
-      .select("id, fecha_contacto, medio, observacion, resultado, proximo_contacto, registrado_por_nombre, created_at")
+      .select("id, fecha_contacto, medio, llamo, b2chat, fecha_consulta, observacion, resultado, proximo_contacto, registrado_por_nombre, created_at")
       .eq("caso_id", id)
       .order("created_at", { ascending: false });
     setContactos((prev) => ({ ...prev, [id]: (data as Contacto[]) ?? [] }));
@@ -133,23 +163,36 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
 
   async function registrar(c: Caso) {
     const f = formDe(c.id);
-    if (!f.resultado) {
-      setError("Elige el resultado del contacto.");
-      return;
-    }
-    if (f.resultado === "volver_a_contactar" && !f.proximoContacto) {
-      setError('Con "Volver a contactar" pon la fecha en que te comprometiste a contactarlo.');
-      return;
+    if (f.enConsulta) {
+      if (!f.fechaConsulta) {
+        setError("Pon la fecha de la consulta en la que se hará el seguimiento.");
+        return;
+      }
+    } else {
+      if (!f.llamo) {
+        setError("Marca el paso 1: la llamada. Si no contestó, marca también B2Chat.");
+        return;
+      }
+      if (!f.resultado) {
+        setError("Elige el resultado del contacto.");
+        return;
+      }
+      if (f.resultado === "volver_a_contactar" && !f.proximoContacto) {
+        setError('Con "Volver a contactar" pon la fecha en que te comprometiste a contactarlo.');
+        return;
+      }
     }
     setError(null);
     setGuardandoId(c.id);
     const { error: err } = await supabase.from("fidelizacion_seguimientos").insert({
       caso_id: c.id,
       sede_id: sedeId,
-      medio: f.medio,
+      llamo: f.llamo,
+      b2chat: f.llamo && f.b2chat,
       observacion: f.observacion.trim() || null,
-      resultado: f.resultado,
-      proximo_contacto: f.proximoContacto || null,
+      resultado: f.enConsulta ? RESULTADO_EN_CONSULTA.value : f.resultado,
+      proximo_contacto: f.enConsulta ? null : f.proximoContacto || null,
+      fecha_consulta: f.enConsulta ? f.fechaConsulta : null,
       registrado_por: perfil?.id ?? null,
       registrado_por_nombre: perfil?.nombre ?? null,
     });
@@ -258,6 +301,7 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                     <p className="text-xs text-gray-500 mt-0.5">
                       Atención {c.fecha_atencion} · {c.doctoras?.nombre ?? "—"}
                       {c.detalle ? ` · ${c.detalle}` : ""}
+                      {c.estado === "seguimiento_en_consulta" && c.fecha_consulta ? ` · consulta el ${fechaCorta(c.fecha_consulta)}` : ""}
                       {est?.cerrado && c.cerrado_por_nombre ? ` · cerrado por ${c.cerrado_por_nombre}` : ""}
                     </p>
                   </div>
@@ -268,44 +312,80 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                     {!est?.cerrado && (
                       <div className="rounded-lg bg-gray-50 p-3 space-y-2">
                         <p className="text-xs font-semibold text-gray-500">Registrar contacto de hoy</p>
-                        <div className="flex flex-wrap gap-2">
-                          <select
-                            value={f.medio}
-                            onChange={(e) => actualizarForm(c.id, { medio: e.target.value })}
-                            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm bg-white"
-                          >
-                            {MEDIOS_CONTACTO.map((m) => (
-                              <option key={m.value} value={m.value}>
-                                {m.label}
-                              </option>
-                            ))}
-                          </select>
-                          <select
-                            value={f.resultado}
-                            onChange={(e) => actualizarForm(c.id, { resultado: e.target.value })}
-                            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm bg-white"
-                          >
-                            <option value="">Resultado…</option>
-                            {RESULTADOS_CONTACTO.map((r) => (
-                              <option key={r.value} value={r.value}>
-                                {r.label}
-                                {r.cierra ? " (cierra el caso)" : ""}
-                              </option>
-                            ))}
-                          </select>
-                          {(f.resultado === "volver_a_contactar" || f.resultado === "no_contesta") && (
-                            <label className="flex items-center gap-1 text-xs text-gray-600">
-                              Volver a contactar el
+                        {tipo === "seguimiento_procedimiento" && (
+                          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 space-y-1">
+                            <label className="flex items-center gap-2 text-sm font-medium text-emerald-900">
                               <input
-                                type="date"
-                                min={hoy}
-                                value={f.proximoContacto}
-                                onChange={(e) => actualizarForm(c.id, { proximoContacto: e.target.value })}
-                                className="rounded-lg border border-gray-300 px-2 py-1 text-sm"
+                                type="checkbox"
+                                checked={f.enConsulta}
+                                onChange={(e) => actualizarForm(c.id, { enConsulta: e.target.checked })}
                               />
+                              El seguimiento será en consulta
                             </label>
-                          )}
+                            {f.enConsulta && (
+                              <label className="flex flex-wrap items-center gap-2 text-xs text-emerald-900 pl-6">
+                                Fecha de la consulta del paciente
+                                <input
+                                  type="date"
+                                  value={f.fechaConsulta}
+                                  onChange={(e) => actualizarForm(c.id, { fechaConsulta: e.target.value })}
+                                  className="rounded-lg border border-gray-300 px-2 py-1 text-sm bg-white"
+                                />
+                                <span className="text-emerald-700">(cierra el caso)</span>
+                              </label>
+                            )}
+                          </div>
+                        )}
+                        <div className="space-y-1.5">
+                          <label className="flex items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={f.llamo}
+                              onChange={(e) => actualizarForm(c.id, { llamo: e.target.checked, ...(e.target.checked ? {} : { b2chat: false }) })}
+                            />
+                            <span className="font-medium">1. Llamada</span>
+                            {f.llamo && <span className="text-xs text-gray-500">— {fechaCorta(hoy)} (fecha automática)</span>}
+                          </label>
+                          <label className={`flex items-center gap-2 text-sm ${f.llamo ? "" : "opacity-50"}`}>
+                            <input
+                              type="checkbox"
+                              disabled={!f.llamo}
+                              checked={f.b2chat}
+                              onChange={(e) => actualizarForm(c.id, { b2chat: e.target.checked })}
+                            />
+                            <span className="font-medium">2. B2Chat</span>
+                            <span className="text-xs text-gray-500">— no contestó la llamada</span>
+                          </label>
                         </div>
+                        {!f.enConsulta && (
+                          <div className="flex flex-wrap gap-2">
+                            <select
+                              value={f.resultado}
+                              onChange={(e) => actualizarForm(c.id, { resultado: e.target.value })}
+                              className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm bg-white"
+                            >
+                              <option value="">Resultado…</option>
+                              {RESULTADOS_CONTACTO.map((r) => (
+                                <option key={r.value} value={r.value}>
+                                  {r.label}
+                                  {r.cierra ? " (cierra el caso)" : ""}
+                                </option>
+                              ))}
+                            </select>
+                            {(f.resultado === "volver_a_contactar" || f.resultado === "no_contesta") && (
+                              <label className="flex items-center gap-1 text-xs text-gray-600">
+                                Volver a contactar el
+                                <input
+                                  type="date"
+                                  min={hoy}
+                                  value={f.proximoContacto}
+                                  onChange={(e) => actualizarForm(c.id, { proximoContacto: e.target.value })}
+                                  className="rounded-lg border border-gray-300 px-2 py-1 text-sm"
+                                />
+                              </label>
+                            )}
+                          </div>
+                        )}
                         <textarea
                           value={f.observacion}
                           onChange={(e) => actualizarForm(c.id, { observacion: e.target.value })}
@@ -335,9 +415,11 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                             <div key={k.id} className="px-3 py-2 text-sm">
                               <p className="text-xs text-gray-500">
                                 {new Date(k.created_at).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })} ·{" "}
-                                {MEDIOS_CONTACTO.find((m) => m.value === k.medio)?.label ?? k.medio} ·{" "}
+                                {pasosDe(k)} ·{" "}
                                 <span className="font-medium text-gray-700">
-                                  {RESULTADOS_CONTACTO.find((r) => r.value === k.resultado)?.label ?? k.resultado}
+                                  {k.resultado === RESULTADO_EN_CONSULTA.value
+                                    ? `${RESULTADO_EN_CONSULTA.label}${k.fecha_consulta ? ` el ${fechaCorta(k.fecha_consulta)}` : ""}`
+                                    : RESULTADOS_CONTACTO.find((r) => r.value === k.resultado)?.label ?? k.resultado}
                                 </span>
                                 {k.proximo_contacto ? ` · volver a contactar el ${k.proximo_contacto}` : ""}
                                 {k.registrado_por_nombre ? ` · ${k.registrado_por_nombre}` : ""}

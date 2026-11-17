@@ -81,8 +81,10 @@ export const ESTADOS_CASO: Record<string, { label: string; color: string; cerrad
   agendo_cita: { label: "Agendó cita", color: "bg-emerald-50 text-emerald-700", cerrado: true },
   no_interesa: { label: "No le interesa", color: "bg-gray-100 text-gray-500", cerrado: true },
   seguimiento_realizado: { label: "Seguimiento realizado", color: "bg-emerald-50 text-emerald-700", cerrado: true },
+  seguimiento_en_consulta: { label: "Seguimiento en consulta", color: "bg-emerald-50 text-emerald-700", cerrado: true },
 };
 
+/** Solo para mostrar registros anteriores al cambio a dos pasos (llamada → B2Chat). */
 export const MEDIOS_CONTACTO = [
   { value: "llamada", label: "Llamada" },
   { value: "b2chat", label: "B2Chat" },
@@ -96,3 +98,6 @@ export const RESULTADOS_CONTACTO = [
   { value: "no_interesa", label: "No le interesa", cierra: true },
   { value: "seguimiento_realizado", label: "Seguimiento realizado", cierra: true },
 ] as const;
+
+/** Resultado que no sale en la lista: lo pone el check "El seguimiento será en consulta". */
+export const RESULTADO_EN_CONSULTA = { value: "seguimiento_en_consulta", label: "Seguimiento en consulta" } as const;
