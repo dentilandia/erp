@@ -1720,9 +1720,9 @@ function renderCompleteProfile(user, existingPerfil){
     const sedeId = document.getElementById('cpSede').value;
     const rolCargo = document.getElementById('cpRol').value;
     if(!nombre || !sedeId || !rolCargo) return;
-    const { error } = existingPerfil
-      ? await sb.from('perfiles').update({ nombre, sede_id:sedeId, cargo:rolCargo }).eq('id', user.id)
-      : await sb.from('perfiles').insert({ id:user.id, nombre, rol:'operacion', sede_id:sedeId, cargo:rolCargo });
+    // perfiles no admite UPDATE/INSERT directo desde el navegador (rol y sede los administra
+    // Tomás): el cargo se guarda con fn_completar_perfil_capacitacion (migración 0098).
+    const { error } = await sb.rpc('fn_completar_perfil_capacitacion', { p_nombre:nombre, p_sede_id:sedeId, p_cargo:rolCargo });
     if(error){ alert('No se pudo guardar: ' + error.message); return; }
     await onAuthenticated(user);
   });
