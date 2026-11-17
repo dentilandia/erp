@@ -364,7 +364,7 @@ begin
     end if;
   end loop;
 
-  -- 1. Transferencia del ERP ↔ abono: mismo valor exacto, el abono entre 2
+  -- 1. (primero en la cuenta de la propia sede) Transferencia del ERP ↔ abono: mismo valor exacto, el abono entre 2
   --    días antes y 3 días después del pago (recepción a veces registra el
   --    pago o genera el recibo al día siguiente); gana el más cercano.
   for v_pago in
@@ -378,6 +378,7 @@ begin
     select m.id into v_mov_id
     from banco_movimientos m
     where m.categoria = 'transferencia_paciente'
+      and m.sede = v_pago.sede
       and m.estado = 'pendiente'
       and m.valor = v_pago.valor
       and m.fecha between v_pago.fecha - 2 and v_pago.fecha + 3
@@ -438,6 +439,44 @@ begin
         v_mov_id := null;
       end if;
     end loop;
+  end loop;
+
+  -- 2b. Lo que quedó, contra la cuenta de la otra sede — DESPUÉS de los
+  --     agrupados, para no robarle a un papá que pagó dos cobros juntos uno
+  --     de ellos (pasó con un pago de $90.000 de Las Américas que se fue a una
+  --     llave Bold de Fabricato cuando era parte de un QR de $115.000).
+  -- Transferencia del ERP ↔ abono: mismo valor exacto, el abono entre 2
+  --    días antes y 3 días después del pago (recepción a veces registra el
+  --    pago o genera el recibo al día siguiente); gana el más cercano.
+  for v_pago in
+    select p.* from v_cierre_pagos_erp p
+    where p.medio = 'transferencia_debito' and p.fecha between p_desde - 3 and p_hasta + 3
+      and not exists (
+        select 1 from conciliacion_enlaces e
+        where e.tipo = 'banco' and (e.cargo_pago_id = p.id or e.saldo_id = p.id))
+    order by p.fecha, p.valor desc
+  loop
+    select m.id into v_mov_id
+    from banco_movimientos m
+    where m.categoria = 'transferencia_paciente'
+      and m.estado = 'pendiente'
+      and m.valor = v_pago.valor
+      and m.fecha between v_pago.fecha - 2 and v_pago.fecha + 3
+      and not exists (select 1 from conciliacion_enlaces e where e.movimiento_id = m.id)
+    -- Los QR de Bancolombia de ambas sedes llegan a la misma cuenta: se
+    -- acepta cualquier cuenta, prefiriendo la de la propia sede.
+    order by (m.sede <> v_pago.sede), abs(m.fecha - v_pago.fecha), m.fecha, m.created_at
+    limit 1;
+    if v_mov_id is not null then
+      insert into conciliacion_enlaces (tipo, movimiento_id, cargo_pago_id, saldo_id, regla)
+      values ('banco', v_mov_id,
+              case when v_pago.origen = 'cargo' then v_pago.id end,
+              case when v_pago.origen = 'saldo' then v_pago.id end,
+              'exacto');
+      update banco_movimientos set estado = 'conciliado' where id = v_mov_id;
+      n_exacto := n_exacto + 1;
+      v_mov_id := null;
+    end if;
   end loop;
 
   -- 3. Efectivo consignado ↔ consignaciones. Los días que Operación marcó
