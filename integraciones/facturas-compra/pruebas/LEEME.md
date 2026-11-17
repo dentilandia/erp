@@ -6,5 +6,7 @@ comprobantes sin extensión, pagos con tarjeta, anexos de seguridad social).
 
 ```bash
 node integraciones/facturas-compra/pruebas/corrida-completa.cjs
+node integraciones/facturas-compra/pruebas/correo.cjs
 SIM=1 node integraciones/facturas-compra/pruebas/corrida-completa.cjs
+node integraciones/facturas-compra/pruebas/correo.cjs
 ```

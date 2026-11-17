@@ -1,7 +1,6 @@
 // Simulador mínimo de Apps Script (Sheets, Drive, Gmail, UrlFetch) para correr FacturasCompra.gs completo en Node.
 'use strict';
 const colNum = s => s.split('').reduce((a, c) => a * 26 + c.charCodeAt(0) - 64, 0);
-const isDate = v => Object.prototype.toString.call(v) === '[object Date]';
 
 class Sheet {
   constructor(ss, name) { this.ss = ss; this.name = name; this.cells = {}; this.validations = {}; this.hidden = false; }
@@ -25,7 +24,7 @@ class Sheet {
   }
   getName() { return this.name; }
   setName(n) { this.name = n; return this; }
-  getLastRow() { let m = 0; Object.keys(this.cells).forEach(k => { const [r, c] = k.split(',').map(Number); if (this.cells[k] !== '' && r > m) m = r; }); return m; }
+  getLastRow() { let m = 0; Object.keys(this.cells).forEach(k => { const r = Number(k.split(',')[0]); if (this.cells[k] !== '' && r > m) m = r; }); return m; }
   getMaxRows() { return Math.max(1000, this.getLastRow()); }
   getRange(a, b, nr, nc) {
     if (typeof a === 'string') {
@@ -75,9 +74,9 @@ class Spreadsheet {
 // ---------- Drive
 let idSeq = 0;
 class Blob {
-  constructor(bytes, name, mime) { this.bytes = bytes; this.name = name; this.mime = mime; }
+  constructor(bytes, name, mime, contenido) { this.bytes = bytes; this.name = name; this.mime = mime; this.contenido = contenido; }
   getName() { return this.name; } setName(n) { this.name = n; return this; }
-  getBytes() { return this.bytes; } copyBlob() { return new Blob(this.bytes, this.name, this.mime); }
+  getBytes() { return this.bytes; } copyBlob() { return new Blob(this.bytes, this.name, this.mime, this.contenido); }
   setContentType(t) { this.mime = t; return this; } getDataAsString() { return String(this.bytes); }
 }
 class DFile {
@@ -101,11 +100,42 @@ class Folder {
 }
 function iter(arr) { let i = 0; return { hasNext: () => i < arr.length, next: () => arr[i++] }; }
 
+// ---------- Gmail
+class Etiqueta { constructor(n) { this.n = n; } getName() { return this.n; } }
+class Mensaje {
+  constructor(hilo, m) { Object.assign(this, m); this.hilo = hilo; this.id = 'M' + (++idSeq); }
+  getId() { return this.id; } getSubject() { return this.subject; } getFrom() { return this.from || 'gerencia <g@x.com>'; }
+  getDate() { return this.date; } getPlainBody() { return this.body || ''; } getThread() { return this.hilo; }
+  getAttachments() { if (this.falla) throw new Error('Gmail: adjunto dañado'); return (this.attachments || []).map(a => Object.assign(Object.create(Object.getPrototypeOf(a)), a, { getSize() { return String(a.bytes).length; } })); }
+}
+class Hilo {
+  constructor(t) { this.id = 'T' + (++idSeq); this.labels = (t.labels || []).map(n => new Etiqueta(n)); this.msgs = t.messages.map(m => new Mensaje(this, m)); }
+  getId() { return this.id; } getLabels() { return this.labels; } getMessages() { return this.msgs; }
+  addLabel(l) { if (!this.labels.some(x => x.n === l.getName())) this.labels.push(new Etiqueta(l.getName())); return this; }
+}
+function buscarGmail(hilos, q, desde, max) {
+  const after = (q.match(/after:(\d{4})\/(\d{2})\/(\d{2})/) || []);
+  const fAfter = after.length ? new Date(after[1] + '-' + after[2] + '-' + after[3] + 'T05:00:00Z') : null;
+  const neg = (q.match(/-label:(\S+)/g) || []).map(x => x.slice(7));
+  const r = hilos.filter(h => {
+    const ms = h.msgs;
+    if (fAfter && !ms.some(m => m.date >= fAfter)) return false;
+    const adj = [].concat(...ms.map(m => m.attachments || []));
+    if (/(^|\s)filename:zip/.test(q) && !adj.some(a => /\.zip$/i.test(a.name))) return false;
+    if (/-filename:zip/.test(q) && adj.some(a => /\.zip$/i.test(a.name))) return false;
+    if (/has:attachment/.test(q) && !adj.length) return false;
+    if (neg.some(n => h.labels.some(l => l.n.toLowerCase().replace(/[\s/]/g, '-') === n))) return false;
+    return true;
+  }).sort((a, b) => b.msgs[b.msgs.length - 1].date - a.msgs[a.msgs.length - 1].date);
+  return r.slice(desde, desde + max);
+}
+
 function crearEntorno(opts) {
   const ss = new Spreadsheet();
   const raiz = new Folder('Mi unidad', null);
   const carpetaHoja = raiz.createFolder('Contabilidad');
   const archivoHoja = new DFile(carpetaHoja, new Blob('', 'Control', 'sheet'));
+  const hilosGmail = (opts.correos || []).map(t => new Hilo(t));
   const props = {}; const enviados = { erp: [], mails: [], alerts: [] };
   const g = {
     console,
@@ -121,7 +151,7 @@ function crearEntorno(opts) {
       getFolderById: () => { throw new Error('no'); },
       getRootFolder: () => raiz,
     },
-    GmailApp: { search: () => [], getUserLabelByName: () => null, createLabel: n => ({ n }) },
+    GmailApp: { search: (q, d, m) => buscarGmail(hilosGmail, q, d || 0, m || 500), getUserLabelByName: () => null, createLabel: n => new Etiqueta(n) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; } }) },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) },
     Session: { getEffectiveUser: () => ({ getEmail: () => 'facturacion@ejemplo.com' }) },
@@ -132,7 +162,7 @@ function crearEntorno(opts) {
         const b = new Date(d.getTime() - 5 * 3600e3); const p = n => String(n).padStart(2, '0');
         return f.replace('yyyy', b.getUTCFullYear()).replace('MM', p(b.getUTCMonth() + 1)).replace('dd', p(b.getUTCDate())).replace('HH', p(b.getUTCHours())).replace('mm', p(b.getUTCMinutes()));
       },
-      base64Encode: () => 'BASE64', sleep: () => {}, unzip: b => (b.contenido || []),
+      base64Encode: () => 'BASE64', sleep: () => {}, unzip: b => (b.contenido || []).map(x => new Blob(x.bytes, x.name, x.mime)),
     },
     UrlFetchApp: {
       fetch: (url, o) => {
@@ -152,7 +182,7 @@ function crearEntorno(opts) {
       },
     },
   };
-  return { g, ss, raiz, carpetaHoja, props, enviados, Blob, DFile };
+  return { g, ss, raiz, carpetaHoja, props, enviados, Blob, DFile, hilosGmail };
 }
 
 module.exports = { crearEntorno, Blob, DFile };

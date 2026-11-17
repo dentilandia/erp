@@ -27,8 +27,7 @@ const CFG = {
   NITS_SIEMPRE_NUESTROS: ['890904996'], // EPM
   DESDE: '2026/11/01',           // no revisa correos anteriores a esta fecha (AAAA/MM/DD)
   DIAS_BUSQUEDA: 45,             // y como máximo los últimos 45 días
-  MAX_POR_CORRIDA: 30,           // hilos de correo con posibles cuentas de cobro por corrida (usan IA)
-  MAX_ZIP_POR_CORRIDA: 100,      // hilos con factura electrónica (ZIP) por corrida
+  MAX_HILOS_REVISAR: 500,        // correos con adjuntos que se revisan por corrida (los ya etiquetados se saltan)
   MES_SEGUN: 'RECEPCION',        // 'RECEPCION' (mes en que llega el correo) o 'EMISION' (fecha del documento)
   ESCRIBIR_REPARTICION: true,
   COLOR_XML: null,               // factura electrónica DIAN: sin color (datos exactos del XML)
@@ -168,6 +167,7 @@ function onOpen() {
     .addItem('5. Completar proveedores desde el historial', 'completarProveedoresDesdeHistorial')
     .addItem('6. Enviar al ERP ahora', 'enviarAlERP')
     .addItem('Crear carpetas de facturas y comprobantes', 'crearCarpetasDrive')
+    .addItem('🔎 Ver correos sin procesar', 'verCorreosSinProcesar')
     .addItem('Guardar clave del ERP', 'guardarClaveERP')
     .addSeparator()
     .addItem('Mostrar pestañas de configuración', 'mostrarConfiguracion')
@@ -303,6 +303,7 @@ function enviarReporte_(r) {
     '<li>Pagos aplicados desde comprobantes: <b>' + r.pagos + '</b></li>' +
     '<li>Para revisar: <b>' + r.err + '</b></li></ul>' +
     (r.erp ? '<p>ERP (Administración → Facturación): ' + r.erp.mensaje + '</p>' : '') +
+    '<p>Correos sin procesar al empezar: ' + (r.correosPendientesInicio || 0) + '</p>' +
     (r.pendientes ? '<p>⚠ Quedaron correos pendientes: se procesan en la próxima corrida (o use 🧾 → 4. Procesar ahora).</p>' : '') +
     tabla('Cuentas de cobro: generar documento soporte (DS)', cobros) +
     tabla('Para revisar', d.filter(x => x.estado === 'Revisar')) +
@@ -321,7 +322,8 @@ function avisar_(r, sim) {
     '\n💸 Pagos aplicados (comprobantes): ' + r.pagos +
     '\n⚠ Para revisar: ' + r.err +
     (r.sinClave ? '\n\n⚠ Cuentas de cobro NO procesadas: falta la clave de la API (menú 🧾 → 2).' : '') +
-    (r.pendientes ? '\n\nQuedan correos por procesar: vuelva a ejecutar.' : '') +
+    '\n\nCorreos sin procesar al empezar: ' + (r.correosPendientesInicio || 0) +
+    (r.pendientes ? '\nQuedan correos por procesar: vuelva a ejecutar.' : '') +
     (r.erp ? '\n\nERP: ' + r.erp.mensaje : '') +
     '\n\nDetalle en la pestaña ' + (sim ? CFG.HOJAS.SIM : CFG.HOJAS.LOG) + '.';
   SpreadsheetApp.getUi().alert(msg);
@@ -347,9 +349,11 @@ function ejecutar_(opts) {
       sim: opts.simular ? hojaSimulacion_(ss) : null,
       clave: PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY'),
     };
-    flujoFacturasZip_(ctx, res);
+    const hilos = hilosPorProcesar_();
+    res.correosPendientesInicio = hilos.zip.length + hilos.otros.length;
+    flujoFacturasZip_(ctx, res, hilos.zip);
     if (ctx.clave) {
-      flujoCobros_(ctx, res);
+      flujoCobros_(ctx, res, hilos.otros);
       flujoCarpetaFacturas_(ctx, res);
       flujoComprobantesPago_(ctx, res);
     } else res.sinClave = true;
@@ -361,10 +365,37 @@ function ejecutar_(opts) {
 
 function sinTiempo_(ctx) { return Date.now() - ctx.t0 > 4.5 * 60 * 1000; }
 
-function consultaBase_() {
-  const L = CFG.LABELS;
-  return Object.keys(L).map(k => '-label:' + L[k].toLowerCase().replace(/[\s/]/g, '-')).join(' ') +
-    ' newer_than:' + CFG.DIAS_BUSQUEDA + 'd' + (CFG.DESDE ? ' after:' + CFG.DESDE : '');
+/**
+ * Correos con adjuntos desde CFG.DESDE que todavía no tienen ninguna etiqueta "Facturas/…",
+ * del más antiguo al más nuevo. La etiqueta se revisa aquí y no con "-label:" en la búsqueda,
+ * para que ningún correo se quede por fuera por cómo Gmail interpreta la consulta.
+ */
+function hilosPorProcesar_() {
+  const base = ' after:' + CFG.DESDE + ' newer_than:' + CFG.DIAS_BUSQUEDA + 'd';
+  const buscar = q => {
+    const out = [];
+    for (let desde = 0; desde < CFG.MAX_HILOS_REVISAR; desde += 100) {
+      const hs = GmailApp.search(q, desde, 100);
+      hs.forEach(h => out.push(h));
+      if (hs.length < 100) break;
+    }
+    return out;
+  };
+  const sinEtiqueta = h => !h.getLabels().some(l => /^Facturas\//i.test(l.getName()));
+  const zip = buscar('filename:zip' + base).filter(sinEtiqueta);
+  const idsZip = {};
+  zip.forEach(h => { idsZip[h.getId()] = true; });
+  const otros = buscar('has:attachment' + base).filter(h => !idsZip[h.getId()] && sinEtiqueta(h));
+  return { zip: zip.reverse(), otros: otros.reverse() };
+}
+
+/** Un correo que falla no detiene la corrida: queda en "Revisar" con el error. */
+function errorEnHilo_(ctx, res, hilo, e) {
+  const msg = hilo.getMessages()[0];
+  const r = { estado: 'Revisar', detalle: 'Error al procesar el correo "' + msg.getSubject() + '": ' + String(e && e.message || e) };
+  try { registrarLog_(ctx, r, msg); } catch (e2) { /* sin registro */ }
+  contar_(res, r);
+  try { etiquetarHilo_(ctx, hilo, 'Revisar'); } catch (e3) { /* sin etiqueta */ }
 }
 
 function contar_(res, r) {
@@ -390,26 +421,29 @@ function etiquetarHilo_(ctx, hilo, estado) {
 
 // ---------- Flujo A: facturas electrónicas (ZIP) ----------
 
-function flujoFacturasZip_(ctx, res) {
-  const hilos = GmailApp.search('filename:zip ' + consultaBase_(), 0, CFG.MAX_ZIP_POR_CORRIDA);
-  if (hilos.length === CFG.MAX_ZIP_POR_CORRIDA) res.pendientes = true;
-  const vistos = {};
+function flujoFacturasZip_(ctx, res, hilos) {
+  ctx.vistosZip = ctx.vistosZip || {};
   for (const hilo of hilos) {
     if (sinTiempo_(ctx)) { res.pendientes = true; break; }
-    let estadoHilo = null, huboZip = false;
-    for (const msg of hilo.getMessages()) {
-      for (const zip of msg.getAttachments().filter(a => /\.zip$/i.test(a.getName()))) {
-        let r;
-        huboZip = true;
-        try { r = procesarZip_(ctx, msg, zip, vistos); } catch (e) { r = { estado: 'Revisar', detalle: String(e && e.message || e) }; }
-        if (!r) continue;
-        registrarLog_(ctx, r, msg);
-        estadoHilo = peorEstado_(estadoHilo, r.estado);
-        contar_(res, r);
-      }
-    }
-    etiquetarHilo_(ctx, hilo, estadoHilo || (huboZip ? 'Ya estaba' : 'No es cobro'));
+    try { procesarHiloZip_(ctx, res, hilo); } catch (e) { errorEnHilo_(ctx, res, hilo, e); }
   }
+}
+
+function procesarHiloZip_(ctx, res, hilo) {
+  ctx.vistosZip = ctx.vistosZip || {};
+  let estadoHilo = null, huboZip = false;
+  for (const msg of hilo.getMessages()) {
+    for (const zip of msg.getAttachments().filter(a => /\.zip$/i.test(a.getName()))) {
+      let r;
+      huboZip = true;
+      try { r = procesarZip_(ctx, msg, zip, ctx.vistosZip); } catch (e) { r = { estado: 'Revisar', detalle: zip.getName() + ': ' + String(e && e.message || e) }; }
+      if (!r) continue;
+      registrarLog_(ctx, r, msg);
+      estadoHilo = peorEstado_(estadoHilo, r.estado);
+      contar_(res, r);
+    }
+  }
+  etiquetarHilo_(ctx, hilo, estadoHilo || (huboZip ? 'Ya estaba' : 'No es cobro'));
 }
 
 function procesarZip_(ctx, msg, zipAtt, vistos) {
@@ -440,14 +474,23 @@ function procesarZip_(ctx, msg, zipAtt, vistos) {
 
 // ---------- Flujo B: cuentas / notas / recibos de cobro (IA) ----------
 
-function flujoCobros_(ctx, res) {
-  const hilos = GmailApp.search('has:attachment -filename:zip ' + consultaBase_(), 0, CFG.MAX_POR_CORRIDA);
-  if (hilos.length === CFG.MAX_POR_CORRIDA) res.pendientes = true;
-  const vistosAdj = {}, vistosDoc = {};
+function flujoCobros_(ctx, res, hilos) {
+  ctx.vistosAdj = ctx.vistosAdj || {};
+  ctx.vistosDoc = ctx.vistosDoc || {};
   for (const hilo of hilos) {
     if (sinTiempo_(ctx) || ctx.docsIA >= CFG.IA.MAX_DOCS_POR_CORRIDA) { res.pendientes = true; break; }
+    try {
+      // Un ZIP que la búsqueda "filename:zip" no encontró (p. ej. nombre raro): va por el flujo de facturas DIAN.
+      if (hilo.getMessages().some(m => m.getAttachments().some(a => /\.zip$/i.test(a.getName())))) { procesarHiloZip_(ctx, res, hilo); continue; }
+      procesarHiloCobro_(ctx, res, hilo);
+    } catch (e) { errorEnHilo_(ctx, res, hilo, e); }
+  }
+}
+
+function procesarHiloCobro_(ctx, res, hilo) {
+  const vistosAdj = ctx.vistosAdj, vistosDoc = ctx.vistosDoc;
+  {
     let estadoHilo = null, incompleto = false;
-    if (hilo.getMessages().some(m => m.getAttachments().some(a => /\.zip$/i.test(a.getName())))) continue; // factura DIAN: va por el flujo A
     for (const msg of hilo.getMessages()) {
       if (incompleto) break;
       const adj = msg.getAttachments({ includeInlineImages: false })
@@ -455,9 +498,11 @@ function flujoCobros_(ctx, res) {
       if (!adj.length) continue;
       const cuerpo = msg.getPlainBody() || '';
       const c = clasificarCorreo(msg.getSubject(), cuerpo, adj.map(a => a.getName()));
-      const noLegibles = adj.filter(a => /\.(doc|xlsx?|odt|rtf|heic)$/i.test(a.getName()) && !esAnexo(a.getName()));
+      const noLegibles = adj.filter(a => /\.(doc|xlsx?|odt|rtf|heic|eml)$/i.test(a.getName()) && !esAnexo(a.getName()));
       if (!c.esCandidato && c.motivo === 'solo anexos' && noLegibles.length) {
-        const r = { estado: 'Revisar', detalle: 'Formato que el robot no lee (' + noLegibles.map(a => a.getName()).join(', ') + '): pedir PDF/Word .docx o digitar a mano' };
+        const eml = noLegibles.some(a => /\.eml$/i.test(a.getName()));
+        const r = { estado: 'Revisar', detalle: (eml ? 'Correo reenviado "como adjunto" (' + noLegibles.map(a => a.getName()).join(', ') + '): reenvíelo con "Reenviar" normal para que el robot vea la factura'
+          : 'Formato que el robot no lee (' + noLegibles.map(a => a.getName()).join(', ') + '): pedir PDF/Word .docx o digitar a mano') };
         registrarLog_(ctx, r, msg); estadoHilo = peorEstado_(estadoHilo, r.estado); contar_(res, r);
         continue;
       }
@@ -830,6 +875,16 @@ function archivosSueltos_(carpeta) {
   const out = [], it = carpeta.getFiles();
   while (it.hasNext()) out.push(it.next());
   return out.sort((a, b) => a.getDateCreated() - b.getDateCreated());
+}
+
+/** Lista los correos con adjuntos desde CFG.DESDE que aún no tienen etiqueta Facturas/… (no procesa nada). */
+function verCorreosSinProcesar() {
+  const h = hilosPorProcesar_();
+  const todos = h.zip.concat(h.otros);
+  const linea = x => { const m = x.getMessages()[0]; return '• ' + Utilities.formatDate(m.getDate(), 'America/Bogota', 'dd/MM') + ' — ' + m.getSubject().slice(0, 80); };
+  SpreadsheetApp.getUi().alert(todos.length ? todos.length + ' correo(s) sin procesar (' + h.zip.length + ' con factura electrónica ZIP):\n\n' +
+    todos.slice(0, 40).map(linea).join('\n') + (todos.length > 40 ? '\n… y ' + (todos.length - 40) + ' más' : '') +
+    '\n\nSe procesan en la próxima corrida (o con 🧾 → 4. Procesar ahora).' : 'No hay correos sin procesar desde ' + CFG.DESDE + '.');
 }
 
 function crearCarpetasDrive() {
