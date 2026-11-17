@@ -70,9 +70,13 @@ function semaforo(c: Caso, hoy: string): { texto: string; clase: string } | null
   return { texto: `Día ${dias} de ${plazo}`, clase: "bg-emerald-50 text-emerald-700" };
 }
 
-/** ¿Hay que contactarlo hoy? Abierto y con su compromiso (o, sin compromiso, su atención) ya cumplido. */
+/** ¿Es urgente hoy? Sin contacto y en amarillo o rojo (últimos 3 días del
+ *  plazo o vencido), o ya contactado con compromiso de llamar hoy o antes.
+ *  Igual que fn_fidelizacion_pendientes() en la base de datos. */
 function esParaHoy(c: Caso, hoy: string): boolean {
-  return !ESTADOS_CASO[c.estado]?.cerrado && (c.proximo_contacto ?? c.fecha_atencion) <= hoy;
+  if (c.estado === "pendiente") return diasEntre(c.fecha_atencion, hoy) >= PLAZO_DIAS[c.tipo] - 2;
+  if (c.estado === "en_proceso") return !!c.proximo_contacto && c.proximo_contacto <= hoy;
+  return false;
 }
 
 export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; tipo: TipoFidelizacion; onCambio: () => void }) {
