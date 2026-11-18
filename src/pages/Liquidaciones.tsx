@@ -571,6 +571,10 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
         // override manual para aparatos que se descubren sin liquidar después.
         const fechaComparar = l.mes_liquidacion ?? l.fecha_instalado;
         if (!fechaComparar || fechaComparar < periodo.inicio || fechaComparar > periodo.fin) continue;
+        // Órdenes duplicadas que se dejaron en $0 con "DUPLICADO" en la
+        // factura para anularlas (ver esDuplicadoEnCero) — no se le muestran
+        // a la doctora, igual que ya no se le muestran al laboratorio.
+        if (esDuplicadoEnCero({ valor_factura: Number(l.valor_factura), factura_numero: l.factura_numero })) continue;
         const valor = Number(l.valor_factura);
         const sedeNom = sedeNombre[l.sede_id] ?? "—";
         const paciente = l.pacientes?.nombre ?? "—";
