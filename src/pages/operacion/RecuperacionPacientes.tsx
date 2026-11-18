@@ -60,6 +60,8 @@ interface Seguimiento {
   observacion: string | null;
   agendo_cita: boolean;
   fecha_cita: string | null;
+  ya_tenia_cita: boolean;
+  paciente_escribio: boolean;
   created_at: string;
   registrado_por_nombre: string | null;
 }
@@ -92,6 +94,9 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
   const [formObservacion, setFormObservacion] = useState<Record<string, string>>({});
   const [formAgendo, setFormAgendo] = useState<Record<string, boolean>>({});
   const [formFechaCita, setFormFechaCita] = useState<Record<string, string>>({});
+  // Sin llamada: el paciente ya tenía cita agendada, o él/los papás escribieron.
+  const [formYaTeniaCita, setFormYaTeniaCita] = useState<Record<string, boolean>>({});
+  const [formEscribio, setFormEscribio] = useState<Record<string, boolean>>({});
   const [filtroAlerta, setFiltroAlerta] = useState<Alerta>("");
   const [guardandoId, setGuardandoId] = useState<string | null>(null);
 
@@ -121,7 +126,7 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
   async function cargarSeguimientos(id: string) {
     const { data } = await supabase
       .from("recuperacion_pacientes_seguimientos")
-      .select("id, fecha_contacto, llamo, retomo_b2chat, observacion, agendo_cita, fecha_cita, created_at, registrado_por_nombre")
+      .select("id, fecha_contacto, llamo, retomo_b2chat, observacion, agendo_cita, fecha_cita, ya_tenia_cita, paciente_escribio, created_at, registrado_por_nombre")
       .eq("recuperacion_id", id)
       .order("created_at", { ascending: false });
     setSeguimientosPorPaciente((prev) => ({ ...prev, [id]: (data as Seguimiento[]) ?? [] }));
@@ -159,11 +164,15 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
     const observacion = (formObservacion[id] ?? "").trim();
     const llamo = formLlamo[id] ?? false;
     const retomoB2chat = formRetomoB2chat[id] ?? false;
-    if (!llamo) {
-      window.alert("Marca el paso 1: la llamada. Si no contestó, marca también B2chat.");
+    const yaTeniaCita = formYaTeniaCita[id] ?? false;
+    const escribio = formEscribio[id] ?? false;
+    if (!llamo && !yaTeniaCita && !escribio) {
+      window.alert(
+        'Marca el paso 1: la llamada (y B2chat si no contestó). Si no llamaste, marca "Ya tenía cita agendada" o "El paciente / los papás escribieron".',
+      );
       return;
     }
-    const agendo = formAgendo[id] ?? false;
+    const agendo = yaTeniaCita || (formAgendo[id] ?? false);
     const fechaCita = formFechaCita[id] ?? "";
     if (agendo && !fechaCita) {
       window.alert("Pon la fecha de la cita que se agendó.");
@@ -179,6 +188,8 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
       observacion: observacion || null,
       agendo_cita: agendo,
       fecha_cita: agendo ? fechaCita : null,
+      ya_tenia_cita: yaTeniaCita,
+      paciente_escribio: escribio,
       registrado_por: perfil?.id ?? null,
       registrado_por_nombre: perfil?.nombre ?? null,
     });
@@ -198,6 +209,8 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
     setFormRetomoB2chat((prev) => ({ ...prev, [id]: false }));
     setFormObservacion((prev) => ({ ...prev, [id]: "" }));
     setFormAgendo((prev) => ({ ...prev, [id]: false }));
+    setFormYaTeniaCita((prev) => ({ ...prev, [id]: false }));
+    setFormEscribio((prev) => ({ ...prev, [id]: false }));
     setFormFechaCita((prev) => ({ ...prev, [id]: "" }));
     setGuardandoId(null);
     await Promise.all([cargarPacientes(), cargarSeguimientos(id)]);
@@ -387,10 +400,12 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
                             {s.llamo && <Phone size={12} />}
                             {s.retomo_b2chat && <MessageSquare size={12} />}
                             {s.fecha_contacto} · {s.registrado_por_nombre ?? "—"}
+                            {s.paciente_escribio && <span className="text-sky-700 font-medium"> · el paciente / los papás escribieron</span>}
                             {s.agendo_cita && (
                               <span className="text-emerald-600 font-medium">
                                 {" "}
-                                · agendó cita{s.fecha_cita ? ` para el ${fechaCorta(s.fecha_cita)}` : ""}
+                                · {s.ya_tenia_cita ? "ya tenía cita" : "agendó cita"}
+                                {s.fecha_cita ? ` para el ${fechaCorta(s.fecha_cita)}` : ""}
                               </span>
                             )}
                           </p>
@@ -403,6 +418,29 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
                   )}
 
                   <div className="rounded-lg border border-gray-200 p-3 space-y-2">
+                    <div className="flex gap-2 flex-wrap">
+                      <label className="flex items-center gap-1.5 text-sm text-emerald-800 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={formYaTeniaCita[p.id] ?? false}
+                          onChange={(e) => {
+                            const v = e.target.checked;
+                            setFormYaTeniaCita((prev) => ({ ...prev, [p.id]: v }));
+                            setFormAgendo((prev) => ({ ...prev, [p.id]: v }));
+                          }}
+                        />
+                        📅 Ya tenía cita agendada
+                      </label>
+                      <label className="flex items-center gap-1.5 text-sm text-sky-800 rounded-lg border border-sky-200 bg-sky-50 px-2 py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={formEscribio[p.id] ?? false}
+                          onChange={(e) => setFormEscribio((prev) => ({ ...prev, [p.id]: e.target.checked }))}
+                        />
+                        ✉️ El paciente / los papás escribieron
+                      </label>
+                      <span className="self-center text-xs text-gray-400">(en estos casos no hace falta llamar)</span>
+                    </div>
                     <div className="flex gap-2 flex-wrap">
                       <input
                         type="date"
@@ -448,9 +486,10 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
                         <input
                           type="checkbox"
                           checked={formAgendo[p.id] ?? false}
+                          disabled={formYaTeniaCita[p.id] ?? false}
                           onChange={(e) => setFormAgendo((prev) => ({ ...prev, [p.id]: e.target.checked }))}
                         />
-                        Agendó cita
+                        {formYaTeniaCita[p.id] ? "Ya tenía cita" : "Agendó cita"}
                         {formAgendo[p.id] && (
                           <>
                             <span className="ml-1">— fecha de la cita</span>
