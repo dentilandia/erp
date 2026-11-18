@@ -135,9 +135,17 @@ interface ResumenDia {
   labsValor: number;
 }
 
+/** Un laboratorio es "atrasado" cuando se instaló en un período anterior pero
+ *  se metió a pagar en este (mes_liquidacion editado a mano) — ya tiene su
+ *  propia página ("aparatos de períodos anteriores"), así que se excluye de
+ *  la tabla y el resumen de ESTE período para no mostrarlo dos veces. */
+function esAtrasado(d: DetalleLab): boolean {
+  return !!(d.fechaInstalado && d.fechaInstalado !== d.fecha);
+}
+
 /** Junta lo facturado por día con los laboratorios instalados ese día (misma
  *  fecha con la que el aparato entra a esta liquidación), por fecha y sede.
- *  Los totales cuadran con totalVentas y totalLaboratorios. */
+ *  Los totales cuadran con totalVentas y totalLaboratorios (sin atrasados). */
 function resumenDiario(f: FilaDoctora): ResumenDia[] {
   const porClave: Record<string, ResumenDia> = {};
   const fila = (fecha: string, sedeNombre: string) =>
@@ -148,7 +156,7 @@ function resumenDiario(f: FilaDoctora): ResumenDia[] {
     r.pacientes += v.pacientes;
   }
   for (const d of f.detalleLabs) {
-    if (!d.fecha) continue;
+    if (!d.fecha || esAtrasado(d)) continue;
     const r = fila(d.fecha, d.sedeNombre);
     r.labsCantidad += 1;
     r.labsValor += d.valor;
@@ -235,9 +243,7 @@ function pctDe(doctora: Doctora, pctGlobal: number): number {
 /** Página 1: el estado de cuenta en sí (para enviarle a la doctora) — refleja la misma ficha que se ve en pantalla. */
 function paginaLiquidacion(periodo: { inicio: string; fin: string }, pctHonorario: number, f: FilaDoctora): string {
   const bruto = f.totalVentas * (pctHonorario / 100);
-  const totalLabsAtrasados = f.detalleLabs
-    .filter((d) => d.fechaInstalado && d.fechaInstalado !== d.fecha)
-    .reduce((a, d) => a + d.valor, 0);
+  const totalLabsAtrasados = f.detalleLabs.filter(esAtrasado).reduce((a, d) => a + d.valor, 0);
   const totalLabsNormal = f.totalLaboratorios - totalLabsAtrasados;
   const totalLaboratoriosInsumos = totalLabsNormal + f.totalInsumos;
   const deduccion = totalLaboratoriosInsumos * (pctHonorario / 100);
@@ -312,9 +318,10 @@ function notaDetalleLab(d: DetalleLab): string | null {
 
 /** Página 2: detalle de laboratorios (aparatos) y otros aparatología de ESTE período. */
 function paginaDetalleMes(periodo: { inicio: string; fin: string }, f: FilaDoctora): string {
-  const totalLabs = f.detalleLabs.reduce((a, d) => a + d.valor, 0);
+  const labsDelPeriodo = f.detalleLabs.filter((d) => !esAtrasado(d));
+  const totalLabs = labsDelPeriodo.reduce((a, d) => a + d.valor, 0);
   const totalOtros = f.detalleInsumos.reduce((a, d) => a + d.valor, 0);
-  const filasLabs = f.detalleLabs
+  const filasLabs = labsDelPeriodo
     .map((d) => {
       const nota = notaDetalleLab(d);
       return `<tr><td>${esc(d.fecha ?? "—")}</td><td>${esc(d.sedeNombre)}</td><td>${esc(d.paciente)}</td><td>${esc(d.laboratorio)}${
@@ -387,7 +394,7 @@ function paginaAtrasados(periodo: { inicio: string; fin: string }, atrasados: De
 /** Une las páginas en un solo documento imprimible — la doctora/admin le da "Guardar como PDF" desde el diálogo de impresión. */
 function generarLiquidacionCompletaPDF(periodo: { inicio: string; fin: string }, pctHonorario: number, f: FilaDoctora) {
   const paginas = [paginaLiquidacion(periodo, pctHonorario, f), paginaDetalleMes(periodo, f)];
-  const atrasados = f.detalleLabs.filter((d) => d.fechaInstalado && d.fechaInstalado !== d.fecha);
+  const atrasados = f.detalleLabs.filter(esAtrasado);
   if (atrasados.length > 0) paginas.push(paginaAtrasados(periodo, atrasados));
   const html = `<!doctype html>
 <html><head><meta charset="utf-8" />
@@ -949,7 +956,7 @@ function LiquidacionDoctoras({ mes, sedeId, sedes }: { mes: string; sedeId: stri
       {filas.map((f, idx) => {
         const pctFila = pctDe(f.doctora, pctHonorario);
         const bruto = f.totalVentas * (pctFila / 100);
-        const atrasados = f.detalleLabs.filter((d) => d.fechaInstalado && d.fechaInstalado !== d.fecha);
+        const atrasados = f.detalleLabs.filter(esAtrasado);
         const totalLabsAtrasados = atrasados.reduce((a, d) => a + d.valor, 0);
         const totalLabsNormal = f.totalLaboratorios - totalLabsAtrasados;
         const editadosDespuesDeGuardar = f.detalleLabs.filter((d) => d.actualizadoDespuesDeGuardar);
