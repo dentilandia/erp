@@ -22,6 +22,8 @@ interface Caso {
   estado: string;
   proximo_contacto: string | null;
   fecha_consulta: string | null;
+  fecha_cita: string | null;
+  asistio_fecha: string | null;
   cerrado_en: string | null;
   cerrado_por_nombre: string | null;
   pacientes: { nombre: string; telefono: string | null } | null;
@@ -53,6 +55,7 @@ interface FormContacto {
   proximoContacto: string;
   enConsulta: boolean;
   fechaConsulta: string;
+  fechaCita: string;
 }
 
 const FORM_VACIO: FormContacto = {
@@ -63,6 +66,7 @@ const FORM_VACIO: FormContacto = {
   proximoContacto: "",
   enConsulta: false,
   fechaConsulta: "",
+  fechaCita: "",
 };
 
 function fechaCorta(d: string): string {
@@ -127,7 +131,7 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
     setCargando(true);
     const { data } = await supabase
       .from("fidelizacion_casos")
-      .select("id, tipo, fecha_atencion, fecha_limite, detalle, estado, proximo_contacto, fecha_consulta, cerrado_en, cerrado_por_nombre, pacientes(nombre, telefono), doctoras(nombre)")
+      .select("id, tipo, fecha_atencion, fecha_limite, detalle, estado, proximo_contacto, fecha_consulta, fecha_cita, asistio_fecha, cerrado_en, cerrado_por_nombre, pacientes(nombre, telefono), doctoras(nombre)")
       .eq("sede_id", sedeId)
       .eq("tipo", tipo)
       .order("fecha_atencion", { ascending: true });
@@ -177,6 +181,10 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
         setError("Elige el resultado del contacto.");
         return;
       }
+      if (f.resultado === "agendo_cita" && !f.fechaCita) {
+        setError("Pon la fecha de la cita que se agendó.");
+        return;
+      }
       if (f.resultado === "volver_a_contactar" && !f.proximoContacto) {
         setError('Con "Volver a contactar" pon la fecha en que te comprometiste a contactarlo.');
         return;
@@ -193,6 +201,7 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
       resultado: f.enConsulta ? RESULTADO_EN_CONSULTA.value : f.resultado,
       proximo_contacto: f.enConsulta ? null : f.proximoContacto || null,
       fecha_consulta: f.enConsulta ? f.fechaConsulta : null,
+      fecha_cita: !f.enConsulta && f.resultado === "agendo_cita" ? f.fechaCita : null,
       registrado_por: perfil?.id ?? null,
       registrado_por_nombre: perfil?.nombre ?? null,
     });
@@ -297,6 +306,20 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                       )}
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${est?.color ?? ""}`}>{est?.label ?? c.estado}</span>
                       {sem && <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${sem.clase}`}>{sem.texto}</span>}
+                      {c.estado === "agendo_cita" &&
+                        (c.asistio_fecha ? (
+                          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                            Asistió el {fechaCorta(c.asistio_fecha)}
+                          </span>
+                        ) : c.fecha_cita && c.fecha_cita < hoy ? (
+                          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+                            No asistió (cita {fechaCorta(c.fecha_cita)})
+                          </span>
+                        ) : c.fecha_cita ? (
+                          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-sky-50 text-sky-700">
+                            Cita el {fechaCorta(c.fecha_cita)}
+                          </span>
+                        ) : null)}
                     </div>
                     <p className="text-xs text-gray-500 mt-0.5">
                       Atención {c.fecha_atencion} · {c.doctoras?.nombre ?? "—"}
@@ -372,6 +395,18 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                                 </option>
                               ))}
                             </select>
+                            {f.resultado === "agendo_cita" && (
+                              <label className="flex items-center gap-1 text-xs text-gray-600">
+                                Fecha de la cita
+                                <input
+                                  type="date"
+                                  min={hoy}
+                                  value={f.fechaCita}
+                                  onChange={(e) => actualizarForm(c.id, { fechaCita: e.target.value })}
+                                  className="rounded-lg border border-gray-300 px-2 py-1 text-sm"
+                                />
+                              </label>
+                            )}
                             {(f.resultado === "volver_a_contactar" || f.resultado === "no_contesta") && (
                               <label className="flex items-center gap-1 text-xs text-gray-600">
                                 Volver a contactar el

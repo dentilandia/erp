@@ -17,6 +17,39 @@ interface PacienteRecuperacion {
   estado_ultima_cita: string | null;
   estado_recuperacion: "pendiente" | "en_proceso" | "recuperado" | "descartado";
   doctoras: { nombre: string } | null;
+  // Fecha de la cita que se agendó (la escribe la auxiliar) y la fecha en que
+  // el paciente llegó de verdad (la marca el sistema solo, al crear Recepción
+  // su visita). Ver supabase/migrations/0100_recuperacion_cita_asistencia.sql.
+  fecha_cita: string | null;
+  asistio_fecha: string | null;
+  ultimo_contacto: string | null;
+  intentos: number;
+  llamado: boolean;
+}
+
+type Alerta = "" | "frios" | "sin_llamada" | "no_asistio" | "por_asistir" | "asistio";
+
+function diasDesde(fecha: string, hoy: string): number {
+  return Math.round((new Date(`${hoy}T00:00:00`).getTime() - new Date(`${fecha}T00:00:00`).getTime()) / 86400000);
+}
+
+function fechaCorta(d: string): string {
+  return new Date(`${d}T12:00:00`).toLocaleDateString("es-CO", { day: "numeric", month: "short" });
+}
+
+/** En qué grupo de alerta cae el paciente (un caso "en proceso" puede estar frío Y sin llamada). */
+function alertasDe(p: PacienteRecuperacion, hoy: string): Alerta[] {
+  const a: Alerta[] = [];
+  if (p.estado_recuperacion === "en_proceso") {
+    if (!p.ultimo_contacto || diasDesde(p.ultimo_contacto, hoy) > 7) a.push("frios");
+    if (!p.llamado) a.push("sin_llamada");
+  }
+  if (p.estado_recuperacion === "recuperado") {
+    if (p.asistio_fecha) a.push("asistio");
+    else if (p.fecha_cita && p.fecha_cita < hoy) a.push("no_asistio");
+    else a.push("por_asistir");
+  }
+  return a;
 }
 
 interface Seguimiento {
@@ -26,6 +59,7 @@ interface Seguimiento {
   retomo_b2chat: boolean;
   observacion: string | null;
   agendo_cita: boolean;
+  fecha_cita: string | null;
   created_at: string;
   registrado_por_nombre: string | null;
 }
@@ -57,6 +91,8 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
   const [formRetomoB2chat, setFormRetomoB2chat] = useState<Record<string, boolean>>({});
   const [formObservacion, setFormObservacion] = useState<Record<string, string>>({});
   const [formAgendo, setFormAgendo] = useState<Record<string, boolean>>({});
+  const [formFechaCita, setFormFechaCita] = useState<Record<string, string>>({});
+  const [filtroAlerta, setFiltroAlerta] = useState<Alerta>("");
   const [guardandoId, setGuardandoId] = useState<string | null>(null);
 
   const [contador, setContador] = useState<{ hoy: number; hora: number } | null>(null);
@@ -85,7 +121,7 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
   async function cargarSeguimientos(id: string) {
     const { data } = await supabase
       .from("recuperacion_pacientes_seguimientos")
-      .select("id, fecha_contacto, llamo, retomo_b2chat, observacion, agendo_cita, created_at, registrado_por_nombre")
+      .select("id, fecha_contacto, llamo, retomo_b2chat, observacion, agendo_cita, fecha_cita, created_at, registrado_por_nombre")
       .eq("recuperacion_id", id)
       .order("created_at", { ascending: false });
     setSeguimientosPorPaciente((prev) => ({ ...prev, [id]: (data as Seguimiento[]) ?? [] }));
@@ -123,12 +159,17 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
     const observacion = (formObservacion[id] ?? "").trim();
     const llamo = formLlamo[id] ?? false;
     const retomoB2chat = formRetomoB2chat[id] ?? false;
-    if (!llamo && !retomoB2chat) {
-      window.alert("Marca si llamó, si retomó por B2chat, o ambos.");
+    if (!llamo) {
+      window.alert("Marca el paso 1: la llamada. Si no contestó, marca también B2chat.");
+      return;
+    }
+    const agendo = formAgendo[id] ?? false;
+    const fechaCita = formFechaCita[id] ?? "";
+    if (agendo && !fechaCita) {
+      window.alert("Pon la fecha de la cita que se agendó.");
       return;
     }
     setGuardandoId(id);
-    const agendo = formAgendo[id] ?? false;
     const { error } = await supabase.from("recuperacion_pacientes_seguimientos").insert({
       recuperacion_id: id,
       sede_id: sedeId,
@@ -137,6 +178,7 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
       retomo_b2chat: retomoB2chat,
       observacion: observacion || null,
       agendo_cita: agendo,
+      fecha_cita: agendo ? fechaCita : null,
       registrado_por: perfil?.id ?? null,
       registrado_por_nombre: perfil?.nombre ?? null,
     });
@@ -156,6 +198,7 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
     setFormRetomoB2chat((prev) => ({ ...prev, [id]: false }));
     setFormObservacion((prev) => ({ ...prev, [id]: "" }));
     setFormAgendo((prev) => ({ ...prev, [id]: false }));
+    setFormFechaCita((prev) => ({ ...prev, [id]: "" }));
     setGuardandoId(null);
     await Promise.all([cargarPacientes(), cargarSeguimientos(id)]);
     actualizarContador();
@@ -175,7 +218,9 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
     const estadosRecuperacion = filtroEstadoRecuperacion ? filtroEstadoRecuperacion.split(",") : null;
     const q = busqueda.trim().toLowerCase();
     const m = filtroMotivo.trim().toLowerCase();
+    const hoy = today();
     return pacientes.filter((p) => {
+      if (filtroAlerta) return alertasDe(p, hoy).includes(filtroAlerta);
       if (estadosRecuperacion && !estadosRecuperacion.includes(p.estado_recuperacion)) return false;
       if (filtroDoctora && p.doctora_id !== filtroDoctora) return false;
       if (filtroEstadoCita && p.estado_ultima_cita !== filtroEstadoCita) return false;
@@ -183,7 +228,22 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
       if (m && !(p.motivo_ultima_cita ?? "").toLowerCase().includes(m)) return false;
       return true;
     });
-  }, [pacientes, filtroEstadoRecuperacion, filtroDoctora, filtroEstadoCita, busqueda, filtroMotivo]);
+  }, [pacientes, filtroEstadoRecuperacion, filtroDoctora, filtroEstadoCita, busqueda, filtroMotivo, filtroAlerta]);
+
+  const conteoAlertas = useMemo(() => {
+    const hoy = today();
+    const c: Record<string, number> = {};
+    for (const p of pacientes) for (const a of alertasDe(p, hoy)) c[a] = (c[a] ?? 0) + 1;
+    return c;
+  }, [pacientes]);
+
+  const ALERTAS: { value: Exclude<Alerta, "">; label: string; ayuda: string; clase: string }[] = [
+    { value: "frios", label: "En proceso sin contacto hace +7 días", ayuda: "Se están enfriando: retómalos hoy.", clase: "border-red-200 bg-red-50 text-red-800" },
+    { value: "sin_llamada", label: "En proceso sin llamada", ayuda: "Solo se les escribió por B2chat: falta llamarlos.", clase: "border-amber-200 bg-amber-50 text-amber-800" },
+    { value: "no_asistio", label: "Agendaron y no asistieron", ayuda: "La fecha de la cita pasó y no llegaron: vuelve a llamarlos.", clase: "border-red-200 bg-red-50 text-red-800" },
+    { value: "por_asistir", label: "Agendados por asistir", ayuda: "Tienen cita futura o no tienen fecha de cita registrada.", clase: "border-sky-200 bg-sky-50 text-sky-800" },
+    { value: "asistio", label: "Asistieron", ayuda: "Llegaron a consulta después de agendar (lo marca el sistema).", clase: "border-emerald-200 bg-emerald-50 text-emerald-800" },
+  ];
 
   if (cargando) return <p className="text-sm text-gray-400">Cargando…</p>;
 
@@ -204,6 +264,29 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
           </span>
           <span className="text-gray-500">{contador.hora} en la última hora</span>
         </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+        {ALERTAS.map((a) => (
+          <button
+            key={a.value}
+            onClick={() => setFiltroAlerta(filtroAlerta === a.value ? "" : a.value)}
+            title={a.ayuda}
+            className={`rounded-xl border px-3 py-2 text-left ${a.clase} ${filtroAlerta === a.value ? "ring-2 ring-[var(--acento)]" : ""}`}
+          >
+            <span className="block text-xl font-bold">{conteoAlertas[a.value] ?? 0}</span>
+            <span className="block text-xs font-medium leading-tight">{a.label}</span>
+          </button>
+        ))}
+      </div>
+      {filtroAlerta && (
+        <p className="text-xs text-gray-600">
+          Mostrando: <strong>{ALERTAS.find((a) => a.value === filtroAlerta)?.label}</strong> —{" "}
+          {ALERTAS.find((a) => a.value === filtroAlerta)?.ayuda}{" "}
+          <button onClick={() => setFiltroAlerta("")} className="text-[var(--acento)] font-medium">
+            Quitar filtro
+          </button>
+        </p>
       )}
 
       <div className="bg-white rounded-xl border border-gray-200 p-4">
@@ -279,6 +362,7 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
                     {p.celular ? ` · ${p.celular}` : ""}
                   </p>
                   {p.motivo_ultima_cita && <p className="text-xs text-gray-500 mt-1 ml-[22px] max-w-xl">{p.motivo_ultima_cita}</p>}
+                  <BadgesPaciente p={p} />
                 </div>
                 <select
                   value={p.estado_recuperacion}
@@ -303,7 +387,12 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
                             {s.llamo && <Phone size={12} />}
                             {s.retomo_b2chat && <MessageSquare size={12} />}
                             {s.fecha_contacto} · {s.registrado_por_nombre ?? "—"}
-                            {s.agendo_cita && <span className="text-emerald-600 font-medium"> · agendó cita</span>}
+                            {s.agendo_cita && (
+                              <span className="text-emerald-600 font-medium">
+                                {" "}
+                                · agendó cita{s.fecha_cita ? ` para el ${fechaCorta(s.fecha_cita)}` : ""}
+                              </span>
+                            )}
                           </p>
                           {s.observacion && <p className="text-gray-700 mt-0.5">{s.observacion}</p>}
                         </div>
@@ -325,17 +414,27 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
                         <input
                           type="checkbox"
                           checked={formLlamo[p.id] ?? false}
-                          onChange={(e) => setFormLlamo((prev) => ({ ...prev, [p.id]: e.target.checked }))}
+                          onChange={(e) => {
+                            const v = e.target.checked;
+                            setFormLlamo((prev) => ({ ...prev, [p.id]: v }));
+                            if (!v) setFormRetomoB2chat((prev) => ({ ...prev, [p.id]: false }));
+                          }}
                         />
-                        📞 Llamó
+                        📞 1. Llamó
                       </label>
-                      <label className="flex items-center gap-1.5 text-sm text-gray-600 rounded-lg border border-gray-300 px-2 py-1.5">
+                      <label
+                        className={`flex items-center gap-1.5 text-sm text-gray-600 rounded-lg border border-gray-300 px-2 py-1.5 ${
+                          formLlamo[p.id] ? "" : "opacity-50"
+                        }`}
+                        title="Primero la llamada; B2chat solo si no contestó"
+                      >
                         <input
                           type="checkbox"
+                          disabled={!formLlamo[p.id]}
                           checked={formRetomoB2chat[p.id] ?? false}
                           onChange={(e) => setFormRetomoB2chat((prev) => ({ ...prev, [p.id]: e.target.checked }))}
                         />
-                        💬 Retomó por B2chat
+                        💬 2. B2chat (no contestó)
                       </label>
                       <input
                         value={formObservacion[p.id] ?? ""}
@@ -352,6 +451,18 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
                           onChange={(e) => setFormAgendo((prev) => ({ ...prev, [p.id]: e.target.checked }))}
                         />
                         Agendó cita
+                        {formAgendo[p.id] && (
+                          <>
+                            <span className="ml-1">— fecha de la cita</span>
+                            <input
+                              type="date"
+                              min={today()}
+                              value={formFechaCita[p.id] ?? ""}
+                              onChange={(e) => setFormFechaCita((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                              className="rounded-lg border border-gray-300 px-2 py-1 text-xs"
+                            />
+                          </>
+                        )}
                       </label>
                       <button
                         onClick={() => guardarSeguimiento(p.id)}
@@ -369,6 +480,41 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
         })}
         {pacientesFiltrados.length === 0 && <p className="text-sm text-gray-400 text-center py-8">Nadie con este filtro.</p>}
       </div>
+    </div>
+  );
+}
+
+/** Etiquetas de seguimiento: días sin contacto, falta llamada, y si el agendado asistió. */
+function BadgesPaciente({ p }: { p: PacienteRecuperacion }) {
+  const hoy = today();
+  const badges: { texto: string; clase: string }[] = [];
+  if (p.estado_recuperacion === "en_proceso") {
+    if (!p.ultimo_contacto) badges.push({ texto: "Sin contactos registrados", clase: "bg-red-100 text-red-700" });
+    else {
+      const d = diasDesde(p.ultimo_contacto, hoy);
+      badges.push({
+        texto: d === 0 ? "Contactado hoy" : `Último contacto hace ${d} día${d === 1 ? "" : "s"}`,
+        clase: d > 7 ? "bg-red-100 text-red-700" : d >= 3 ? "bg-amber-100 text-amber-800" : "bg-emerald-50 text-emerald-700",
+      });
+    }
+    if (!p.llamado) badges.push({ texto: "Falta llamada", clase: "bg-amber-100 text-amber-800" });
+  }
+  if (p.estado_recuperacion === "recuperado") {
+    if (p.asistio_fecha) badges.push({ texto: `Asistió el ${fechaCorta(p.asistio_fecha)}`, clase: "bg-emerald-100 text-emerald-800" });
+    else if (p.fecha_cita && p.fecha_cita < hoy)
+      badges.push({ texto: `No asistió (cita ${fechaCorta(p.fecha_cita)})`, clase: "bg-red-100 text-red-700" });
+    else if (p.fecha_cita) badges.push({ texto: `Cita el ${fechaCorta(p.fecha_cita)}`, clase: "bg-sky-50 text-sky-700" });
+    else badges.push({ texto: "Sin fecha de cita", clase: "bg-gray-100 text-gray-600" });
+  }
+  if (p.intentos > 0) badges.push({ texto: `${p.intentos} intento${p.intentos === 1 ? "" : "s"}`, clase: "bg-gray-100 text-gray-600" });
+  if (badges.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-1.5 ml-[22px]">
+      {badges.map((b) => (
+        <span key={b.texto} className={`text-xs font-medium px-2 py-0.5 rounded-full ${b.clase}`}>
+          {b.texto}
+        </span>
+      ))}
     </div>
   );
 }
