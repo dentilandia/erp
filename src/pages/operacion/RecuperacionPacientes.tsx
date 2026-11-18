@@ -209,6 +209,7 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
     setFormRetomoB2chat((prev) => ({ ...prev, [id]: false }));
     setFormObservacion((prev) => ({ ...prev, [id]: "" }));
     setFormAgendo((prev) => ({ ...prev, [id]: false }));
+    setPideFechaId(null);
     setFormYaTeniaCita((prev) => ({ ...prev, [id]: false }));
     setFormEscribio((prev) => ({ ...prev, [id]: false }));
     setFormFechaCita((prev) => ({ ...prev, [id]: "" }));
@@ -217,7 +218,17 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
     actualizarContador();
   }
 
+  // "Recuperado" no se pone a mano desde el selector: sin la fecha de la cita
+  // no se puede verificar después si el paciente asistió. Se abre el
+  // formulario de seguimiento con "Agendó cita" marcado para que la pongan.
+  const [pideFechaId, setPideFechaId] = useState<string | null>(null);
   async function cambiarEstado(id: string, estado: PacienteRecuperacion["estado_recuperacion"]) {
+    if (estado === "recuperado") {
+      setFormAgendo((prev) => ({ ...prev, [id]: true }));
+      setPideFechaId(id);
+      if (!abiertos[id]) alternarAbierto(id);
+      return;
+    }
     await supabase.from("recuperacion_pacientes").update({ estado_recuperacion: estado }).eq("id", id);
     cargarPacientes();
   }
@@ -418,6 +429,12 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
                   )}
 
                   <div className="rounded-lg border border-gray-200 p-3 space-y-2">
+                    {pideFechaId === p.id && (
+                      <p className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+                        Para marcarlo como recuperado, registra el seguimiento con la <strong>fecha de la cita</strong> (o marca
+                        "Ya tenía cita agendada") y dale "Guardar seguimiento".
+                      </p>
+                    )}
                     <div className="flex gap-2 flex-wrap">
                       <label className="flex items-center gap-1.5 text-sm text-emerald-800 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5">
                         <input
