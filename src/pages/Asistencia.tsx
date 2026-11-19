@@ -1256,6 +1256,7 @@ export function Asistencia() {
       // las horas extra por atención ni en el dashboard del día.
       .select("id, nombre, sede_id, sedes(nombre), saldo_horas_extra_anterior, saldo_horas_extra_anterior_fecha")
       .neq("rol", "laboratorio")
+      .eq("activo", true)
       .order("nombre");
     const rows =
       (data as unknown as {
