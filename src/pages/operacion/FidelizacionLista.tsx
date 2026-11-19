@@ -37,6 +37,8 @@ interface Contacto {
   llamo: boolean;
   b2chat: boolean;
   fecha_consulta: string | null;
+  fecha_cita: string | null;
+  ya_tenia_cita: boolean;
   observacion: string | null;
   resultado: string;
   proximo_contacto: string | null;
@@ -56,7 +58,12 @@ interface FormContacto {
   enConsulta: boolean;
   fechaConsulta: string;
   fechaCita: string;
+  // Presupuestos y Sedación: el paciente ya tiene cita agendada (cierra el caso).
+  yaTieneCita: boolean;
 }
+
+/** Listas con la casilla "Ya tiene cita agendada". */
+const LISTAS_CON_YA_TIENE_CITA: TipoFidelizacion[] = ["presupuesto", "sedacion"];
 
 const FORM_VACIO: FormContacto = {
   llamo: false,
@@ -67,6 +74,7 @@ const FORM_VACIO: FormContacto = {
   enConsulta: false,
   fechaConsulta: "",
   fechaCita: "",
+  yaTieneCita: false,
 };
 
 function fechaCorta(d: string): string {
@@ -77,6 +85,7 @@ function fechaCorta(d: string): string {
 function pasosDe(k: Contacto): string {
   const pasos = [k.llamo && "Llamada", k.b2chat && "B2Chat (no contestó la llamada)"].filter(Boolean);
   if (pasos.length > 0) return pasos.join(" + ");
+  if (k.ya_tenia_cita) return "Sin llamada";
   return MEDIOS_CONTACTO.find((m) => m.value === k.medio)?.label ?? k.medio ?? "Sin llamada";
 }
 
@@ -149,7 +158,7 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
   async function cargarContactos(id: string) {
     const { data } = await supabase
       .from("fidelizacion_seguimientos")
-      .select("id, fecha_contacto, medio, llamo, b2chat, fecha_consulta, observacion, resultado, proximo_contacto, registrado_por_nombre, created_at")
+      .select("id, fecha_contacto, medio, llamo, b2chat, fecha_consulta, fecha_cita, ya_tenia_cita, observacion, resultado, proximo_contacto, registrado_por_nombre, created_at")
       .eq("caso_id", id)
       .order("created_at", { ascending: false });
     setContactos((prev) => ({ ...prev, [id]: (data as Contacto[]) ?? [] }));
@@ -167,7 +176,12 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
 
   async function registrar(c: Caso) {
     const f = formDe(c.id);
-    if (f.enConsulta) {
+    if (f.yaTieneCita) {
+      if (!f.fechaCita) {
+        setError("Pon la fecha en la que viene el paciente.");
+        return;
+      }
+    } else if (f.enConsulta) {
       if (!f.fechaConsulta) {
         setError("Pon la fecha de la consulta en la que se hará el seguimiento.");
         return;
@@ -198,10 +212,11 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
       llamo: f.llamo,
       b2chat: f.llamo && f.b2chat,
       observacion: f.observacion.trim() || null,
-      resultado: f.enConsulta ? RESULTADO_EN_CONSULTA.value : f.resultado,
-      proximo_contacto: f.enConsulta ? null : f.proximoContacto || null,
-      fecha_consulta: f.enConsulta ? f.fechaConsulta : null,
-      fecha_cita: !f.enConsulta && f.resultado === "agendo_cita" ? f.fechaCita : null,
+      resultado: f.yaTieneCita ? "agendo_cita" : f.enConsulta ? RESULTADO_EN_CONSULTA.value : f.resultado,
+      proximo_contacto: f.yaTieneCita || f.enConsulta ? null : f.proximoContacto || null,
+      fecha_consulta: !f.yaTieneCita && f.enConsulta ? f.fechaConsulta : null,
+      fecha_cita: f.yaTieneCita || (!f.enConsulta && f.resultado === "agendo_cita") ? f.fechaCita : null,
+      ya_tenia_cita: f.yaTieneCita,
       registrado_por: perfil?.id ?? null,
       registrado_por_nombre: perfil?.nombre ?? null,
     });
@@ -335,6 +350,30 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                     {!est?.cerrado && (
                       <div className="rounded-lg bg-gray-50 p-3 space-y-2">
                         <p className="text-xs font-semibold text-gray-500">Registrar contacto de hoy</p>
+                        {LISTAS_CON_YA_TIENE_CITA.includes(tipo) && (
+                          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 space-y-1">
+                            <label className="flex items-center gap-2 text-sm font-medium text-emerald-900">
+                              <input
+                                type="checkbox"
+                                checked={f.yaTieneCita}
+                                onChange={(e) => actualizarForm(c.id, { yaTieneCita: e.target.checked })}
+                              />
+                              📅 Ya tiene cita agendada
+                            </label>
+                            {f.yaTieneCita && (
+                              <label className="flex flex-wrap items-center gap-2 text-xs text-emerald-900 pl-6">
+                                Fecha en la que viene el paciente
+                                <input
+                                  type="date"
+                                  value={f.fechaCita}
+                                  onChange={(e) => actualizarForm(c.id, { fechaCita: e.target.value })}
+                                  className="rounded-lg border border-gray-300 px-2 py-1 text-sm bg-white"
+                                />
+                                <span className="text-emerald-700">(cierra el caso; el sistema verifica si vino)</span>
+                              </label>
+                            )}
+                          </div>
+                        )}
                         {tipo === "seguimiento_procedimiento" && (
                           <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 space-y-1">
                             <label className="flex items-center gap-2 text-sm font-medium text-emerald-900">
@@ -359,6 +398,7 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                             )}
                           </div>
                         )}
+                        {!f.yaTieneCita && (
                         <div className="space-y-1.5">
                           <label className="flex items-center gap-2 text-sm">
                             <input
@@ -380,7 +420,8 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                             <span className="text-xs text-gray-500">— no contestó la llamada</span>
                           </label>
                         </div>
-                        {!f.enConsulta && (
+                        )}
+                        {!f.enConsulta && !f.yaTieneCita && (
                           <div className="flex flex-wrap gap-2">
                             <select
                               value={f.resultado}
@@ -454,7 +495,11 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                                 <span className="font-medium text-gray-700">
                                   {k.resultado === RESULTADO_EN_CONSULTA.value
                                     ? `${RESULTADO_EN_CONSULTA.label}${k.fecha_consulta ? ` el ${fechaCorta(k.fecha_consulta)}` : ""}`
-                                    : RESULTADOS_CONTACTO.find((r) => r.value === k.resultado)?.label ?? k.resultado}
+                                    : k.ya_tenia_cita
+                                      ? `Ya tenía cita agendada${k.fecha_cita ? ` para el ${fechaCorta(k.fecha_cita)}` : ""}`
+                                      : `${RESULTADOS_CONTACTO.find((r) => r.value === k.resultado)?.label ?? k.resultado}${
+                                          k.resultado === "agendo_cita" && k.fecha_cita ? ` para el ${fechaCorta(k.fecha_cita)}` : ""
+                                        }`}
                                 </span>
                                 {k.proximo_contacto ? ` · volver a contactar el ${k.proximo_contacto}` : ""}
                                 {k.registrado_por_nombre ? ` · ${k.registrado_por_nombre}` : ""}
