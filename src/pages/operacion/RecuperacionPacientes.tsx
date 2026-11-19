@@ -25,6 +25,9 @@ interface PacienteRecuperacion {
   ultimo_contacto: string | null;
   intentos: number;
   llamado: boolean;
+  // Reabierto automáticamente porque no asistió a la cita de esa fecha.
+  reabierto_desde: string | null;
+  inasistencias: number;
 }
 
 type Alerta = "" | "frios" | "sin_llamada" | "no_asistio" | "por_asistir" | "asistio";
@@ -40,6 +43,7 @@ function fechaCorta(d: string): string {
 /** En qué grupo de alerta cae el paciente (un caso "en proceso" puede estar frío Y sin llamada). */
 function alertasDe(p: PacienteRecuperacion, hoy: string): Alerta[] {
   const a: Alerta[] = [];
+  if ((p.estado_recuperacion === "en_proceso" || p.estado_recuperacion === "pendiente") && p.reabierto_desde) a.push("no_asistio");
   if (p.estado_recuperacion === "en_proceso") {
     if (!p.ultimo_contacto || diasDesde(p.ultimo_contacto, hoy) > 7) a.push("frios");
     if (!p.llamado) a.push("sin_llamada");
@@ -264,7 +268,7 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
   const ALERTAS: { value: Exclude<Alerta, "">; label: string; ayuda: string; clase: string }[] = [
     { value: "frios", label: "En proceso sin contacto hace +7 días", ayuda: "Se están enfriando: retómalos hoy.", clase: "border-red-200 bg-red-50 text-red-800" },
     { value: "sin_llamada", label: "En proceso sin llamada", ayuda: "Solo se les escribió por B2chat: falta llamarlos.", clase: "border-amber-200 bg-amber-50 text-amber-800" },
-    { value: "no_asistio", label: "Agendaron y no asistieron", ayuda: "La fecha de la cita pasó y no llegaron: vuelve a llamarlos.", clase: "border-red-200 bg-red-50 text-red-800" },
+    { value: "no_asistio", label: "Agendaron y no asistieron", ayuda: "No llegaron a la cita: el caso se reabrió solo al día siguiente. Vuelve a contactarlos.", clase: "border-red-200 bg-red-50 text-red-800" },
     { value: "por_asistir", label: "Agendados por asistir", ayuda: "Tienen cita futura o no tienen fecha de cita registrada.", clase: "border-sky-200 bg-sky-50 text-sky-800" },
     { value: "asistio", label: "Asistieron", ayuda: "Llegaron a consulta después de agendar (lo marca el sistema).", clase: "border-emerald-200 bg-emerald-50 text-emerald-800" },
   ];
@@ -555,10 +559,15 @@ function BadgesPaciente({ p }: { p: PacienteRecuperacion }) {
     }
     if (!p.llamado) badges.push({ texto: "Falta llamada", clase: "bg-amber-100 text-amber-800" });
   }
+  if (p.reabierto_desde && p.estado_recuperacion !== "recuperado" && p.estado_recuperacion !== "descartado")
+    badges.push({
+      texto: `No asistió a la cita del ${fechaCorta(p.reabierto_desde)} — volver a contactar${p.inasistencias > 1 ? ` (${p.inasistencias}ª vez)` : ""}`,
+      clase: "bg-red-100 text-red-700",
+    });
   if (p.estado_recuperacion === "recuperado") {
     if (p.asistio_fecha) badges.push({ texto: `Asistió el ${fechaCorta(p.asistio_fecha)}`, clase: "bg-emerald-100 text-emerald-800" });
     else if (p.fecha_cita && p.fecha_cita < hoy)
-      badges.push({ texto: `No asistió (cita ${fechaCorta(p.fecha_cita)})`, clase: "bg-red-100 text-red-700" });
+      badges.push({ texto: `Cita del ${fechaCorta(p.fecha_cita)} sin verificar: el nombre no está en el ERP`, clase: "bg-gray-100 text-gray-600" });
     else if (p.fecha_cita) badges.push({ texto: `Cita el ${fechaCorta(p.fecha_cita)}`, clase: "bg-sky-50 text-sky-700" });
     else badges.push({ texto: "Sin fecha de cita", clase: "bg-gray-100 text-gray-600" });
   }

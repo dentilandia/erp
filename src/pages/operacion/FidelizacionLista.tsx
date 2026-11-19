@@ -24,6 +24,10 @@ interface Caso {
   fecha_consulta: string | null;
   fecha_cita: string | null;
   asistio_fecha: string | null;
+  // Reabierto porque no asistió a la cita del `reabierto_desde`: el plazo se
+  // vuelve a contar desde esa fecha.
+  reabierto_desde: string | null;
+  inasistencias: number;
   cerrado_en: string | null;
   cerrado_por_nombre: string | null;
   pacientes: { nombre: string; telefono: string | null } | null;
@@ -63,7 +67,7 @@ interface FormContacto {
 }
 
 /** Listas con la casilla "Ya tiene cita agendada". */
-const LISTAS_CON_YA_TIENE_CITA: TipoFidelizacion[] = ["presupuesto", "sedacion"];
+const LISTAS_CON_YA_TIENE_CITA: TipoFidelizacion[] = ["presupuesto", "sedacion", "primera_vez", "radiografia"];
 
 const FORM_VACIO: FormContacto = {
   llamo: false,
@@ -107,7 +111,7 @@ function semaforo(c: Caso, hoy: string): { texto: string; clase: string } | null
   // días, rojo vencido (7 días: verde 0-4, amarillo 5-7; 15 días: verde
   // 0-12, amarillo 13-15).
   const plazo = PLAZO_DIAS[c.tipo];
-  const dias = diasEntre(c.fecha_atencion, hoy);
+  const dias = diasEntre(c.reabierto_desde ?? c.fecha_atencion, hoy);
   if (dias > plazo) return { texto: `Vencido — ${dias} días sin contacto`, clase: "bg-red-100 text-red-700" };
   if (dias >= plazo - 2) return { texto: `Día ${dias} de ${plazo}`, clase: "bg-amber-100 text-amber-800" };
   return { texto: `Día ${dias} de ${plazo}`, clase: "bg-emerald-50 text-emerald-700" };
@@ -117,7 +121,7 @@ function semaforo(c: Caso, hoy: string): { texto: string; clase: string } | null
  *  plazo o vencido), o ya contactado con compromiso de llamar hoy o antes.
  *  Igual que fn_fidelizacion_pendientes() en la base de datos. */
 function esParaHoy(c: Caso, hoy: string): boolean {
-  if (c.estado === "pendiente") return diasEntre(c.fecha_atencion, hoy) >= PLAZO_DIAS[c.tipo] - 2;
+  if (c.estado === "pendiente") return diasEntre(c.reabierto_desde ?? c.fecha_atencion, hoy) >= PLAZO_DIAS[c.tipo] - 2;
   if (c.estado === "en_proceso") return !!c.proximo_contacto && c.proximo_contacto <= hoy;
   return false;
 }
@@ -140,7 +144,7 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
     setCargando(true);
     const { data } = await supabase
       .from("fidelizacion_casos")
-      .select("id, tipo, fecha_atencion, fecha_limite, detalle, estado, proximo_contacto, fecha_consulta, fecha_cita, asistio_fecha, cerrado_en, cerrado_por_nombre, pacientes(nombre, telefono), doctoras(nombre)")
+      .select("id, tipo, fecha_atencion, fecha_limite, detalle, estado, proximo_contacto, fecha_consulta, fecha_cita, asistio_fecha, reabierto_desde, inasistencias, cerrado_en, cerrado_por_nombre, pacientes(nombre, telefono), doctoras(nombre)")
       .eq("sede_id", sedeId)
       .eq("tipo", tipo)
       .order("fecha_atencion", { ascending: true });
@@ -321,6 +325,12 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                       )}
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${est?.color ?? ""}`}>{est?.label ?? c.estado}</span>
                       {sem && <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${sem.clase}`}>{sem.texto}</span>}
+                      {c.reabierto_desde && !ESTADOS_CASO[c.estado]?.cerrado && (
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+                          No asistió a la cita del {fechaCorta(c.reabierto_desde)} — volver a contactar
+                          {c.inasistencias > 1 ? ` (${c.inasistencias}ª vez)` : ""}
+                        </span>
+                      )}
                       {c.estado === "agendo_cita" &&
                         (c.asistio_fecha ? (
                           <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
