@@ -59,6 +59,23 @@ export function Inventario() {
   );
 }
 
+interface MovimientoGum {
+  id: string;
+  cantidad: number;
+  motivo: string | null;
+  created_at: string;
+}
+
+const MOTIVO_GUM_CONSULTORIO = "Entregado al consultorio";
+
+function fmtFechaHora(iso: string) {
+  return new Date(iso).toLocaleString("es-CO", {
+    timeZone: "America/Bogota",
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 interface EntregaBoton {
   id: string;
   fecha: string;
@@ -88,6 +105,13 @@ function InsumosClinicos() {
   const [botonOk, setBotonOk] = useState(false);
   const [errorBoton, setErrorBoton] = useState<string | null>(null);
 
+  const [gumConsultorio, setGumConsultorio] = useState(false);
+  const [cantidadGum, setCantidadGum] = useState("");
+  const [guardandoGum, setGuardandoGum] = useState(false);
+  const [gumOk, setGumOk] = useState<string | null>(null);
+  const [errorGum, setErrorGum] = useState<string | null>(null);
+  const [movimientosGum, setMovimientosGum] = useState<MovimientoGum[]>([]);
+
   async function cargarStock() {
     const { data } = await supabase.from("inventario_stock").select("*").eq("sede_id", sedeActiva.id);
     setStock((data as InventarioStock[]) ?? []);
@@ -98,6 +122,14 @@ function InsumosClinicos() {
       .order("fecha", { ascending: false })
       .limit(10);
     setUltimasEntregasBoton((entregas as unknown as EntregaBoton[]) ?? []);
+    const { data: movsGum } = await supabase
+      .from("inventario_movimientos")
+      .select("id, cantidad, motivo, created_at")
+      .eq("sede_id", sedeActiva.id)
+      .eq("tipo", "gum")
+      .order("created_at", { ascending: false })
+      .limit(10);
+    setMovimientosGum((movsGum as MovimientoGum[]) ?? []);
     setCargando(false);
   }
 
@@ -135,6 +167,37 @@ function InsumosClinicos() {
     setMotivoReponer("");
     setReponerOk(true);
     setTimeout(() => setReponerOk(false), 2000);
+    cargarStock();
+  }
+
+  async function registrarGumConsultorio() {
+    setErrorGum(null);
+    const cantidad = Number(cantidadGum);
+    if (!Number.isInteger(cantidad) || cantidad <= 0) {
+      setErrorGum("Escribe una cantidad entera mayor que cero.");
+      return;
+    }
+    const disponible = stock.find((s) => s.tipo === "gum")?.cantidad ?? 0;
+    if (cantidad > disponible) {
+      setErrorGum(`No hay suficiente GUM: quedan ${disponible} en inventario y estás intentando entregar ${cantidad}.`);
+      return;
+    }
+    setGuardandoGum(true);
+    const { error } = await supabase.from("inventario_movimientos").insert({
+      sede_id: sedeActiva.id,
+      tipo: "gum",
+      cantidad: -cantidad,
+      motivo: MOTIVO_GUM_CONSULTORIO,
+    });
+    setGuardandoGum(false);
+    if (error) {
+      setErrorGum(error.message);
+      return;
+    }
+    setGumConsultorio(false);
+    setCantidadGum("");
+    setGumOk(`Se descontaron ${cantidad} GUM del inventario (entregados al consultorio).`);
+    setTimeout(() => setGumOk(null), 4000);
     cargarStock();
   }
 
@@ -193,19 +256,81 @@ function InsumosClinicos() {
             const umbral = fila?.umbral_alerta ?? 5;
             const bajo = cantidad <= umbral;
             return (
-              <div key={t.value} className="flex items-center gap-3 py-2.5 flex-wrap">
-                <span className="text-sm flex-1 min-w-[140px]">{t.label}</span>
-                <span className={`text-lg font-semibold ${bajo ? "text-red-600" : "text-tinta"}`}>{cantidad}</span>
-                <div className="flex items-center gap-1.5 text-xs text-gray-400">
-                  <span>Alerta si ≤</span>
-                  <input
-                    type="number"
-                    defaultValue={umbral}
-                    disabled={!fila}
-                    onBlur={(e) => fila && guardarUmbral(fila.id, Number(e.target.value))}
-                    className="w-14 rounded-md border border-gray-300 px-1.5 py-1 text-xs disabled:opacity-40"
-                  />
+              <div key={t.value} className="py-2.5">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="text-sm flex-1 min-w-[140px]">{t.label}</span>
+                  <span className={`text-lg font-semibold ${bajo ? "text-red-600" : "text-tinta"}`}>{cantidad}</span>
+                  <div className="flex items-center gap-1.5 text-xs text-gray-400">
+                    <span>Alerta si ≤</span>
+                    <input
+                      type="number"
+                      defaultValue={umbral}
+                      disabled={!fila}
+                      onBlur={(e) => fila && guardarUmbral(fila.id, Number(e.target.value))}
+                      className="w-14 rounded-md border border-gray-300 px-1.5 py-1 text-xs disabled:opacity-40"
+                    />
+                  </div>
                 </div>
+                {t.value === "gum" && (
+                  <div className="mt-2 space-y-2">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={gumConsultorio}
+                        onChange={(e) => {
+                          setGumConsultorio(e.target.checked);
+                          setErrorGum(null);
+                          if (!e.target.checked) setCantidadGum("");
+                        }}
+                      />
+                      GUM entregado al consultorio
+                    </label>
+                    {gumConsultorio && (
+                      <div className="flex items-center gap-2 flex-wrap pl-6">
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={cantidadGum}
+                          onChange={(e) => setCantidadGum(e.target.value)}
+                          placeholder="Cantidad"
+                          className="w-28 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                        />
+                        <button
+                          onClick={registrarGumConsultorio}
+                          disabled={!cantidadGum || guardandoGum}
+                          className="flex items-center gap-2 rounded-lg bg-[var(--acento)] text-white px-4 py-2 text-sm font-medium disabled:opacity-40"
+                        >
+                          <Plus size={16} />
+                          {guardandoGum ? "Guardando…" : "Registrar entrega"}
+                        </button>
+                        <span className="text-xs text-gray-400">La fecha se guarda automáticamente.</span>
+                      </div>
+                    )}
+                    {errorGum && <p className="text-sm text-red-600 pl-6">{errorGum}</p>}
+                    {gumOk && (
+                      <p className="flex items-center gap-1.5 text-sm text-green-700 pl-6">
+                        <Check size={14} /> {gumOk}
+                      </p>
+                    )}
+                    {movimientosGum.length > 0 && (
+                      <div className="pl-6 space-y-0.5">
+                        <p className="text-xs font-medium text-gray-400">
+                          Últimas entregas y ajustes de GUM (las ventas se descuentan aparte)
+                        </p>
+                        {movimientosGum.map((m) => (
+                          <div key={m.id} className="text-xs text-gray-500">
+                            {fmtFechaHora(m.created_at)} ·{" "}
+                            <span className={m.cantidad < 0 ? "text-red-600" : "text-green-700"}>
+                              {m.cantidad > 0 ? `+${m.cantidad}` : m.cantidad}
+                            </span>{" "}
+                            · {m.motivo ?? (m.cantidad < 0 ? "Ajuste manual" : "Reposición")}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
