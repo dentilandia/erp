@@ -1403,28 +1403,10 @@ function DetalleModal({
   const totalOperacionAddi = (operacion?.porMedio["addi"] ?? 0) + (operacion?.porMedio["sistecredito"] ?? 0);
 
   const filas = [
-    {
-      label: "Efectivo",
-      facturado: cierre.efvo_fact,
-      real: cierre.analisis_ia?.efectivo_real ?? null,
-      diff: cierre.analisis_ia?.diferencia_efectivo ?? null,
-      operacion: totalOperacionEfectivo,
-    },
-    {
-      label: "Tarjeta",
-      facturado: cierre.tarjeta_fact,
-      real: cierre.analisis_ia?.tarjeta_real ?? null,
-      diff: cierre.analisis_ia?.diferencia_tarjeta ?? null,
-      operacion: totalOperacionTarjeta,
-    },
-    {
-      label: "Transferencia",
-      facturado: cierre.transf_fact,
-      real: cierre.analisis_ia?.transferencia_real ?? null,
-      diff: cierre.analisis_ia?.diferencia_transferencia ?? null,
-      operacion: totalOperacionTransf,
-    },
-    { label: "Addi / Sistecrédito", facturado: cierre.addi, real: null, diff: null, operacion: totalOperacionAddi },
+    { label: "Efectivo", facturado: cierre.efvo_fact, operacion: totalOperacionEfectivo },
+    { label: "Tarjeta", facturado: cierre.tarjeta_fact, operacion: totalOperacionTarjeta },
+    { label: "Transferencia", facturado: cierre.transf_fact, operacion: totalOperacionTransf },
+    { label: "Addi / Sistecrédito", facturado: cierre.addi, operacion: totalOperacionAddi },
   ];
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-20">
@@ -1444,8 +1426,6 @@ function DetalleModal({
               <tr className="text-left text-gray-500">
                 <th className="py-1">Medio</th>
                 <th className="py-1 text-right">Facturado</th>
-                <th className="py-1 text-right">Real (IA, histórico)</th>
-                <th className="py-1 text-right">Diferencia (IA)</th>
                 <th className="py-1 text-right">Cierre diario (Operación)</th>
               </tr>
             </thead>
@@ -1454,8 +1434,6 @@ function DetalleModal({
                 <tr key={f.label} className="border-t border-gray-100">
                   <td className="py-1.5">{f.label}</td>
                   <td className="py-1.5 text-right">{fmtCOP(f.facturado)}</td>
-                  <td className="py-1.5 text-right">{f.real === null ? "—" : fmtCOP(f.real)}</td>
-                  <td className="py-1.5 text-right">{f.diff === null || f.diff === undefined ? "—" : fmtCOP(f.diff)}</td>
                   <td className="py-1.5 text-right">{cargandoOperacion ? "…" : fmtCOP(f.operacion)}</td>
                 </tr>
               ))}
@@ -1465,7 +1443,8 @@ function DetalleModal({
         <p className="text-xs text-gray-400 -mt-2">
           "Cierre diario (Operación)" es lo que hoy calcula en vivo la pantalla de Cierre diario de Operación Diaria
           para este día, a partir de los cobros reales del ERP — compáralo contra "Facturado" para detectar
-          diferencias de digitación. "Real (IA)" es lo que Claude leyó en los documentos adjuntos de la semana.
+          diferencias de digitación. Lo que de verdad hay que revisar para confirmar el día es el "Cruce línea por
+          línea" de abajo: ese sí es el cruce real contra los documentos de este período.
         </p>
 
         {cierre.resultado_detalle && (
@@ -1495,19 +1474,6 @@ function DetalleModal({
             <p className="text-[11px] text-gray-400">
               El detalle de cada transferencia, abono o recibo que no tenga nombre arriba está en la pestaña
               "Conciliación bancaria".
-            </p>
-          </div>
-        )}
-
-        {cierre.analisis_ia && (
-          <div className="rounded-lg bg-gray-50 p-3 text-sm space-y-1.5">
-            <p className="text-gray-600">{cierre.analisis_ia.resumen}</p>
-            <p className="text-xs text-gray-400">
-              Sugerencia de la IA:{" "}
-              <span className={cierre.analisis_ia.cuadra_sugerido ? "text-[#3E9B6F] font-medium" : "text-red-600 font-medium"}>
-                {cierre.analisis_ia.cuadra_sugerido ? "cuadra" : "revisar"}
-              </span>{" "}
-              — revísala y marca tú mismo el check "Cuadra" abajo, no se marca sola.
             </p>
           </div>
         )}
