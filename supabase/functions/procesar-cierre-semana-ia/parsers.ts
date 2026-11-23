@@ -358,7 +358,9 @@ export function leerBold(filas: Fila[], nombreArchivo = ""): ResultadoLectura {
   for (const f of filas.slice(iEnc + 1)) {
     const id = texto(f[c.id]);
     if (!id) continue;
-    if (normal(f[c.operacion]) !== "COBRO EXITOSO") continue; // rechazados / no realizados no movieron plata
+    // El reporte semanal del panel de Bold dice "COBRO EXITOSO"; el correo de
+    // "cierre de turno" que llega automático dice "COBRO REALIZADO" — mismo caso.
+    if (!["COBRO EXITOSO", "COBRO REALIZADO"].includes(normal(f[c.operacion]))) continue; // rechazados / no realizados no movieron plata
     const fecha = fechaISO(f[c.fecha]);
     if (!fecha) {
       avisos.push(`Cobro ${id} sin fecha legible.`);
