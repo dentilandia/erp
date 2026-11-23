@@ -1359,6 +1359,10 @@ function ModalCobro({
   const [visitaFecha, setVisitaFecha] = useState(today());
   const [proximaCita, setProximaCita] = useState("");
   const [noAgendoProximaCita, setNoAgendoProximaCita] = useState(false);
+  // Por qué no agendó (ej. ya fue remitido a ortodoncia). Si el paciente tiene
+  // una remisión a ortodoncia registrada en el ERP se muestra y se propone sola.
+  const [motivoNoAgendo, setMotivoNoAgendo] = useState("");
+  const [remisionOrtodoncia, setRemisionOrtodoncia] = useState<{ fecha: string; especialidad: string } | null>(null);
   const [observacion, setObservacion] = useState("");
   const [alertaSaldoFavor, setAlertaSaldoFavor] = useState(false);
   const [insumos, setInsumos] = useState<Record<string, boolean>>({});
@@ -1395,7 +1399,7 @@ function ModalCobro({
       const { data: visita } = await supabase
         .from("visitas")
         .select(
-          "id, estado, fecha, paciente_id, motivo_valor_cero, tratamiento, proxima_cita, observacion, alerta_saldo_favor, no_agendo_proxima_cita, pacientes(nombre)",
+          "id, estado, fecha, paciente_id, motivo_valor_cero, tratamiento, proxima_cita, observacion, alerta_saldo_favor, no_agendo_proxima_cita, motivo_no_agendo, pacientes(nombre)",
         )
         .eq("id", visitaId)
         .single();
@@ -1411,6 +1415,7 @@ function ModalCobro({
         observacion: string | null;
         alerta_saldo_favor: boolean;
         no_agendo_proxima_cita: boolean;
+        motivo_no_agendo: string | null;
         pacientes: { nombre: string };
       };
       setPacienteId(v.paciente_id);
@@ -1421,6 +1426,16 @@ function ModalCobro({
       setObservacion(v.observacion ?? "");
       setAlertaSaldoFavor(v.alerta_saldo_favor ?? false);
       setNoAgendoProximaCita(v.no_agendo_proxima_cita ?? false);
+      setMotivoNoAgendo(v.motivo_no_agendo ?? "");
+      const { data: remOrto } = await supabase
+        .from("remisiones")
+        .select("fecha, especialidad")
+        .eq("paciente_id", v.paciente_id)
+        .ilike("especialidad", "%ortodon%")
+        .order("fecha", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      setRemisionOrtodoncia((remOrto as { fecha: string; especialidad: string } | null) ?? null);
       setMotivoCero(v.motivo_valor_cero ?? "");
       setMotivoNoPaga(v.motivo_valor_cero?.trim() || null);
 
@@ -1726,6 +1741,7 @@ function ModalCobro({
           motivo_valor_cero: cargos.length === 0 ? motivoCero.trim() : motivoNoPaga,
           proxima_cita: proximaCita || null,
           no_agendo_proxima_cita: noAgendoProximaCita,
+          motivo_no_agendo: noAgendoProximaCita ? motivoNoAgendo.trim() || null : null,
           cobrado_por: perfil?.id ?? null,
           updated_at: new Date().toISOString(),
         })
@@ -2027,14 +2043,44 @@ function ModalCobro({
               </div>
             </div>
 
-            <label className="flex items-center gap-2 text-sm mb-3">
-              <input
-                type="checkbox"
-                checked={noAgendoProximaCita}
-                onChange={(e) => setNoAgendoProximaCita(e.target.checked)}
-              />
-              El paciente no agendó su próxima cita
-            </label>
+            <div className="mb-3 space-y-1.5">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={noAgendoProximaCita}
+                  onChange={(e) => {
+                    setNoAgendoProximaCita(e.target.checked);
+                    if (e.target.checked && !motivoNoAgendo && remisionOrtodoncia) setMotivoNoAgendo("Remitido a ortodoncia");
+                  }}
+                />
+                El paciente no agendó su próxima cita
+              </label>
+              {remisionOrtodoncia && (
+                <p className="text-xs text-sky-700 pl-6">
+                  Este paciente tiene remisión a ortodoncia registrada el {remisionOrtodoncia.fecha} ({remisionOrtodoncia.especialidad}).
+                </p>
+              )}
+              {noAgendoProximaCita && (
+                <div className="flex flex-wrap items-center gap-2 pl-6">
+                  <label className="flex items-center gap-1.5 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={motivoNoAgendo === "Remitido a ortodoncia"}
+                      onChange={(e) => setMotivoNoAgendo(e.target.checked ? "Remitido a ortodoncia" : "")}
+                    />
+                    Porque fue remitido a ortodoncia
+                  </label>
+                  {motivoNoAgendo !== "Remitido a ortodoncia" && (
+                    <input
+                      value={motivoNoAgendo}
+                      onChange={(e) => setMotivoNoAgendo(e.target.value)}
+                      placeholder="Otro motivo (opcional)"
+                      className="flex-1 min-w-[180px] rounded-md border border-gray-300 px-2 py-1 text-sm"
+                    />
+                  )}
+                </div>
+              )}
+            </div>
 
             <div className="flex items-center justify-between text-sm mb-3">
               <span className="text-gray-500">Total a cobrar</span>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { leerBorradores, guardarBorradores } from "../../lib/borradores";
 import { ChevronDown, ChevronRight, Phone, MessageSquare, Check } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { today } from "../../lib/format";
@@ -28,6 +29,17 @@ interface PacienteRecuperacion {
   // Reabierto automáticamente porque no asistió a la cita de esa fecha.
   reabierto_desde: string | null;
   inasistencias: number;
+}
+
+/** Estado por paciente que se guarda como borrador en el navegador: lo
+ *  escrito no se pierde al cerrar el paciente o recargar antes de guardar. */
+function useBorrador<T>(campo: string, sedeId: string) {
+  const clave = `servicio-cliente-borradores-recuperacion-${sedeId}-${campo}`;
+  const [valor, setValor] = useState<Record<string, T>>(() => leerBorradores<T>(clave));
+  useEffect(() => {
+    guardarBorradores(clave, valor);
+  }, [valor, clave]);
+  return [valor, setValor] as const;
 }
 
 type Alerta = "" | "frios" | "sin_llamada" | "no_asistio" | "por_asistir" | "asistio";
@@ -92,15 +104,15 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({});
   const [seguimientosPorPaciente, setSeguimientosPorPaciente] = useState<Record<string, Seguimiento[]>>({});
 
-  const [formFecha, setFormFecha] = useState<Record<string, string>>({});
-  const [formLlamo, setFormLlamo] = useState<Record<string, boolean>>({});
-  const [formRetomoB2chat, setFormRetomoB2chat] = useState<Record<string, boolean>>({});
-  const [formObservacion, setFormObservacion] = useState<Record<string, string>>({});
-  const [formAgendo, setFormAgendo] = useState<Record<string, boolean>>({});
-  const [formFechaCita, setFormFechaCita] = useState<Record<string, string>>({});
+  const [formFecha, setFormFecha] = useBorrador<string>("formFecha", sedeId);
+  const [formLlamo, setFormLlamo] = useBorrador<boolean>("formLlamo", sedeId);
+  const [formRetomoB2chat, setFormRetomoB2chat] = useBorrador<boolean>("formRetomoB2chat", sedeId);
+  const [formObservacion, setFormObservacion] = useBorrador<string>("formObservacion", sedeId);
+  const [formAgendo, setFormAgendo] = useBorrador<boolean>("formAgendo", sedeId);
+  const [formFechaCita, setFormFechaCita] = useBorrador<string>("formFechaCita", sedeId);
   // Sin llamada: el paciente ya tenía cita agendada, o él/los papás escribieron.
-  const [formYaTeniaCita, setFormYaTeniaCita] = useState<Record<string, boolean>>({});
-  const [formEscribio, setFormEscribio] = useState<Record<string, boolean>>({});
+  const [formYaTeniaCita, setFormYaTeniaCita] = useBorrador<boolean>("formYaTeniaCita", sedeId);
+  const [formEscribio, setFormEscribio] = useBorrador<boolean>("formEscribio", sedeId);
   const [filtroAlerta, setFiltroAlerta] = useState<Alerta>("");
   const [guardandoId, setGuardandoId] = useState<string | null>(null);
 
@@ -136,8 +148,28 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
     setSeguimientosPorPaciente((prev) => ({ ...prev, [id]: (data as Seguimiento[]) ?? [] }));
   }
 
+  function tieneBorrador(id: string): boolean {
+    return !!(
+      formLlamo[id] ||
+      formRetomoB2chat[id] ||
+      formAgendo[id] ||
+      formYaTeniaCita[id] ||
+      formEscribio[id] ||
+      (formObservacion[id] ?? "").trim() ||
+      formFechaCita[id]
+    );
+  }
+
   function alternarAbierto(id: string) {
     const abrir = !abiertos[id];
+    if (!abrir && tieneBorrador(id)) {
+      const p = pacientes.find((x) => x.id === id);
+      if (window.confirm(`Tienes un seguimiento sin guardar de ${p?.nombre ?? "este paciente"}. ¿Guardarlo ahora?`)) {
+        guardarSeguimiento(id);
+        return;
+      }
+      // Si no lo guarda, el borrador se conserva para cuando vuelva a abrirlo.
+    }
     setAbiertos((prev) => ({ ...prev, [id]: abrir }));
     if (abrir && !seguimientosPorPaciente[id]) cargarSeguimientos(id);
   }
@@ -384,6 +416,11 @@ export function RecuperacionPacientes({ sedeId }: { sedeId: string }) {
                     {abierto ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                     {p.nombre}
                   </button>
+                  {tieneBorrador(p.id) && (
+                    <span className="ml-[22px] text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                      ✎ Seguimiento sin guardar
+                    </span>
+                  )}
                   <p className="text-xs text-gray-400 mt-0.5 ml-[22px]">
                     {p.doctoras?.nombre ?? p.doctora_nombre_original ?? "—"} · Última cita: {p.fecha_ultima_cita ?? "—"}
                     {p.estado_ultima_cita ? ` (${p.estado_ultima_cita})` : ""}

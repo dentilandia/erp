@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Phone } from "lucide-react";
 import { supabase } from "../../lib/supabase";
+import { leerBorradores, guardarBorradores } from "../../lib/borradores";
 import { today } from "../../lib/format";
 import { useAuth } from "../../auth/AuthContext";
 import {
@@ -8,6 +9,8 @@ import {
   LISTAS_FIDELIZACION,
   MEDIOS_CONTACTO,
   PLAZO_DIAS,
+  VENTANA_DIAS,
+  RESULTADO_NO_CONTESTO,
   RESULTADOS_CONTACTO,
   RESULTADO_EN_CONSULTA,
   type TipoFidelizacion,
@@ -113,7 +116,12 @@ function semaforo(c: Caso, hoy: string): { texto: string; clase: string } | null
   const plazo = PLAZO_DIAS[c.tipo];
   const dias = diasEntre(c.reabierto_desde ?? c.fecha_atencion, hoy);
   if (dias > plazo) return { texto: `Vencido — ${dias} días sin contacto`, clase: "bg-red-100 text-red-700" };
-  if (dias >= plazo - 2) return { texto: `Día ${dias} de ${plazo}`, clase: "bg-amber-100 text-amber-800" };
+  if (c.tipo === "seguimiento_procedimiento") {
+    // Se llama justo el día 8 después del procedimiento.
+    if (dias === plazo) return { texto: `Día ${plazo}: llamar hoy`, clase: "bg-amber-100 text-amber-800" };
+    return { texto: `Día ${dias} — llamar el día ${plazo} (${fechaCorta(c.fecha_limite)})`, clase: "bg-gray-100 text-gray-600" };
+  }
+  if (dias >= plazo - VENTANA_DIAS[c.tipo]) return { texto: `Día ${dias} de ${plazo}`, clase: "bg-amber-100 text-amber-800" };
   return { texto: `Día ${dias} de ${plazo}`, clase: "bg-emerald-50 text-emerald-700" };
 }
 
@@ -121,7 +129,8 @@ function semaforo(c: Caso, hoy: string): { texto: string; clase: string } | null
  *  plazo o vencido), o ya contactado con compromiso de llamar hoy o antes.
  *  Igual que fn_fidelizacion_pendientes() en la base de datos. */
 function esParaHoy(c: Caso, hoy: string): boolean {
-  if (c.estado === "pendiente") return diasEntre(c.reabierto_desde ?? c.fecha_atencion, hoy) >= PLAZO_DIAS[c.tipo] - 2;
+  if (c.estado === "pendiente")
+    return diasEntre(c.reabierto_desde ?? c.fecha_atencion, hoy) >= PLAZO_DIAS[c.tipo] - VENTANA_DIAS[c.tipo];
   if (c.estado === "en_proceso") return !!c.proximo_contacto && c.proximo_contacto <= hoy;
   return false;
 }
@@ -136,7 +145,12 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
   const [busqueda, setBusqueda] = useState("");
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({});
   const [contactos, setContactos] = useState<Record<string, Contacto[]>>({});
-  const [forms, setForms] = useState<Record<string, FormContacto>>({});
+  // Lo escrito en cada paciente queda como borrador hasta que se guarda.
+  const claveBorradores = `servicio-cliente-borradores-fidelizacion-${sedeId}`;
+  const [forms, setForms] = useState<Record<string, FormContacto>>(() => leerBorradores<FormContacto>(claveBorradores));
+  useEffect(() => {
+    guardarBorradores(claveBorradores, forms);
+  }, [forms, claveBorradores]);
   const [guardandoId, setGuardandoId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -168,8 +182,22 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
     setContactos((prev) => ({ ...prev, [id]: (data as Contacto[]) ?? [] }));
   }
 
+  function tieneBorrador(id: string): boolean {
+    const f = forms[id];
+    if (!f) return false;
+    return (Object.keys(FORM_VACIO) as (keyof FormContacto)[]).some((k) => f[k] !== FORM_VACIO[k]);
+  }
+
   function alternar(id: string) {
     const abrir = !abiertos[id];
+    if (!abrir && tieneBorrador(id)) {
+      const caso = casos.find((x) => x.id === id);
+      if (caso && window.confirm(`Tienes un contacto sin guardar de ${caso.pacientes?.nombre ?? "este paciente"}. ¿Guardarlo ahora?`)) {
+        registrar(caso);
+        return;
+      }
+      // Si no lo guarda, el borrador se conserva para cuando vuelva a abrirlo.
+    }
     setAbiertos((prev) => ({ ...prev, [id]: abrir }));
     if (abrir && !contactos[id]) cargarContactos(id);
   }
@@ -273,7 +301,9 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
     <div className="space-y-3">
       <div className="bg-white rounded-xl border border-gray-200 p-4">
         <h1 className="text-lg font-semibold text-tinta">{lista.label}</h1>
-        <p className="text-sm text-gray-500">{lista.descripcion} Plazo máximo para el primer contacto: {PLAZO_DIAS[tipo]} días desde la atención.</p>
+        <p className="text-sm text-gray-500">{lista.descripcion} {tipo === "seguimiento_procedimiento"
+            ? "Se llama el día 8 después del procedimiento. Si no contesta, queda para el día siguiente; si tampoco contesta, se cierra solo."
+            : `Plazo máximo para el primer contacto: ${PLAZO_DIAS[tipo]} días desde la atención.`}</p>
         <div className="flex flex-wrap items-center gap-2 mt-3">
           {FILTROS.map((f) => (
             <button
@@ -318,6 +348,9 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium text-tinta">{c.pacientes?.nombre ?? "—"}</span>
+                      {tieneBorrador(c.id) && (
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">✎ Contacto sin guardar</span>
+                      )}
                       {c.pacientes?.telefono && (
                         <span className="inline-flex items-center gap-1 text-xs text-gray-500">
                           <Phone size={12} /> {c.pacientes.telefono}
@@ -445,6 +478,9 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                                   {r.cierra ? " (cierra el caso)" : ""}
                                 </option>
                               ))}
+                              {tipo === "seguimiento_procedimiento" && (
+                                <option value={RESULTADO_NO_CONTESTO.value}>{RESULTADO_NO_CONTESTO.label} (cierra el caso)</option>
+                              )}
                             </select>
                             {f.resultado === "agendo_cita" && (
                               <label className="flex items-center gap-1 text-xs text-gray-600">
@@ -458,7 +494,12 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                                 />
                               </label>
                             )}
-                            {(f.resultado === "volver_a_contactar" || f.resultado === "no_contesta") && (
+                            {tipo === "seguimiento_procedimiento" && f.resultado === "no_contesta" && (
+                              <span className="text-xs text-gray-500">
+                                Queda para mañana; si mañana tampoco contesta, se cierra solo.
+                              </span>
+                            )}
+                            {(f.resultado === "volver_a_contactar" || (f.resultado === "no_contesta" && tipo !== "seguimiento_procedimiento")) && (
                               <label className="flex items-center gap-1 text-xs text-gray-600">
                                 Volver a contactar el
                                 <input
@@ -505,6 +546,8 @@ export function FidelizacionLista({ sedeId, tipo, onCambio }: { sedeId: string; 
                                 <span className="font-medium text-gray-700">
                                   {k.resultado === RESULTADO_EN_CONSULTA.value
                                     ? `${RESULTADO_EN_CONSULTA.label}${k.fecha_consulta ? ` el ${fechaCorta(k.fecha_consulta)}` : ""}`
+                                    : k.resultado === RESULTADO_NO_CONTESTO.value
+                                      ? `${RESULTADO_NO_CONTESTO.label} — se cerró`
                                     : k.ya_tenia_cita
                                       ? `Ya tenía cita agendada${k.fecha_cita ? ` para el ${fechaCorta(k.fecha_cita)}` : ""}`
                                       : `${RESULTADOS_CONTACTO.find((r) => r.value === k.resultado)?.label ?? k.resultado}${

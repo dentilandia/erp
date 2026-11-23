@@ -41,7 +41,6 @@ export const MOTIVOS_CON_SEGUIMIENTO: readonly string[] = [
   "Sedación intravenosa",
   "Sedación óxido nitroso",
   "Instalación",
-  "Urgencia aparato",
   "Trauma dental",
 ];
 
@@ -73,7 +72,7 @@ export const PLAZO_DIAS: Record<TipoFidelizacion, number> = {
   presupuesto: 7,
   sedacion: 7,
   primera_vez: 7,
-  seguimiento_procedimiento: 7,
+  seguimiento_procedimiento: 8,
   radiografia: 15,
 };
 
@@ -84,6 +83,7 @@ export const ESTADOS_CASO: Record<string, { label: string; color: string; cerrad
   no_interesa: { label: "No le interesa", color: "bg-gray-100 text-gray-500", cerrado: true },
   seguimiento_realizado: { label: "Seguimiento realizado", color: "bg-emerald-50 text-emerald-700", cerrado: true },
   seguimiento_en_consulta: { label: "Seguimiento en consulta", color: "bg-emerald-50 text-emerald-700", cerrado: true },
+  no_contesto: { label: "No contestó — cerrado", color: "bg-gray-100 text-gray-500", cerrado: true },
 };
 
 /** Solo para mostrar registros anteriores al cambio a dos pasos (llamada → B2Chat). */
@@ -102,4 +102,17 @@ export const RESULTADOS_CONTACTO = [
 ] as const;
 
 /** Resultado que no sale en la lista: lo pone el check "El seguimiento será en consulta". */
+/** Días antes del límite en que un caso sin contacto ya es urgente: en
+ *  Seguimiento de procedimientos se llama justo el día 8 (0 días antes). */
+export const VENTANA_DIAS: Record<TipoFidelizacion, number> = {
+  presupuesto: 2,
+  sedacion: 2,
+  primera_vez: 2,
+  radiografia: 2,
+  seguimiento_procedimiento: 0,
+};
+
+/** Seguimiento de procedimientos: no contestó llamada ni mensaje → se cierra. */
+export const RESULTADO_NO_CONTESTO = { value: "no_contesto", label: "No contestó llamada ni mensaje" } as const;
+
 export const RESULTADO_EN_CONSULTA = { value: "seguimiento_en_consulta", label: "Seguimiento en consulta" } as const;
