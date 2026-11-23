@@ -991,9 +991,9 @@ function FormularioSemana({
         <p className="text-xs text-gray-400 max-w-md">
           Sube acá los documentos de todo el período (una sola vez, no por día) — el sistema compara contra lo que ya
           cerró cada día en Cierre diario de Operación y te dice cuáles días no cuadran. Por defecto es una semana,
-          pero puedes estirar "Hasta" para cubrir cualquier rango de días. La tarjeta de ninguna de las 2 sedes se
-          sube acá: la de Las Américas se toma automático de la tirilla que ya se adjunta cada día en Cierre diario
-          de Operación, y la de Fabricato se arma sola leyendo los correos de cierre de turno de Bold.
+          pero puedes estirar "Hasta" para cubrir cualquier rango de días. La tarjeta de Las Américas no se sube
+          acá: se toma automático de la tirilla que ya se adjunta cada día en Cierre diario de Operación. La de
+          Fabricato sí hay que subirla acá (reporte de Bold) — todavía no se lee sola desde el correo.
         </p>
         <div className="flex items-end gap-2">
           <label className="text-xs text-gray-500">
@@ -1474,12 +1474,27 @@ function DetalleModal({
               Cruce línea por línea: {cierre.resultado_ok ? "sin novedades" : `${cierre.resultado_detalle.alertas.length} novedad(es)`}
             </p>
             {cierre.resultado_detalle.alertas.map((a, i) => (
-              <p key={i} className="text-xs text-gray-700">
-                <span className="font-semibold">{a.tipo}:</span> {a.detalle ?? ""} ({fmtCOP(a.valor)})
-              </p>
+              <div key={i} className="text-xs text-gray-700">
+                <p>
+                  <span className="font-semibold">{a.tipo}:</span> {a.detalle ?? ""} ({fmtCOP(a.valor)})
+                </p>
+                {a.lineas && a.lineas.length > 0 && (
+                  <ul className="ml-4 mt-0.5 space-y-0.5 text-gray-600">
+                    {a.lineas.map((l, j) => (
+                      <li key={j}>
+                        · {l.paciente ?? l.descripcion ?? "—"}
+                        {l.numero ? ` (recibo ${l.numero})` : ""}
+                        {l.concepto ? ` — ${l.concepto}` : ""}
+                        {l.posible_duplicado ? " — posible duplicado" : ""}: {fmtCOP(l.valor)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             ))}
             <p className="text-[11px] text-gray-400">
-              El detalle de cada transferencia, abono o recibo está en la pestaña "Conciliación bancaria".
+              El detalle de cada transferencia, abono o recibo que no tenga nombre arriba está en la pestaña
+              "Conciliación bancaria".
             </p>
           </div>
         )}

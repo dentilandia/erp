@@ -602,10 +602,20 @@ export interface CierreCaja {
   reabierto_motivo: string | null;
 }
 
+export interface AlertaCierreLinea {
+  paciente?: string | null;
+  concepto?: string | null;
+  numero?: string | null;
+  descripcion?: string | null;
+  valor: number;
+  posible_duplicado?: boolean;
+}
+
 export interface AlertaCierre {
   tipo: string;
   detalle?: string;
   valor: number;
+  lineas?: AlertaCierreLinea[];
 }
 
 /** Resultado del cruce línea por línea (fn_actualizar_cierres_caja) — sin IA. */
