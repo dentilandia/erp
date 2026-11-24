@@ -23,6 +23,7 @@ import { AdministracionInventarios } from "./pages/AdministracionInventarios";
 import { Asistencia } from "./pages/Asistencia";
 import { Parametros } from "./pages/Parametros";
 import { LaboratorioExterno } from "./pages/LaboratorioExterno";
+import { Facturacion } from "./pages/Facturacion";
 
 /** Bloquea de verdad las rutas de administración/parámetros para el equipo de
  *  operación — antes solo estaban ocultas del menú, no impedidas por ruta. */
@@ -285,6 +286,7 @@ function App() {
               <Route path="administracion/liquidaciones" element={<SoloAdmin><Liquidaciones /></SoloAdmin>} />
               <Route path="administracion/financiacion" element={<SoloAdmin><Financiacion /></SoloAdmin>} />
               <Route path="administracion/cierre-caja" element={<SoloAdmin><CierreCaja /></SoloAdmin>} />
+              <Route path="administracion/facturacion" element={<SoloAdmin><Facturacion /></SoloAdmin>} />
               <Route path="administracion/reportes" element={<SoloAdmin><Reportes /></SoloAdmin>} />
               <Route path="administracion/inventarios" element={<SoloAdmin><AdministracionInventarios /></SoloAdmin>} />
               <Route path="parametros" element={<SoloAdmin><Parametros /></SoloAdmin>} />
