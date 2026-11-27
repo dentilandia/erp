@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build)",
+      "Bash(npm run build *)",
+      "Bash(npm run lint)",
+      "Bash(npm run lint *)",
+      "Bash(git fetch *)",
+      "mcp__Netlify__netlify-project-services-reader",
+      "mcp__Netlify__netlify-deploy-services-reader",
+      "mcp__Gmail__get_message",
+      "mcp__Gmail__download_gmail_attachment",
+      "mcp__Gmail__search_threads",
+      "mcp__Google_Drive__read_file_content",
+      "mcp__Supabase__list_migrations"
+    ]
+  }
+}
